@@ -37,6 +37,27 @@ fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
         .collect()
 }
 
+fn sanitize_version(lines: Vec<String>) -> Vec<String> {
+    lines
+        .into_iter()
+        .map(|line| {
+            if let Some(start) = line.find(" >_ OpenAI Codex (v") {
+                if let Some(close_offset) = line[start..].find(')') {
+                    let end = start + close_offset + 1;
+                    let mut rebuilt = line[..start].to_string();
+                    rebuilt.push_str(" >_ OpenAI Codex (v0.0.0)");
+                    rebuilt.push_str(&line[end..]);
+                    rebuilt
+                } else {
+                    line
+                }
+            } else {
+                line
+            }
+        })
+        .collect()
+}
+
 fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
     lines
         .into_iter()
@@ -110,7 +131,7 @@ fn status_snapshot_includes_reasoning_details() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_directory(sanitize_version(rendered_lines)).join("\n");
     assert_snapshot!(sanitized);
 }
 
@@ -151,7 +172,7 @@ fn status_snapshot_includes_monthly_limit() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_directory(sanitize_version(rendered_lines)).join("\n");
     assert_snapshot!(sanitized);
 }
 
@@ -218,7 +239,7 @@ fn status_snapshot_truncates_in_narrow_terminal() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_directory(sanitize_version(rendered_lines)).join("\n");
 
     assert_snapshot!(sanitized);
 }
@@ -245,7 +266,7 @@ fn status_snapshot_shows_missing_limits_message() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_directory(sanitize_version(rendered_lines)).join("\n");
     assert_snapshot!(sanitized);
 }
 
@@ -281,6 +302,6 @@ fn status_snapshot_shows_empty_limits_message() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_directory(sanitize_version(rendered_lines)).join("\n");
     assert_snapshot!(sanitized);
 }
