@@ -19,6 +19,13 @@ struct TextElement {
     range: Range<usize>,
 }
 
+#[derive(Debug, Clone)]
+struct TextSnapshot {
+    text: String,
+    cursor_pos: usize,
+    elements: Vec<TextElement>,
+}
+
 #[derive(Debug)]
 pub(crate) struct TextArea {
     text: String,
@@ -26,6 +33,8 @@ pub(crate) struct TextArea {
     wrap_cache: RefCell<Option<WrapCache>>,
     preferred_col: Option<usize>,
     elements: Vec<TextElement>,
+    undo_stack: Vec<TextSnapshot>,
+    redo_stack: Vec<TextSnapshot>,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +57,8 @@ impl TextArea {
             wrap_cache: RefCell::new(None),
             preferred_col: None,
             elements: Vec::new(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         }
     }
 
@@ -68,6 +79,8 @@ impl TextArea {
     }
 
     pub fn insert_str_at(&mut self, pos: usize, text: &str) {
+        self.push_undo_snapshot();
+        self.redo_stack.clear();
         let pos = self.clamp_pos_for_insertion(pos);
         self.text.insert_str(pos, text);
         self.wrap_cache.replace(None);
@@ -85,6 +98,8 @@ impl TextArea {
 
     fn replace_range_raw(&mut self, range: std::ops::Range<usize>, text: &str) {
         assert!(range.start <= range.end);
+        self.push_undo_snapshot();
+        self.redo_stack.clear();
         let start = range.start.clamp(0, self.text.len());
         let end = range.end.clamp(0, self.text.len());
         let removed_len = end - start;
@@ -204,6 +219,63 @@ impl TextArea {
 
     pub fn input(&mut self, event: KeyEvent) {
         match event {
+            // Undo/Redo bindings
+            // Undo: Ctrl+Z, Ctrl+_, Shift+Alt+Z, and ^Z fallback. Some terminals send Ctrl+_ as 0x1F.
+            // Alt+Z (ergonomic on Mac) => undo
+            KeyEvent { code: KeyCode::Char('z' | 'Z'), modifiers, .. }
+                if modifiers.contains(KeyModifiers::ALT)
+                    && !modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.undo();
+            }
+            // Redo: Ctrl+Shift+Z must be checked before plain Ctrl+Z
+            KeyEvent { code: KeyCode::Char('z' | 'Z'), modifiers, .. }
+                if modifiers.contains(KeyModifiers::CONTROL)
+                    && modifiers.contains(KeyModifiers::SHIFT) =>
+            {
+                self.redo();
+            }
+            KeyEvent { code: KeyCode::Char('z'), modifiers, .. }
+                if modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.undo();
+            }
+            KeyEvent { code: KeyCode::Char('_' | '\u{001f}'), modifiers, .. }
+                if modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.undo();
+            }
+            KeyEvent { code: KeyCode::Char('\u{001a}'), modifiers: KeyModifiers::NONE, .. } => {
+                // ^Z fallback
+                self.undo();
+            }
+            KeyEvent { code: KeyCode::Char('z'), modifiers, .. }
+                if modifiers.contains(KeyModifiers::ALT)
+                    && modifiers.contains(KeyModifiers::SHIFT) =>
+            {
+                // Per earlier mapping, Shift+Alt+Z also performs undo
+                self.undo();
+            }
+            // Redo: Ctrl+Y (common convention)
+            KeyEvent { code: KeyCode::Char('y' | 'Y'), modifiers, .. }
+                if modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.redo();
+            }
+            // Alt-based redo variants for Mac ergonomics
+            KeyEvent { code: KeyCode::Char('y' | 'Y'), modifiers, .. }
+                if modifiers.contains(KeyModifiers::ALT)
+                    && !modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.redo();
+            }
+            KeyEvent { code: KeyCode::Char('y' | 'Y'), modifiers, .. }
+                if modifiers.contains(KeyModifiers::ALT)
+                    && modifiers.contains(KeyModifiers::SHIFT)
+                    && !modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.redo();
+            }
             // Some terminals (or configurations) send Control key chords as
             // C0 control characters without reporting the CONTROL modifier.
             // Handle common fallbacks for Ctrl-B/Ctrl-F here so they don't get
@@ -238,6 +310,20 @@ impl TextArea {
             } if modifiers == (KeyModifiers::CONTROL | KeyModifiers::ALT) => {
                 self.delete_backward_word()
             },
+            KeyEvent { code: KeyCode::Backspace, modifiers, .. }
+                if modifiers.contains(KeyModifiers::CONTROL)
+                    && !modifiers.contains(KeyModifiers::ALT) =>
+            {
+                // Ctrl+Backspace => delete current line
+                self.delete_current_line();
+            }
+            // Shift+Alt+Backspace => backward kill line (to wrapped start)
+            KeyEvent { code: KeyCode::Backspace, modifiers, .. }
+                if modifiers.contains(KeyModifiers::ALT)
+                    && modifiers.contains(KeyModifiers::SHIFT) =>
+            {
+                self.kill_to_beginning_of_visual_line_or_bol();
+            }
             KeyEvent {
                 code: KeyCode::Backspace,
                 modifiers: KeyModifiers::ALT,
@@ -257,6 +343,13 @@ impl TextArea {
                 modifiers: KeyModifiers::ALT,
                 ..
             }  => self.delete_forward_word(),
+            // Shift+Alt+Delete => kill line (to EOL)
+            KeyEvent { code: KeyCode::Delete, modifiers, .. }
+                if modifiers.contains(KeyModifiers::ALT)
+                    && modifiers.contains(KeyModifiers::SHIFT) =>
+            {
+                self.kill_to_end_of_visual_line_or_eol();
+            }
             KeyEvent {
                 code: KeyCode::Delete,
                 ..
@@ -338,28 +431,29 @@ impl TextArea {
             // Some terminals send Alt+Arrow for word-wise movement:
             // Option/Left -> Alt+Left (previous word start)
             // Option/Right -> Alt+Right (next word end)
-            KeyEvent {
-                code: KeyCode::Left,
-                modifiers: KeyModifiers::ALT,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Left,
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
+            // Word-wise navigation (token): allow Alt and Alt+Shift
+            KeyEvent { code: KeyCode::Left, modifiers, .. }
+                if modifiers.contains(KeyModifiers::ALT) =>
+            {
                 self.set_cursor(self.beginning_of_previous_word());
             }
-            KeyEvent {
-                code: KeyCode::Right,
-                modifiers: KeyModifiers::ALT,
+            | KeyEvent {
+                code: KeyCode::Left,
+                modifiers,
                 ..
+            } if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.set_cursor(self.beginning_of_previous_word());
+            }
+            KeyEvent { code: KeyCode::Right, modifiers, .. }
+                if modifiers.contains(KeyModifiers::ALT) =>
+            {
+                self.set_cursor(self.end_of_next_word());
             }
             | KeyEvent {
                 code: KeyCode::Right,
-                modifiers: KeyModifiers::CONTROL,
+                modifiers,
                 ..
-            } => {
+            } if modifiers.contains(KeyModifiers::CONTROL) => {
                 self.set_cursor(self.end_of_next_word());
             }
             KeyEvent {
@@ -373,10 +467,14 @@ impl TextArea {
             } => {
                 self.move_cursor_down();
             }
-            KeyEvent {
-                code: KeyCode::Home,
-                ..
-            } => {
+            // Buffer boundaries on Alt/Ctrl+Home/End
+            KeyEvent { code: KeyCode::Home, modifiers, .. }
+                if modifiers.contains(KeyModifiers::ALT)
+                    || modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.set_cursor(0);
+            }
+            KeyEvent { code: KeyCode::Home, .. } => {
                 self.move_cursor_to_beginning_of_line(false);
             }
             KeyEvent {
@@ -387,9 +485,13 @@ impl TextArea {
                 self.move_cursor_to_beginning_of_line(true);
             }
 
-            KeyEvent {
-                code: KeyCode::End, ..
-            } => {
+            KeyEvent { code: KeyCode::End, modifiers, .. }
+                if modifiers.contains(KeyModifiers::ALT)
+                    || modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.set_cursor(self.text.len());
+            }
+            KeyEvent { code: KeyCode::End, .. } => {
                 self.move_cursor_to_end_of_line(false);
             }
             KeyEvent {
@@ -471,6 +573,93 @@ impl TextArea {
             }
         } else {
             self.replace_range(bol..self.cursor_pos, "");
+        }
+    }
+
+    /// Delete from the cursor to the beginning of the current visual (wrapped)
+    /// line if wrapping information is available and the current logical line
+    /// spans multiple wrapped segments. Otherwise, fall back to killing to BOL.
+    pub fn kill_to_beginning_of_visual_line_or_bol(&mut self) {
+        let bol = self.beginning_of_current_line();
+        let maybe_start = {
+            let cache_ref = self.wrap_cache.borrow();
+            if let Some(cache) = cache_ref.as_ref() {
+                let lines = &cache.lines;
+                if let Some(idx) = Self::wrapped_line_index_by_start(lines, self.cursor_pos) {
+                    let seg = &lines[idx];
+                    if seg.start > bol && seg.start < self.cursor_pos {
+                        Some(seg.start)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        if let Some(start) = maybe_start {
+            self.replace_range(start..self.cursor_pos, "");
+        } else {
+            // Fallback: delete to BOL (including previous newline when at BOL)
+            self.kill_to_beginning_of_line();
+        }
+    }
+
+    /// Delete from the cursor to the end of the current visual (wrapped) line if
+    /// wrapping information is available and the current logical line spans
+    /// multiple wrapped segments. Otherwise, fall back to killing to EOL.
+    pub fn kill_to_end_of_visual_line_or_eol(&mut self) {
+        let eol = self.end_of_current_line();
+        let maybe_end = {
+            let cache_ref = self.wrap_cache.borrow();
+            if let Some(cache) = cache_ref.as_ref() {
+                let lines = &cache.lines;
+                if let Some(idx) = Self::wrapped_line_index_by_start(lines, self.cursor_pos) {
+                    let seg = &lines[idx];
+                    if seg.end < eol {
+                        let end = seg.end.min(self.text.len());
+                        if end > self.cursor_pos {
+                            Some(end)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        if let Some(end) = maybe_end {
+            self.replace_range(self.cursor_pos..end, "");
+        } else {
+            // Fallback: delete to EOL (including newline when at EOL)
+            self.kill_to_end_of_line();
+        }
+    }
+
+    /// Delete the entire current logical line. If the line is not the last line,
+    /// also remove its trailing newline. If it is the last line and not the only
+    /// line, remove the preceding newline so the line is fully removed.
+    pub fn delete_current_line(&mut self) {
+        let bol = self.beginning_of_current_line();
+        let eol = self.end_of_current_line();
+        if eol < self.text.len() {
+            // Has a trailing newline; remove the line and its newline.
+            self.replace_range(bol..eol + 1, "");
+        } else if bol > 0 {
+            // Last line and there is a previous line: remove the preceding newline too.
+            self.replace_range(bol - 1..eol, "");
+        } else {
+            // Single line buffer: remove everything.
+            self.replace_range(0..eol, "");
         }
     }
 
@@ -640,12 +829,60 @@ impl TextArea {
     // ===== Text elements support =====
 
     pub fn insert_element(&mut self, text: &str) {
+        self.push_undo_snapshot();
+        self.redo_stack.clear();
         let start = self.clamp_pos_for_insertion(self.cursor_pos);
         self.insert_str_at(start, text);
         let end = start + text.len();
         self.add_element(start..end);
         // Place cursor at end of inserted element
         self.set_cursor(end);
+    }
+
+    // ===== Undo support =====
+    fn push_undo_snapshot(&mut self) {
+        const MAX_UNDO: usize = 200;
+        self.undo_stack.push(TextSnapshot {
+            text: self.text.clone(),
+            cursor_pos: self.cursor_pos,
+            elements: self.elements.clone(),
+        });
+        if self.undo_stack.len() > MAX_UNDO {
+            let overflow = self.undo_stack.len() - MAX_UNDO;
+            self.undo_stack.drain(0..overflow);
+        }
+    }
+
+    fn undo(&mut self) {
+        if let Some(prev) = self.undo_stack.pop() {
+            let cur = TextSnapshot {
+                text: self.text.clone(),
+                cursor_pos: self.cursor_pos,
+                elements: self.elements.clone(),
+            };
+            self.redo_stack.push(cur);
+            self.text = prev.text;
+            self.cursor_pos = prev.cursor_pos.min(self.text.len());
+            self.elements = prev.elements;
+            self.wrap_cache.replace(None);
+            self.preferred_col = None;
+        }
+    }
+
+    fn redo(&mut self) {
+        if let Some(next) = self.redo_stack.pop() {
+            let cur = TextSnapshot {
+                text: self.text.clone(),
+                cursor_pos: self.cursor_pos,
+                elements: self.elements.clone(),
+            };
+            self.undo_stack.push(cur);
+            self.text = next.text;
+            self.cursor_pos = next.cursor_pos.min(self.text.len());
+            self.elements = next.elements;
+            self.wrap_cache.replace(None);
+            self.preferred_col = None;
+        }
     }
 
     fn add_element(&mut self, range: Range<usize>) {
