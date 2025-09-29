@@ -66,6 +66,7 @@ pub(crate) struct App {
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
+    pending_escape: bool,
 }
 
 impl App {
@@ -144,6 +145,7 @@ impl App {
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
+            pending_escape: false,
         };
 
         let tui_events = tui.event_stream();
@@ -377,6 +379,12 @@ impl App {
     }
 
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
+        if matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && key_event.code != KeyCode::Esc
+        {
+            self.pending_escape = false;
+        }
+
         match key_event {
             KeyEvent {
                 code: KeyCode::Char('t'),
@@ -389,20 +397,26 @@ impl App {
                 self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
                 tui.frame_requester().schedule_frame();
             }
-            // Esc primes/advances backtracking only in normal (not working) mode
-            // with an empty composer. In any other state, forward Esc so the
-            // active UI (e.g. status indicator, modals, popups) handles it.
             KeyEvent {
                 code: KeyCode::Esc,
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             } => {
-                if self.chat_widget.is_normal_backtrack_mode()
-                    && self.chat_widget.composer_is_empty()
-                {
-                    self.handle_backtrack_esc_key(tui);
-                } else {
-                    self.chat_widget.handle_key_event(key_event);
+                self.pending_escape = true;
+                self.chat_widget.handle_key_event(key_event);
+            }
+            KeyEvent {
+                code: KeyCode::Esc,
+                kind: KeyEventKind::Release,
+                ..
+            } => {
+                if self.pending_escape {
+                    self.pending_escape = false;
+                    if self.chat_widget.is_normal_backtrack_mode()
+                        && self.chat_widget.composer_is_empty()
+                    {
+                        self.handle_backtrack_esc_key(tui);
+                    }
                 }
             }
             // Enter confirms backtrack when primed + count > 0. Otherwise pass to widget.
@@ -430,7 +444,7 @@ impl App {
                 self.chat_widget.handle_key_event(key_event);
             }
             _ => {
-                // Ignore Release key events.
+                // Ignore other Release key events.
             }
         };
     }
@@ -483,6 +497,7 @@ mod tests {
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
+            pending_escape: false,
         }
     }
 

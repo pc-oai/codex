@@ -1,5 +1,6 @@
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -26,6 +27,11 @@ struct TextSnapshot {
     elements: Vec<TextElement>,
 }
 
+#[derive(Debug, Default, Clone)]
+struct MetaSequence {
+    buffer: String,
+}
+
 #[derive(Debug)]
 pub(crate) struct TextArea {
     text: String,
@@ -35,6 +41,7 @@ pub(crate) struct TextArea {
     elements: Vec<TextElement>,
     undo_stack: Vec<TextSnapshot>,
     redo_stack: Vec<TextSnapshot>,
+    pending_meta_sequence: Option<MetaSequence>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +66,7 @@ impl TextArea {
             elements: Vec::new(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            pending_meta_sequence: None,
         }
     }
 
@@ -68,6 +76,7 @@ impl TextArea {
         self.wrap_cache.replace(None);
         self.preferred_col = None;
         self.elements.clear();
+        self.pending_meta_sequence = None;
     }
 
     pub fn text(&self) -> &str {
@@ -89,6 +98,7 @@ impl TextArea {
         }
         self.shift_elements(pos, 0, text.len());
         self.preferred_col = None;
+        self.pending_meta_sequence = None;
     }
 
     pub fn replace_range(&mut self, range: std::ops::Range<usize>, text: &str) {
@@ -113,6 +123,7 @@ impl TextArea {
         self.wrap_cache.replace(None);
         self.preferred_col = None;
         self.update_elements_after_replace(start, end, inserted_len);
+        self.pending_meta_sequence = None;
 
         // Update the cursor position to account for the edit.
         self.cursor_pos = if self.cursor_pos < start {
@@ -218,6 +229,9 @@ impl TextArea {
     }
 
     pub fn input(&mut self, event: KeyEvent) {
+        if self.handle_meta_sequence(&event) {
+            return;
+        }
         match event {
             // Undo/Redo bindings
             // Undo: Ctrl+Z, Ctrl+_, Shift+Alt+Z, and ^Z fallback. Some terminals send Ctrl+_ as 0x1F.
@@ -343,10 +357,38 @@ impl TextArea {
                 modifiers: KeyModifiers::ALT,
                 ..
             }  => self.delete_forward_word(),
+            KeyEvent { code: KeyCode::Char('f' | 'F'), modifiers, .. }
+                if modifiers.contains(KeyModifiers::CONTROL)
+                    && modifiers.contains(KeyModifiers::SHIFT)
+                    && !modifiers.contains(KeyModifiers::ALT) =>
+            {
+                self.delete_forward_word();
+            }
+            KeyEvent { code: KeyCode::Char('f' | 'F'), modifiers, .. }
+                if modifiers.contains(KeyModifiers::ALT)
+                    && modifiers.contains(KeyModifiers::SHIFT)
+                    && !modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.delete_forward_word();
+            }
             // Shift+Alt+Delete => kill line (to EOL)
             KeyEvent { code: KeyCode::Delete, modifiers, .. }
                 if modifiers.contains(KeyModifiers::ALT)
                     && modifiers.contains(KeyModifiers::SHIFT) =>
+            {
+                self.kill_to_end_of_visual_line_or_eol();
+            }
+            KeyEvent { code: KeyCode::Char('d' | 'D'), modifiers, .. }
+                if modifiers.contains(KeyModifiers::CONTROL)
+                    && modifiers.contains(KeyModifiers::SHIFT)
+                    && !modifiers.contains(KeyModifiers::ALT) =>
+            {
+                self.kill_to_end_of_line();
+            }
+            KeyEvent { code: KeyCode::Char('d' | 'D'), modifiers, .. }
+                if modifiers.contains(KeyModifiers::ALT)
+                    && modifiers.contains(KeyModifiers::SHIFT)
+                    && !modifiers.contains(KeyModifiers::CONTROL) =>
             {
                 self.kill_to_end_of_visual_line_or_eol();
             }
@@ -837,6 +879,7 @@ impl TextArea {
         self.add_element(start..end);
         // Place cursor at end of inserted element
         self.set_cursor(end);
+        self.pending_meta_sequence = None;
     }
 
     // ===== Undo support =====
@@ -882,6 +925,150 @@ impl TextArea {
             self.elements = next.elements;
             self.wrap_cache.replace(None);
             self.preferred_col = None;
+        }
+    }
+
+    fn clear_meta_sequence(&mut self) {
+        self.pending_meta_sequence = None;
+    }
+
+    fn handle_meta_sequence(&mut self, event: &KeyEvent) -> bool {
+        match event.code {
+            KeyCode::Esc => match event.kind {
+                KeyEventKind::Press | KeyEventKind::Repeat => {
+                    self.pending_meta_sequence = Some(MetaSequence::default());
+                    return true;
+                }
+                KeyEventKind::Release => {
+                    if self.pending_meta_sequence.is_some() {
+                        self.clear_meta_sequence();
+                        return true;
+                    }
+                    return false;
+                }
+            },
+            _ => {}
+        }
+
+        if self.pending_meta_sequence.is_none()
+            && event
+                .modifiers
+                .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL)
+        {
+            return false;
+        }
+
+        match event.code {
+            KeyCode::Char(c) => {
+                let Some(seq) = self.pending_meta_sequence.as_mut() else {
+                    return false;
+                };
+                seq.buffer.push(c);
+                if seq.buffer.len() == 1 && c != '[' && c != 'O' {
+                    let handled = self.handle_meta_char(c);
+                    self.clear_meta_sequence();
+                    handled
+                } else if matches!(c, 'A' | 'B' | 'C' | 'D' | 'F' | 'H' | '~') {
+                    let buffer = seq.buffer.clone();
+                    self.clear_meta_sequence();
+                    self.handle_meta_escape_sequence(&buffer)
+                } else if seq.buffer.len() > 8 {
+                    self.clear_meta_sequence();
+                    false
+                } else {
+                    true
+                }
+            }
+            _ => {
+                self.clear_meta_sequence();
+                false
+            }
+        }
+    }
+
+    fn handle_meta_char(&mut self, c: char) -> bool {
+        match c {
+            'b' | 'B' => {
+                self.set_cursor(self.beginning_of_previous_word());
+                true
+            }
+            'f' | 'F' => {
+                self.set_cursor(self.end_of_next_word());
+                true
+            }
+            'd' | 'D' => {
+                self.delete_forward_word();
+                true
+            }
+            'u' | 'U' => {
+                self.kill_to_beginning_of_line();
+                true
+            }
+            'k' | 'K' => {
+                self.kill_to_end_of_line();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn handle_meta_escape_sequence(&mut self, sequence: &str) -> bool {
+        let Some(last) = sequence.chars().last() else {
+            return false;
+        };
+
+        let params = if sequence.starts_with('[') && sequence.len() > 1 {
+            &sequence[1..sequence.len() - 1]
+        } else {
+            ""
+        };
+        let (_shift, alt, ctrl) = parse_csi_modifiers(params);
+
+        match last {
+            'A' => {
+                if alt || ctrl {
+                    self.move_cursor_up();
+                    true
+                } else {
+                    false
+                }
+            }
+            'B' => {
+                if alt || ctrl {
+                    self.move_cursor_down();
+                    true
+                } else {
+                    false
+                }
+            }
+            'C' => {
+                self.set_cursor(self.end_of_next_word());
+                true
+            }
+            'D' => {
+                self.set_cursor(self.beginning_of_previous_word());
+                true
+            }
+            'F' => {
+                self.move_cursor_to_end_of_line(false);
+                true
+            }
+            'H' => {
+                self.move_cursor_to_beginning_of_line(false);
+                true
+            }
+            '~' => match params.split(';').next() {
+                Some("1") | Some("7") | Some("H") => {
+                    self.move_cursor_to_beginning_of_line(false);
+                    true
+                }
+                Some("4") | Some("8") | Some("F") => {
+                    self.move_cursor_to_end_of_line(false);
+                    true
+                }
+                _ => false,
+            },
+            _ => false,
         }
     }
 
@@ -1128,6 +1315,23 @@ impl TextArea {
         }
         scroll
     }
+}
+
+fn parse_csi_modifiers(params: &str) -> (bool, bool, bool) {
+    let last_param = params
+        .split(';')
+        .filter(|s| !s.is_empty())
+        .last()
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(1);
+    if last_param <= 1 {
+        return (false, false, false);
+    }
+    let mask = last_param - 1;
+    let shift = mask & 1 != 0;
+    let alt = mask & 2 != 0;
+    let ctrl = mask & 4 != 0;
+    (shift, alt, ctrl)
 }
 
 impl WidgetRef for &TextArea {
