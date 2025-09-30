@@ -76,4 +76,7 @@ pub(crate) enum AppEvent {
 
     /// Open the custom prompt option from the review popup.
     OpenReviewCustomPrompt,
+
+    /// Request the TUI to post an inline/desktop notification message.
+    PostNotification(String),
 }

@@ -16,6 +16,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
 use crate::shimmer::shimmer_spans;
+use crate::talon;
 use crate::tui::FrameRequester;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 
@@ -145,6 +146,23 @@ impl StatusIndicatorWidget {
     pub fn elapsed_seconds(&self) -> u64 {
         self.elapsed_seconds_at(Instant::now())
     }
+
+    pub(crate) fn summary_string_at(&self, now: Instant) -> String {
+        let pretty_elapsed = fmt_elapsed_compact(self.elapsed_seconds_at(now));
+        let mut summary = format!("{} ({pretty_elapsed} • Esc to interrupt)", self.header);
+        if let Some(first) = self.queued_messages.first() {
+            summary.push_str(" — ");
+            summary.push_str(first);
+            if self.queued_messages.len() > 1 {
+                summary.push_str(&format!(" (+{} more)", self.queued_messages.len() - 1));
+            }
+        }
+        summary
+    }
+
+    pub(crate) fn summary_string(&self) -> String {
+        self.summary_string_at(Instant::now())
+    }
 }
 
 impl WidgetRef for StatusIndicatorWidget {
@@ -156,8 +174,10 @@ impl WidgetRef for StatusIndicatorWidget {
         // Schedule next animation frame.
         self.frame_requester
             .schedule_frame_in(Duration::from_millis(32));
-        let elapsed = self.elapsed_seconds();
+        let now = Instant::now();
+        let elapsed = self.elapsed_seconds_at(now);
         let pretty_elapsed = fmt_elapsed_compact(elapsed);
+        talon::set_status_summary(Some(self.summary_string_at(now)));
 
         // Plain rendering: no borders or padding so the live cell is visually indistinguishable from terminal scrollback.
         let mut spans = vec![" ".repeat(LIVE_PREFIX_COLS as usize).into()];

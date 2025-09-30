@@ -1353,6 +1353,10 @@ impl ChatComposer {
                 }
             }
             TalonCommand::GetState => Some("get_state"),
+            TalonCommand::Notify { message } => {
+                self.app_event_tx.send(AppEvent::PostNotification(message));
+                Some("notify")
+            }
         }
     }
 
@@ -1361,6 +1365,7 @@ impl ChatComposer {
             buffer: self.textarea.text().to_string(),
             cursor: self.textarea.cursor(),
             is_task_running: self.is_task_running,
+            task_summary: talon::status_summary(),
         }
     }
 

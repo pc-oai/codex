@@ -2,6 +2,7 @@
 use std::path::PathBuf;
 
 use crate::app_event_sender::AppEventSender;
+use crate::talon;
 use crate::tui::FrameRequester;
 use bottom_pane_view::BottomPaneView;
 use codex_core::protocol::TokenUsageInfo;
@@ -279,7 +280,9 @@ impl BottomPane {
     pub(crate) fn update_status_header(&mut self, header: String) {
         if let Some(status) = self.status.as_mut() {
             status.update_header(header);
+            let summary = status.summary_string();
             self.request_redraw();
+            talon::set_status_summary(Some(summary));
         }
     }
 
@@ -333,11 +336,14 @@ impl BottomPane {
             }
             if let Some(status) = self.status.as_mut() {
                 status.set_queued_messages(self.queued_user_messages.clone());
+                let summary = status.summary_string();
+                talon::set_status_summary(Some(summary));
             }
             self.request_redraw();
         } else {
             // Hide the status indicator when a task completes, but keep other modal views.
             self.status = None;
+            talon::set_status_summary(None);
         }
     }
 
@@ -352,6 +358,8 @@ impl BottomPane {
         self.queued_user_messages = queued.clone();
         if let Some(status) = self.status.as_mut() {
             status.set_queued_messages(queued);
+            let summary = status.summary_string();
+            talon::set_status_summary(Some(summary));
         }
         self.request_redraw();
     }
@@ -415,12 +423,16 @@ impl BottomPane {
     fn pause_status_timer_for_modal(&mut self) {
         if let Some(status) = self.status.as_mut() {
             status.pause_timer();
+            let summary = status.summary_string();
+            talon::set_status_summary(Some(summary));
         }
     }
 
     fn resume_status_timer_after_modal(&mut self) {
         if let Some(status) = self.status.as_mut() {
             status.resume_timer();
+            let summary = status.summary_string();
+            talon::set_status_summary(Some(summary));
         }
     }
 

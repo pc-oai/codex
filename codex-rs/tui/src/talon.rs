@@ -1,6 +1,7 @@
 use std::fs;
 use std::io;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -12,6 +13,8 @@ use serde::Serialize;
 const TALON_DIR_NAME: &str = ".codex-talon";
 const REQUEST_FILENAME: &str = "request.json";
 const RESPONSE_FILENAME: &str = "response.json";
+
+static STATUS_SUMMARY: Mutex<Option<String>> = Mutex::new(None);
 
 #[derive(Debug, Clone)]
 pub(crate) struct TalonPaths {
@@ -55,6 +58,8 @@ pub(crate) enum TalonCommand {
     SetCursor { cursor: usize },
     /// No-op request that asks Codex to write its current state snapshot.
     GetState,
+    /// Post a lightweight notification (no buffer/cursor change).
+    Notify { message: String },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -70,6 +75,8 @@ pub(crate) struct TalonEditorState {
     pub buffer: String,
     pub cursor: usize,
     pub is_task_running: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_summary: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -126,4 +133,14 @@ pub(crate) fn now_timestamp_ms() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or_default()
+}
+
+pub(crate) fn set_status_summary(summary: Option<String>) {
+    if let Ok(mut guard) = STATUS_SUMMARY.lock() {
+        *guard = summary;
+    }
+}
+
+pub(crate) fn status_summary() -> Option<String> {
+    STATUS_SUMMARY.lock().ok().and_then(|guard| guard.clone())
 }

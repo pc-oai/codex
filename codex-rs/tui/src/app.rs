@@ -365,6 +365,9 @@ impl App {
             AppEvent::OpenReviewCustomPrompt => {
                 self.chat_widget.show_review_custom_prompt();
             }
+            AppEvent::PostNotification(message) => {
+                self.chat_widget.add_info_message(message, None);
+            }
         }
         Ok(true)
     }

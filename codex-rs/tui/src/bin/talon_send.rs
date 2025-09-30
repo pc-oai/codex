@@ -50,6 +50,11 @@ enum Command {
         #[arg(long)]
         raw: bool,
     },
+    /// Stage a flash notification inside Codex.
+    Notify {
+        /// Text to display.
+        message: String,
+    },
 }
 
 #[derive(Serialize)]
@@ -70,6 +75,9 @@ enum TalonCommand {
         cursor: usize,
     },
     GetState,
+    Notify {
+        message: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -105,6 +113,13 @@ fn main() -> Result<()> {
             };
             write_request(&request_path, request)?;
             format!("requested state via {}", request_path.display())
+        }
+        Command::Notify { message } => {
+            let request = TalonRequest {
+                commands: vec![TalonCommand::Notify { message }],
+            };
+            write_request(&request_path, request)?;
+            format!("requested notification via {}", request_path.display())
         }
         Command::ShowState { raw } => {
             print_state(&response_path, raw)?;
