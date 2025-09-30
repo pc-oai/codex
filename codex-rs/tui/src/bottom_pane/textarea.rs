@@ -357,6 +357,13 @@ impl TextArea {
                 modifiers: KeyModifiers::ALT,
                 ..
             }  => self.delete_forward_word(),
+            KeyEvent { code: KeyCode::Char('d' | 'D'), modifiers, .. }
+                if modifiers.contains(KeyModifiers::ALT)
+                    && !modifiers.contains(KeyModifiers::CONTROL)
+                    && !modifiers.contains(KeyModifiers::SHIFT) =>
+            {
+                self.delete_forward_word();
+            }
             KeyEvent { code: KeyCode::Char('f' | 'F'), modifiers, .. }
                 if modifiers.contains(KeyModifiers::CONTROL)
                     && modifiers.contains(KeyModifiers::SHIFT)
@@ -1707,6 +1714,12 @@ mod tests {
         let mut t = ta_with("hello world");
         t.set_cursor(0);
         t.input(KeyEvent::new(KeyCode::Delete, KeyModifiers::ALT));
+        assert_eq!(t.text(), " world");
+        assert_eq!(t.cursor(), 0);
+
+        let mut t = ta_with("hello world");
+        t.set_cursor(0);
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::ALT));
         assert_eq!(t.text(), " world");
         assert_eq!(t.cursor(), 0);
 

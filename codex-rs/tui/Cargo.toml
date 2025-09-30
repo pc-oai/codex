@@ -11,6 +11,10 @@ path = "src/main.rs"
 name = "talon-send"
 path = "src/bin/talon_send.rs"
 
+[[bin]]
+name = "talon-sim"
+path = "src/bin/talon_sim.rs"
+
 [lib]
 name = "codex_tui"
 path = "src/lib.rs"
