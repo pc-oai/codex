@@ -933,8 +933,8 @@ impl TextArea {
     }
 
     fn handle_meta_sequence(&mut self, event: &KeyEvent) -> bool {
-        match event.code {
-            KeyCode::Esc => match event.kind {
+        if event.code == KeyCode::Esc {
+            match event.kind {
                 KeyEventKind::Press | KeyEventKind::Repeat => {
                     self.pending_meta_sequence = Some(MetaSequence::default());
                     return true;
@@ -946,8 +946,7 @@ impl TextArea {
                     }
                     return false;
                 }
-            },
-            _ => {}
+            }
         }
 
         if self.pending_meta_sequence.is_none()
@@ -1321,7 +1320,7 @@ fn parse_csi_modifiers(params: &str) -> (bool, bool, bool) {
     let last_param = params
         .split(';')
         .filter(|s| !s.is_empty())
-        .last()
+        .next_back()
         .and_then(|s| s.parse::<u16>().ok())
         .unwrap_or(1);
     if last_param <= 1 {

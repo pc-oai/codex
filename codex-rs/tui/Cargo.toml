@@ -7,6 +7,10 @@ version = { workspace = true }
 name = "codex-tui"
 path = "src/main.rs"
 
+[[bin]]
+name = "talon-send"
+path = "src/bin/talon_send.rs"
+
 [lib]
 name = "codex_tui"
 path = "src/lib.rs"

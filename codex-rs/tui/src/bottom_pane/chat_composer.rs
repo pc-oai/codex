@@ -26,6 +26,11 @@ use super::paste_burst::PasteBurst;
 use crate::bottom_pane::paste_burst::FlushResult;
 use crate::slash_command::SlashCommand;
 use crate::style::user_message_style;
+use crate::talon::TalonCommand;
+use crate::talon::TalonEditorState;
+use crate::talon::TalonResponse;
+use crate::talon::TalonResponseStatus;
+use crate::talon::{self};
 use crate::terminal_palette;
 use codex_protocol::custom_prompts::CustomPrompt;
 
@@ -731,6 +736,17 @@ impl ChatComposer {
     fn handle_key_event_without_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         match key_event {
             KeyEvent {
+                code: KeyCode::Char(ch),
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
+            } if Self::is_ctrl_shift_talon_trigger(modifiers, ch)
+                || Self::is_ctrl_raw_talon_trigger(modifiers, ch) =>
+            {
+                let needs_redraw = self.handle_talon_file_rpc();
+                (InputResult::None, needs_redraw)
+            }
+            KeyEvent {
                 code: KeyCode::Char('d'),
                 modifiers: crossterm::event::KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,
@@ -1222,6 +1238,142 @@ impl ChatComposer {
         self.dismissed_file_popup_token = None;
     }
 
+    fn handle_talon_file_rpc(&mut self) -> bool {
+        let paths = match talon::resolve_paths() {
+            Ok(paths) => paths,
+            Err(err) => {
+                tracing::error!("failed to resolve Talon RPC paths: {err}");
+                return false;
+            }
+        };
+
+        let mut status = TalonResponseStatus::NoRequest;
+        let mut applied_labels: Vec<String> = Vec::new();
+        let mut text_changed = false;
+        let mut cursor_changed = false;
+        let mut error: Option<String> = None;
+
+        let request_opt = match talon::read_request(&paths) {
+            Ok(request) => request,
+            Err(err) => {
+                error = Some(err.to_string());
+                status = TalonResponseStatus::Error;
+                None
+            }
+        };
+
+        if let Some(request) = request_opt {
+            status = TalonResponseStatus::Ok;
+            for command in request.commands {
+                let mut command_text_changed = false;
+                let mut command_cursor_changed = false;
+                if let Some(label) = self.apply_talon_command(
+                    command,
+                    &mut command_text_changed,
+                    &mut command_cursor_changed,
+                ) {
+                    applied_labels.push(label.to_string());
+                }
+                text_changed |= command_text_changed;
+                cursor_changed |= command_cursor_changed;
+            }
+
+            if let Err(err) = talon::remove_request(&paths) {
+                tracing::warn!("failed to remove Talon request file: {err}");
+            }
+        }
+
+        let response = TalonResponse {
+            version: 1,
+            status: status.clone(),
+            state: self.talon_editor_state(),
+            applied: applied_labels,
+            error,
+            timestamp_ms: talon::now_timestamp_ms(),
+        };
+
+        if let Err(err) = talon::write_response(&paths, &response) {
+            tracing::error!("failed to write Talon response: {err}");
+        }
+
+        if matches!(status, TalonResponseStatus::Error) {
+            return false;
+        }
+
+        if text_changed || cursor_changed {
+            self.paste_burst.clear_window_after_non_char();
+            self.sync_command_popup();
+            if matches!(self.active_popup, ActivePopup::Command(_)) {
+                self.dismissed_file_popup_token = None;
+            } else {
+                self.sync_file_search_popup();
+            }
+        }
+
+        text_changed || cursor_changed
+    }
+
+    fn apply_talon_command(
+        &mut self,
+        command: TalonCommand,
+        text_changed: &mut bool,
+        cursor_changed: &mut bool,
+    ) -> Option<&'static str> {
+        match command {
+            TalonCommand::SetBuffer { text, cursor } => {
+                let current = self.textarea.text().to_string();
+                let mut changed = false;
+                if current != text {
+                    let len = current.len();
+                    self.textarea.replace_range(0..len, &text);
+                    self.pending_pastes.clear();
+                    self.attached_images.clear();
+                    *text_changed = true;
+                    changed = true;
+                }
+
+                let desired_cursor = cursor.unwrap_or_else(|| self.textarea.text().len());
+                let clamped = desired_cursor.min(self.textarea.text().len());
+                if self.textarea.cursor() != clamped {
+                    self.textarea.set_cursor(clamped);
+                    *cursor_changed = true;
+                    changed = true;
+                }
+
+                changed.then_some("set_buffer")
+            }
+            TalonCommand::SetCursor { cursor } => {
+                let clamped = cursor.min(self.textarea.text().len());
+                if self.textarea.cursor() != clamped {
+                    self.textarea.set_cursor(clamped);
+                    *cursor_changed = true;
+                    Some("set_cursor")
+                } else {
+                    None
+                }
+            }
+            TalonCommand::GetState => Some("get_state"),
+        }
+    }
+
+    fn talon_editor_state(&self) -> TalonEditorState {
+        TalonEditorState {
+            buffer: self.textarea.text().to_string(),
+            cursor: self.textarea.cursor(),
+            is_task_running: self.is_task_running,
+        }
+    }
+
+    fn is_ctrl_shift_talon_trigger(modifiers: KeyModifiers, ch: char) -> bool {
+        modifiers.contains(KeyModifiers::CONTROL)
+            && modifiers.contains(KeyModifiers::SHIFT)
+            && matches!(ch, 't' | 'T')
+    }
+
+    fn is_ctrl_raw_talon_trigger(modifiers: KeyModifiers, ch: char) -> bool {
+        modifiers == KeyModifiers::CONTROL && matches!(ch, 'r' | 'R')
+    }
+
     fn set_has_focus(&mut self, has_focus: bool) {
         self.has_focus = has_focus;
     }
@@ -1359,6 +1511,115 @@ mod tests {
             "",
             "expected blank spacing row above hints but saw: {spacing_row:?}",
         );
+    }
+
+    fn make_test_composer() -> ChatComposer {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        ChatComposer::new(true, sender, false, String::new(), false)
+    }
+
+    #[test]
+    fn talon_set_buffer_replaces_text_and_cursor() {
+        let mut composer = make_test_composer();
+        composer.textarea.set_text("hello");
+        composer.textarea.set_cursor(5);
+        composer
+            .pending_pastes
+            .push(("placeholder".into(), "actual".into()));
+        composer.attached_images.push(AttachedImage {
+            placeholder: "[image 10x10 png]".into(),
+            path: PathBuf::from("/tmp/example.png"),
+        });
+
+        let mut text_changed = false;
+        let mut cursor_changed = false;
+        let label = composer.apply_talon_command(
+            TalonCommand::SetBuffer {
+                text: "world".into(),
+                cursor: Some(1),
+            },
+            &mut text_changed,
+            &mut cursor_changed,
+        );
+
+        assert_eq!(composer.textarea.text(), "world");
+        assert_eq!(composer.textarea.cursor(), 1);
+        assert!(text_changed);
+        assert!(cursor_changed);
+        assert_eq!(label, Some("set_buffer"));
+        assert!(composer.pending_pastes.is_empty());
+        assert!(composer.attached_images.is_empty());
+    }
+
+    #[test]
+    fn talon_set_cursor_clamps_within_bounds() {
+        let mut composer = make_test_composer();
+        composer.textarea.set_text("abc");
+        composer.textarea.set_cursor(0);
+
+        let mut text_changed = false;
+        let mut cursor_changed = false;
+        let label = composer.apply_talon_command(
+            TalonCommand::SetCursor { cursor: 50 },
+            &mut text_changed,
+            &mut cursor_changed,
+        );
+
+        assert_eq!(composer.textarea.cursor(), 3);
+        assert!(!text_changed);
+        assert!(cursor_changed);
+        assert_eq!(label, Some("set_cursor"));
+    }
+
+    #[test]
+    fn talon_keyboard_shortcuts_are_recognized() {
+        assert!(ChatComposer::is_ctrl_shift_talon_trigger(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            't'
+        ));
+        assert!(ChatComposer::is_ctrl_shift_talon_trigger(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            'T'
+        ));
+        assert!(!ChatComposer::is_ctrl_shift_talon_trigger(
+            KeyModifiers::CONTROL,
+            't'
+        ));
+
+        assert!(ChatComposer::is_ctrl_raw_talon_trigger(
+            KeyModifiers::CONTROL,
+            'r'
+        ));
+        assert!(ChatComposer::is_ctrl_raw_talon_trigger(
+            KeyModifiers::CONTROL,
+            'R'
+        ));
+        assert!(!ChatComposer::is_ctrl_raw_talon_trigger(
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            'r'
+        ));
+    }
+
+    #[test]
+    fn talon_get_state_command_no_op() {
+        let mut composer = make_test_composer();
+        composer.textarea.set_text("hello");
+        composer.textarea.set_cursor(2);
+
+        let mut text_changed = false;
+        let mut cursor_changed = false;
+        let label = composer.apply_talon_command(
+            TalonCommand::GetState,
+            &mut text_changed,
+            &mut cursor_changed,
+        );
+
+        assert_eq!(composer.textarea.text(), "hello");
+        assert_eq!(composer.textarea.cursor(), 2);
+        assert!(!text_changed);
+        assert!(!cursor_changed);
+        assert_eq!(label, Some("get_state"));
     }
 
     #[test]
