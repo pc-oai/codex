@@ -43,6 +43,7 @@ pub(crate) enum CancellationEvent {
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::InputResult;
 use codex_protocol::custom_prompts::CustomPrompt;
+use codex_protocol::mcp_protocol::ConversationId;
 
 use crate::status_indicator_widget::StatusIndicatorWidget;
 pub(crate) use list_selection_view::SelectionAction;
@@ -449,6 +450,14 @@ impl BottomPane {
 
     pub(crate) fn set_history_metadata(&mut self, log_id: u64, entry_count: usize) {
         self.composer.set_history_metadata(log_id, entry_count);
+    }
+
+    pub(crate) fn set_conversation_id(&mut self, conversation_id: Option<ConversationId>) {
+        self.composer.set_conversation_id(conversation_id);
+    }
+
+    pub(crate) fn set_cwd(&mut self, cwd: PathBuf) {
+        self.composer.set_cwd(cwd);
     }
 
     pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {

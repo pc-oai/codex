@@ -33,6 +33,7 @@ use crate::talon::TalonResponseStatus;
 use crate::talon::{self};
 use crate::terminal_palette;
 use codex_protocol::custom_prompts::CustomPrompt;
+use codex_protocol::mcp_protocol::ConversationId;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -89,6 +90,8 @@ pub(crate) struct ChatComposer {
     // When true, disables paste-burst logic and inserts characters immediately.
     disable_paste_burst: bool,
     custom_prompts: Vec<CustomPrompt>,
+    conversation_id: Option<ConversationId>,
+    cwd: Option<PathBuf>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -127,6 +130,8 @@ impl ChatComposer {
             attached_images: Vec::new(),
             placeholder_text,
             is_task_running: false,
+            conversation_id: None,
+            cwd: None,
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
@@ -191,6 +196,14 @@ impl ChatComposer {
     /// that the composer can navigate cross-session history.
     pub(crate) fn set_history_metadata(&mut self, log_id: u64, entry_count: usize) {
         self.history.set_metadata(log_id, entry_count);
+    }
+
+    pub(crate) fn set_conversation_id(&mut self, conversation_id: Option<ConversationId>) {
+        self.conversation_id = conversation_id;
+    }
+
+    pub(crate) fn set_cwd(&mut self, cwd: PathBuf) {
+        self.cwd = Some(cwd);
     }
 
     /// Integrate an asynchronous response to an on-demand history lookup. If
@@ -1366,6 +1379,8 @@ impl ChatComposer {
             cursor: self.textarea.cursor(),
             is_task_running: self.is_task_running,
             task_summary: talon::status_summary(),
+            session_id: self.conversation_id.map(|id| id.to_string()),
+            cwd: self.cwd.as_ref().map(|p| p.display().to_string()),
         }
     }
 

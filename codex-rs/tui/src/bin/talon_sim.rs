@@ -67,6 +67,10 @@ struct TalonEditorState {
     is_task_running: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     task_summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cwd: Option<String>,
 }
 
 impl Default for TalonEditorState {
@@ -76,6 +80,8 @@ impl Default for TalonEditorState {
             cursor: 0,
             is_task_running: false,
             task_summary: None,
+            session_id: None,
+            cwd: None,
         }
     }
 }

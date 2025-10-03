@@ -294,6 +294,7 @@ impl ChatWidget {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.conversation_id = Some(event.session_id);
+        self.bottom_pane.set_conversation_id(self.conversation_id);
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
@@ -875,7 +876,7 @@ impl ChatWidget {
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
 
-        Self {
+        let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
@@ -913,7 +914,11 @@ impl ChatWidget {
             ghost_snapshots: Vec::new(),
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
-        }
+        };
+
+        widget.bottom_pane.set_cwd(config.cwd.clone());
+
+        widget
     }
 
     /// Create a ChatWidget attached to an existing conversation (e.g., a fork).
@@ -937,7 +942,7 @@ impl ChatWidget {
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
-        Self {
+        let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
@@ -975,7 +980,11 @@ impl ChatWidget {
             ghost_snapshots: Vec::new(),
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
-        }
+        };
+
+        widget.bottom_pane.set_cwd(config.cwd.clone());
+
+        widget
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {

@@ -77,6 +77,10 @@ pub(crate) struct TalonEditorState {
     pub is_task_running: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
