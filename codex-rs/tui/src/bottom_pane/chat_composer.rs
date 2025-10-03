@@ -1370,6 +1370,11 @@ impl ChatComposer {
                 self.app_event_tx.send(AppEvent::PostNotification(message));
                 Some("notify")
             }
+            TalonCommand::EditPreviousMessage { steps_back } => {
+                self.app_event_tx
+                    .send(AppEvent::BacktrackQuickEdit { steps_back });
+                Some("edit_previous_message")
+            }
         }
     }
 

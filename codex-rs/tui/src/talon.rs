@@ -60,6 +60,11 @@ pub(crate) enum TalonCommand {
     GetState,
     /// Post a lightweight notification (no buffer/cursor change).
     Notify { message: String },
+    /// Trigger editing of a previous user message (forks the session and prefills the composer).
+    EditPreviousMessage {
+        #[serde(default)]
+        steps_back: usize,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]

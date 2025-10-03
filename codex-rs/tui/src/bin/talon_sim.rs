@@ -47,6 +47,10 @@ enum TalonCommand {
     Notify {
         message: String,
     },
+    EditPreviousMessage {
+        #[serde(default)]
+        steps_back: usize,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -146,6 +150,10 @@ fn main() -> Result<()> {
                     let _ = message;
                     // No state change; record applied label for parity with the real TUI.
                     applied.push("notify".to_string());
+                }
+                TalonCommand::EditPreviousMessage { steps_back } => {
+                    let _ = steps_back;
+                    applied.push("edit_previous_message".to_string());
                 }
             }
         }

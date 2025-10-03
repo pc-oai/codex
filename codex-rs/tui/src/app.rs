@@ -368,6 +368,9 @@ impl App {
             AppEvent::PostNotification(message) => {
                 self.chat_widget.add_info_message(message, None);
             }
+            AppEvent::BacktrackQuickEdit { steps_back } => {
+                self.quick_backtrack_edit(steps_back);
+            }
         }
         Ok(true)
     }

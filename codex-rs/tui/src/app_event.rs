@@ -79,4 +79,9 @@ pub(crate) enum AppEvent {
 
     /// Request the TUI to post an inline/desktop notification message.
     PostNotification(String),
+
+    /// Trigger a backtrack edit for a previous user message without relying on key presses.
+    BacktrackQuickEdit {
+        steps_back: usize,
+    },
 }

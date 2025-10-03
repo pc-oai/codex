@@ -107,6 +107,52 @@ impl App {
         ));
     }
 
+    /// Trigger a backtrack edit without manual key presses, selecting the user message
+    /// `steps_back` entries from the most recent (0 = latest user message).
+    pub(crate) fn quick_backtrack_edit(&mut self, steps_back: usize) {
+        if self.backtrack.pending.is_some() || self.overlay.is_some() {
+            return;
+        }
+
+        if !self.chat_widget.composer_is_empty() || !self.chat_widget.is_normal_backtrack_mode() {
+            return;
+        }
+
+        let Some(base_id) = self.chat_widget.conversation_id() else {
+            return;
+        };
+
+        let user_total = user_count(&self.transcript_cells);
+        if user_total == 0 {
+            return;
+        }
+
+        let capped_steps = steps_back.min(user_total.saturating_sub(1));
+        let target_user = user_total.saturating_sub(1).saturating_sub(capped_steps);
+
+        let Some(cell_idx) = nth_user_position(&self.transcript_cells, target_user) else {
+            return;
+        };
+
+        let Some(cell) = self
+            .transcript_cells
+            .get(cell_idx)
+            .and_then(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
+        else {
+            return;
+        };
+
+        let prefill = cell.message.clone();
+
+        self.chat_widget.clear_esc_backtrack_hint();
+        self.backtrack.primed = false;
+        self.backtrack.overlay_preview_active = false;
+        self.backtrack.base_id = Some(base_id);
+        self.backtrack.nth_user_message = target_user;
+
+        self.request_backtrack(prefill, base_id, target_user);
+    }
+
     /// Open transcript overlay (enters alternate screen and shows full transcript).
     pub(crate) fn open_transcript_overlay(&mut self, tui: &mut tui::Tui) {
         let _ = tui.enter_alt_screen();
