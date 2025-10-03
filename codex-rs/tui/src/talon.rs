@@ -65,6 +65,10 @@ pub(crate) enum TalonCommand {
         #[serde(default)]
         steps_back: usize,
     },
+    /// Navigate to the previous entry in the composer history.
+    HistoryPrevious,
+    /// Navigate to the next entry in the composer history.
+    HistoryNext,
 }
 
 #[derive(Debug, Clone, Serialize)]

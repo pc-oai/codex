@@ -51,6 +51,8 @@ enum TalonCommand {
         #[serde(default)]
         steps_back: usize,
     },
+    HistoryPrevious,
+    HistoryNext,
 }
 
 #[derive(Debug, Serialize)]
@@ -154,6 +156,12 @@ fn main() -> Result<()> {
                 TalonCommand::EditPreviousMessage { steps_back } => {
                     let _ = steps_back;
                     applied.push("edit_previous_message".to_string());
+                }
+                TalonCommand::HistoryPrevious => {
+                    applied.push("history_previous".to_string());
+                }
+                TalonCommand::HistoryNext => {
+                    applied.push("history_next".to_string());
                 }
             }
         }

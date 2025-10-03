@@ -94,6 +94,11 @@ pub(crate) struct ChatComposer {
     cwd: Option<PathBuf>,
 }
 
+enum HistoryDirection {
+    Previous,
+    Next,
+}
+
 /// Popup state – at most one can be visible at any time.
 enum ActivePopup {
     None,
@@ -761,7 +766,7 @@ impl ChatComposer {
             }
             KeyEvent {
                 code: KeyCode::Char('d'),
-                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                modifiers: KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,
                 ..
             } if self.is_empty() => {
@@ -773,22 +778,24 @@ impl ChatComposer {
             // empty or when the cursor is at the correct position, to avoid
             // interfering with normal cursor movement.
             // -------------------------------------------------------------
-            KeyEvent {
+            key_event @ KeyEvent {
                 code: KeyCode::Up | KeyCode::Down,
                 ..
+            }
+            | key_event @ KeyEvent {
+                code: KeyCode::Char('p' | 'n'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
             } => {
-                if self
-                    .history
-                    .should_handle_navigation(self.textarea.text(), self.textarea.cursor())
-                {
-                    let replace_text = match key_event.code {
-                        KeyCode::Up => self.history.navigate_up(&self.app_event_tx),
-                        KeyCode::Down => self.history.navigate_down(&self.app_event_tx),
-                        _ => unreachable!(),
-                    };
-                    if let Some(text) = replace_text {
-                        self.textarea.set_text(&text);
-                        self.textarea.set_cursor(0);
+                let direction = match key_event.code {
+                    KeyCode::Up => Some(HistoryDirection::Previous),
+                    KeyCode::Down => Some(HistoryDirection::Next),
+                    KeyCode::Char('p') => Some(HistoryDirection::Previous),
+                    KeyCode::Char('n') => Some(HistoryDirection::Next),
+                    _ => None,
+                };
+                if let Some(direction) = direction {
+                    if self.navigate_history(direction, false) {
                         return (InputResult::None, true);
                     }
                 }
@@ -1375,6 +1382,24 @@ impl ChatComposer {
                     .send(AppEvent::BacktrackQuickEdit { steps_back });
                 Some("edit_previous_message")
             }
+            TalonCommand::HistoryPrevious => {
+                if self.navigate_history(HistoryDirection::Previous, true) {
+                    *text_changed = true;
+                    *cursor_changed = true;
+                    Some("history_previous")
+                } else {
+                    None
+                }
+            }
+            TalonCommand::HistoryNext => {
+                if self.navigate_history(HistoryDirection::Next, true) {
+                    *text_changed = true;
+                    *cursor_changed = true;
+                    Some("history_next")
+                } else {
+                    None
+                }
+            }
         }
     }
 
@@ -1386,6 +1411,29 @@ impl ChatComposer {
             task_summary: talon::status_summary(),
             session_id: self.conversation_id.map(|id| id.to_string()),
             cwd: self.cwd.as_ref().map(|p| p.display().to_string()),
+        }
+    }
+
+    fn navigate_history(&mut self, direction: HistoryDirection, force: bool) -> bool {
+        if !force
+            && !self
+                .history
+                .should_handle_navigation(self.textarea.text(), self.textarea.cursor())
+        {
+            return false;
+        }
+
+        let replacement = match direction {
+            HistoryDirection::Previous => self.history.navigate_up(&self.app_event_tx),
+            HistoryDirection::Next => self.history.navigate_down(&self.app_event_tx),
+        };
+
+        if let Some(text) = replacement {
+            self.textarea.set_text(&text);
+            self.textarea.set_cursor(0);
+            true
+        } else {
+            false
         }
     }
 
@@ -1645,6 +1693,66 @@ mod tests {
         assert!(!text_changed);
         assert!(!cursor_changed);
         assert_eq!(label, Some("get_state"));
+    }
+
+    #[test]
+    fn talon_history_previous_command_recalls_entry() {
+        let mut composer = make_test_composer();
+        composer.history.record_local_submission("first");
+        composer.history.record_local_submission("second");
+        composer.textarea.set_text("");
+        composer.textarea.set_cursor(0);
+
+        let mut text_changed = false;
+        let mut cursor_changed = false;
+        let label = composer.apply_talon_command(
+            TalonCommand::HistoryPrevious,
+            &mut text_changed,
+            &mut cursor_changed,
+        );
+
+        assert_eq!(composer.textarea.text(), "second");
+        assert_eq!(composer.textarea.cursor(), 0);
+        assert!(text_changed);
+        assert!(cursor_changed);
+        assert_eq!(label, Some("history_previous"));
+    }
+
+    #[test]
+    fn talon_history_next_command_advances_entry() {
+        let mut composer = make_test_composer();
+        composer.history.record_local_submission("first");
+        composer.history.record_local_submission("second");
+        composer.textarea.set_text("");
+        composer.textarea.set_cursor(0);
+
+        // Step back twice to ensure we can go forward after reaching the oldest.
+        let mut dummy_change = false;
+        let mut dummy_cursor = false;
+        composer.apply_talon_command(
+            TalonCommand::HistoryPrevious,
+            &mut dummy_change,
+            &mut dummy_cursor,
+        );
+        composer.apply_talon_command(
+            TalonCommand::HistoryPrevious,
+            &mut dummy_change,
+            &mut dummy_cursor,
+        );
+
+        let mut text_changed = false;
+        let mut cursor_changed = false;
+        let label = composer.apply_talon_command(
+            TalonCommand::HistoryNext,
+            &mut text_changed,
+            &mut cursor_changed,
+        );
+
+        assert_eq!(composer.textarea.text(), "second");
+        assert_eq!(composer.textarea.cursor(), 0);
+        assert!(text_changed);
+        assert!(cursor_changed);
+        assert_eq!(label, Some("history_next"));
     }
 
     #[test]
