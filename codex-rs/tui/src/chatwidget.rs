@@ -2296,6 +2296,18 @@ impl ChatWidget {
     pub(crate) fn is_task_running(&self) -> bool {
         self.bottom_pane.is_task_running()
     }
+
+    pub(crate) fn history_previous(&mut self) -> bool {
+        self.bottom_pane.history_previous()
+    }
+
+    pub(crate) fn history_next(&mut self) -> bool {
+        self.bottom_pane.history_next()
+    }
+
+    pub(crate) fn history_edit_previous(&mut self, steps_back: usize) -> bool {
+        self.bottom_pane.history_edit_previous(steps_back)
+    }
 }
 
 impl WidgetRef for &ChatWidget {

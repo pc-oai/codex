@@ -291,6 +291,30 @@ impl BottomPane {
         self.composer.current_cursor()
     }
 
+    pub(crate) fn history_previous(&mut self) -> bool {
+        let changed = self.composer.history_previous();
+        if changed {
+            self.request_redraw();
+        }
+        changed
+    }
+
+    pub(crate) fn history_next(&mut self) -> bool {
+        let changed = self.composer.history_next();
+        if changed {
+            self.request_redraw();
+        }
+        changed
+    }
+
+    pub(crate) fn history_edit_previous(&mut self, steps_back: usize) -> bool {
+        let changed = self.composer.history_edit_previous(steps_back);
+        if changed {
+            self.request_redraw();
+        }
+        changed
+    }
+
     /// Update the animated header shown to the left of the brackets in the
     /// status indicator (defaults to "Working"). No-ops if the status
     /// indicator is not active.

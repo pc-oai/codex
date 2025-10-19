@@ -210,10 +210,21 @@ impl App {
                                     let _ = tui.notify(message);
                                     applied.push("notify".to_string());
                                 }
-                                // Not yet wired: treat as no-op for now
-                                EditPreviousMessage { .. } => applied.push("edit_previous_message".to_string()),
-                                HistoryPrevious => applied.push("history_previous".to_string()),
-                                HistoryNext => applied.push("history_next".to_string()),
+                                EditPreviousMessage { steps_back } => {
+                                    if app.chat_widget.history_edit_previous(steps_back) {
+                                        applied.push("edit_previous_message".to_string());
+                                    }
+                                }
+                                HistoryPrevious => {
+                                    if app.chat_widget.history_previous() {
+                                        applied.push("history_previous".to_string());
+                                    }
+                                }
+                                HistoryNext => {
+                                    if app.chat_widget.history_next() {
+                                        applied.push("history_next".to_string());
+                                    }
+                                }
                             }
                         }
 

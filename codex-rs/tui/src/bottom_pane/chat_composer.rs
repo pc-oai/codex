@@ -184,6 +184,42 @@ impl ChatComposer {
         self.textarea.set_cursor(pos);
     }
 
+    /// Navigate to previous history entry, updating the textarea if available.
+    pub(crate) fn history_previous(&mut self) -> bool {
+        if let Some(text) = self.history.navigate_up(&self.app_event_tx) {
+            self.textarea.set_text(&text);
+            self.textarea.set_cursor(0);
+            return true;
+        }
+        false
+    }
+
+    /// Navigate to next history entry, updating the textarea if available.
+    pub(crate) fn history_next(&mut self) -> bool {
+        if let Some(text) = self.history.navigate_down(&self.app_event_tx) {
+            self.textarea.set_text(&text);
+            self.textarea.set_cursor(0);
+            return true;
+        }
+        false
+    }
+
+    /// Prefill composer with an older history entry by stepping back N times.
+    /// If an entry is not yet available (async fetch), no change is applied now.
+    pub(crate) fn history_edit_previous(&mut self, steps_back: usize) -> bool {
+        // Ensure navigation starts from latest entry
+        self.history.reset_navigation();
+        let mut updated = false;
+        for _ in 0..=steps_back {
+            if let Some(text) = self.history.navigate_up(&self.app_event_tx) {
+                self.textarea.set_text(&text);
+                self.textarea.set_cursor(0);
+                updated = true;
+            }
+        }
+        updated
+    }
+
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
         let footer_props = self.footer_props();
         let footer_hint_height = self
