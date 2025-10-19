@@ -243,7 +243,7 @@ impl McpConnectionManager {
                 };
 
                 let client = match transport {
-                    McpServerTransportConfig::Stdio { command, args, env } => {
+                    McpServerTransportConfig::Stdio { command, args, env, .. } => {
                         let command_os: OsString = command.into();
                         let args_os: Vec<OsString> = args.into_iter().map(Into::into).collect();
                         McpClientAdapter::new_stdio_client(
@@ -256,7 +256,7 @@ impl McpConnectionManager {
                         )
                         .await
                     }
-                    McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
+                    McpServerTransportConfig::StreamableHttp { url, bearer_token, .. } => {
                         McpClientAdapter::new_streamable_http_client(
                             url,
                             bearer_token,

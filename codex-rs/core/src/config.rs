@@ -316,7 +316,13 @@ pub fn write_global_mcp_servers(
             let mut entry = TomlTable::new();
             entry.set_implicit(false);
             match &config.transport {
-                McpServerTransportConfig::Stdio { command, args, env } => {
+                McpServerTransportConfig::Stdio {
+                    command,
+                    args,
+                    env,
+                    env_vars,
+                    cwd,
+                } => {
                     entry["command"] = toml_edit::value(command.clone());
 
                     if !args.is_empty() {
@@ -339,9 +345,56 @@ pub fn write_global_mcp_servers(
                         }
                         entry["env"] = TomlItem::Table(env_table);
                     }
+
+                    if !env_vars.is_empty() {
+                        let mut arr = TomlArray::new();
+                        for var in env_vars {
+                            arr.push(var.clone());
+                        }
+                        entry["env_vars"] = TomlItem::Value(arr.into());
+                    }
+
+                    if let Some(cwd) = cwd {
+                        if !cwd.as_os_str().is_empty() {
+                            entry["cwd"] = toml_edit::value(cwd.display().to_string());
+                        }
+                    }
                 }
-                McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
+                McpServerTransportConfig::StreamableHttp {
+                    url,
+                    bearer_token_env_var,
+                    http_headers,
+                    env_http_headers,
+                    bearer_token,
+                } => {
                     entry["url"] = toml_edit::value(url.clone());
+                    if let Some(env_var) = bearer_token_env_var {
+                        entry["bearer_token_env_var"] = toml_edit::value(env_var.clone());
+                    }
+                    if let Some(h) = http_headers {
+                        if !h.is_empty() {
+                            let mut tbl = TomlTable::new();
+                            tbl.set_implicit(false);
+                            let mut pairs: Vec<_> = h.iter().collect();
+                            pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                            for (k, v) in pairs {
+                                tbl.insert(k, toml_edit::value(v.clone()));
+                            }
+                            entry["http_headers"] = TomlItem::Table(tbl);
+                        }
+                    }
+                    if let Some(h) = env_http_headers {
+                        if !h.is_empty() {
+                            let mut tbl = TomlTable::new();
+                            tbl.set_implicit(false);
+                            let mut pairs: Vec<_> = h.iter().collect();
+                            pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                            for (k, v) in pairs {
+                                tbl.insert(k, toml_edit::value(v.clone()));
+                            }
+                            entry["env_http_headers"] = TomlItem::Table(tbl);
+                        }
+                    }
                     if let Some(token) = bearer_token {
                         entry["bearer_token"] = toml_edit::value(token.clone());
                     }
@@ -354,6 +407,11 @@ pub fn write_global_mcp_servers(
 
             if let Some(timeout) = config.tool_timeout_sec {
                 entry["tool_timeout_sec"] = toml_edit::value(timeout.as_secs_f64());
+            }
+
+            // Only render enabled when false to reduce noise (default is true).
+            if !config.enabled {
+                entry["enabled"] = toml_edit::value(false);
             }
 
             doc["mcp_servers"][name.as_str()] = TomlItem::Table(entry);

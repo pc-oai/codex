@@ -64,6 +64,7 @@ fn list_and_get_render_expected_output() -> Result<()> {
         json!([
           {
             "name": "docs",
+            "enabled": true,
             "transport": {
               "type": "stdio",
               "command": "docs-server",
@@ -73,13 +74,14 @@ fn list_and_get_render_expected_output() -> Result<()> {
               ],
               "env": {
                 "TOKEN": "secret"
-              }
+              },
+              "env_vars": [],
+              "cwd": null
             },
             "startup_timeout_sec": null,
             "tool_timeout_sec": null
           }
-        ]
-        )
+        ])
     );
 
     let mut get_cmd = codex_command(codex_home.path())?;

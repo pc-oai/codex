@@ -18,6 +18,10 @@ pub struct McpServerConfig {
     #[serde(flatten)]
     pub transport: McpServerTransportConfig,
 
+    /// Whether this server is enabled. Defaults to true when missing.
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+
     /// Startup timeout in seconds for initializing MCP server & initially listing tools.
     #[serde(
         default,
@@ -43,9 +47,19 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             args: Option<Vec<String>>,
             #[serde(default)]
             env: Option<HashMap<String, String>>,
+            #[serde(default)]
+            env_vars: Option<Vec<String>>,
+            #[serde(default)]
+            cwd: Option<PathBuf>,
 
             url: Option<String>,
             bearer_token: Option<String>,
+            #[serde(default)]
+            bearer_token_env_var: Option<String>,
+            #[serde(default)]
+            http_headers: Option<HashMap<String, String>>,
+            #[serde(default)]
+            env_http_headers: Option<HashMap<String, String>>,
 
             #[serde(default)]
             startup_timeout_sec: Option<f64>,
@@ -53,6 +67,8 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             startup_timeout_ms: Option<u64>,
             #[serde(default, with = "option_duration_secs")]
             tool_timeout_sec: Option<Duration>,
+            #[serde(default)]
+            enabled: Option<bool>,
         }
 
         let raw = RawMcpServerConfig::deserialize(deserializer)?;
@@ -83,30 +99,53 @@ impl<'de> Deserialize<'de> for McpServerConfig {
                 command: Some(command),
                 args,
                 env,
+                env_vars,
+                cwd,
                 url,
                 bearer_token,
+                bearer_token_env_var,
+                http_headers,
+                env_http_headers,
                 ..
             } => {
                 throw_if_set("stdio", "url", url.as_ref())?;
                 throw_if_set("stdio", "bearer_token", bearer_token.as_ref())?;
+                throw_if_set(
+                    "stdio",
+                    "bearer_token_env_var",
+                    bearer_token_env_var.as_ref(),
+                )?;
+                throw_if_set("stdio", "http_headers", http_headers.as_ref())?;
+                throw_if_set("stdio", "env_http_headers", env_http_headers.as_ref())?;
                 McpServerTransportConfig::Stdio {
                     command,
                     args: args.unwrap_or_default(),
                     env,
+                    env_vars: env_vars.unwrap_or_default(),
+                    cwd,
                 }
             }
             RawMcpServerConfig {
                 url: Some(url),
                 bearer_token,
+                bearer_token_env_var,
                 command,
                 args,
                 env,
+                http_headers,
+                env_http_headers,
                 ..
             } => {
                 throw_if_set("streamable_http", "command", command.as_ref())?;
                 throw_if_set("streamable_http", "args", args.as_ref())?;
                 throw_if_set("streamable_http", "env", env.as_ref())?;
-                McpServerTransportConfig::StreamableHttp { url, bearer_token }
+                McpServerTransportConfig::StreamableHttp {
+                    url,
+                    bearer_token_env_var,
+                    http_headers,
+                    env_http_headers,
+                    bearer_token,
+                }
             }
             _ => return Err(SerdeError::custom("invalid transport")),
         };
@@ -115,6 +154,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             transport,
             startup_timeout_sec,
             tool_timeout_sec: raw.tool_timeout_sec,
+            enabled: raw.enabled.unwrap_or(true),
         })
     }
 }
@@ -129,16 +169,33 @@ pub enum McpServerTransportConfig {
         args: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         env: Option<HashMap<String, String>>,
+        /// Names of environment variables to pass through from the parent process.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        env_vars: Vec<String>,
+        /// Optional working directory for the MCP server process.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<PathBuf>,
     },
     /// https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http
     StreamableHttp {
         url: String,
-        /// A plain text bearer token to use for authentication.
-        /// This bearer token will be included in the HTTP request header as an `Authorization: Bearer <token>` header.
-        /// This should be used with caution because it lives on disk in clear text.
+        /// Environment variable from which to read a bearer token for HTTP auth.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bearer_token_env_var: Option<String>,
+        /// Static custom HTTP headers to include in requests to the server.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        http_headers: Option<HashMap<String, String>>,
+        /// HTTP headers whose values are read from environment variables (name -> env var name).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        env_http_headers: Option<HashMap<String, String>>,
+        /// Legacy support: a plain text bearer token on disk.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         bearer_token: Option<String>,
     },
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 mod option_duration_secs {

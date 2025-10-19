@@ -65,6 +65,9 @@ enum Subcommand {
     /// [experimental] Run Codex as an MCP server and manage MCP servers.
     Mcp(McpCli),
 
+    /// [experimental] Run the Codex MCP server (stdio transport).
+    McpServer(McpServerCli),
+
     /// Run the Protocol stream via stdin/stdout
     #[clap(visible_alias = "p")]
     Proto(ProtoCli),
@@ -107,6 +110,12 @@ struct ResumeCommand {
 
     #[clap(flatten)]
     config_overrides: TuiCli,
+}
+
+#[derive(Debug, Parser)]
+struct McpServerCli {
+    #[clap(flatten)]
+    pub config_overrides: CliConfigOverrides,
 }
 
 #[derive(Debug, Parser)]
@@ -248,7 +257,15 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         Some(Subcommand::Mcp(mut mcp_cli)) => {
             // Propagate any root-level config overrides (e.g. `-c key=value`).
             prepend_config_flags(&mut mcp_cli.config_overrides, root_config_overrides.clone());
-            mcp_cli.run(codex_linux_sandbox_exe).await?;
+            mcp_cli.run().await?;
+        }
+        Some(Subcommand::McpServer(mut mcp_server_cli)) => {
+            prepend_config_flags(
+                &mut mcp_server_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            codex_mcp_server::run_main(codex_linux_sandbox_exe, mcp_server_cli.config_overrides)
+                .await?;
         }
         Some(Subcommand::Resume(ResumeCommand {
             session_id,

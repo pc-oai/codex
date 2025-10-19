@@ -1,11 +1,12 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
+use clap::ArgGroup;
 use codex_common::CliConfigOverrides;
+use codex_common::format_env_display::format_env_display;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
@@ -14,10 +15,9 @@ use codex_core::config::write_global_mcp_servers;
 use codex_core::config_types::McpServerConfig;
 use codex_core::config_types::McpServerTransportConfig;
 
-/// [experimental] Launch Codex as an MCP server or manage configured MCP servers.
+/// [experimental] Manage configured MCP servers.
 ///
 /// Subcommands:
-/// - `serve`  — run the MCP server on stdio
 /// - `list`   — list configured servers (with `--json`)
 /// - `get`    — show a single server (with `--json`)
 /// - `add`    — add a server launcher entry to `~/.codex/config.toml`
@@ -28,14 +28,11 @@ pub struct McpCli {
     pub config_overrides: CliConfigOverrides,
 
     #[command(subcommand)]
-    pub cmd: Option<McpSubcommand>,
+    pub subcommand: McpSubcommand,
 }
 
 #[derive(Debug, clap::Subcommand)]
 pub enum McpSubcommand {
-    /// [experimental] Run the Codex MCP server (stdio transport).
-    Serve,
-
     /// [experimental] List configured MCP servers.
     List(ListArgs),
 
@@ -71,13 +68,54 @@ pub struct AddArgs {
     /// Name for the MCP server configuration.
     pub name: String,
 
+    #[command(flatten)]
+    pub transport_args: AddMcpTransportArgs,
+}
+
+#[derive(Debug, clap::Args)]
+#[command(
+    group(
+        ArgGroup::new("transport")
+            .args(["command", "url"])
+            .required(true)
+            .multiple(false)
+    )
+)]
+pub struct AddMcpTransportArgs {
+    #[command(flatten)]
+    pub stdio: Option<AddMcpStdioArgs>,
+
+    #[command(flatten)]
+    pub streamable_http: Option<AddMcpStreamableHttpArgs>,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct AddMcpStdioArgs {
+    /// Command to launch the MCP server.
+    /// Use --url for a streamable HTTP server.
+    #[arg(trailing_var_arg = true, num_args = 0..)]
+    pub command: Vec<String>,
+
     /// Environment variables to set when launching the server.
+    /// Only valid with stdio servers.
     #[arg(long, value_parser = parse_env_pair, value_name = "KEY=VALUE")]
     pub env: Vec<(String, String)>,
+}
 
-    /// Command to launch the MCP server.
-    #[arg(trailing_var_arg = true, num_args = 1..)]
-    pub command: Vec<String>,
+#[derive(Debug, clap::Args)]
+pub struct AddMcpStreamableHttpArgs {
+    /// URL for a streamable HTTP MCP server.
+    #[arg(long)]
+    pub url: String,
+
+    /// Optional environment variable to read for a bearer token.
+    /// Only valid with streamable HTTP servers.
+    #[arg(
+        long = "bearer-token-env-var",
+        value_name = "ENV_VAR",
+        requires = "url"
+    )]
+    pub bearer_token_env_var: Option<String>,
 }
 
 #[derive(Debug, clap::Parser)]
@@ -87,29 +125,17 @@ pub struct RemoveArgs {
 }
 
 impl McpCli {
-    pub async fn run(self, codex_linux_sandbox_exe: Option<PathBuf>) -> Result<()> {
+    pub async fn run(self) -> Result<()> {
         let McpCli {
             config_overrides,
-            cmd,
+            subcommand,
         } = self;
-        let subcommand = cmd.unwrap_or(McpSubcommand::Serve);
 
         match subcommand {
-            McpSubcommand::Serve => {
-                codex_mcp_server::run_main(codex_linux_sandbox_exe, config_overrides).await?;
-            }
-            McpSubcommand::List(args) => {
-                run_list(&config_overrides, args)?;
-            }
-            McpSubcommand::Get(args) => {
-                run_get(&config_overrides, args)?;
-            }
-            McpSubcommand::Add(args) => {
-                run_add(&config_overrides, args)?;
-            }
-            McpSubcommand::Remove(args) => {
-                run_remove(&config_overrides, args)?;
-            }
+            McpSubcommand::List(args) => run_list(&config_overrides, args)?,
+            McpSubcommand::Get(args) => run_get(&config_overrides, args)?,
+            McpSubcommand::Add(args) => run_add(&config_overrides, args)?,
+            McpSubcommand::Remove(args) => run_remove(&config_overrides, args)?,
         }
 
         Ok(())
@@ -118,38 +144,61 @@ impl McpCli {
 
 fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Result<()> {
     // Validate any provided overrides even though they are not currently applied.
-    config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
+    let overrides = config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
+    // Load config to validate structure if needed (but we primarily use it for future extension).
+    let _config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
+        .context("failed to load configuration")?;
 
-    let AddArgs { name, env, command } = add_args;
-
+    let AddArgs {
+        name,
+        transport_args,
+    } = add_args;
     validate_server_name(&name)?;
-
-    let mut command_parts = command.into_iter();
-    let command_bin = command_parts
-        .next()
-        .ok_or_else(|| anyhow!("command is required"))?;
-    let command_args: Vec<String> = command_parts.collect();
-
-    let env_map = if env.is_empty() {
-        None
-    } else {
-        let mut map = HashMap::new();
-        for (key, value) in env {
-            map.insert(key, value);
-        }
-        Some(map)
-    };
 
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
     let mut servers = load_global_mcp_servers(&codex_home)
         .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
 
-    let new_entry = McpServerConfig {
-        transport: McpServerTransportConfig::Stdio {
-            command: command_bin,
-            args: command_args,
-            env: env_map,
+    let transport = match transport_args {
+        AddMcpTransportArgs {
+            stdio: Some(stdio), ..
+        } => {
+            let mut parts = stdio.command.into_iter();
+            let command = parts.next().ok_or_else(|| anyhow!("command is required"))?;
+            let args: Vec<String> = parts.collect();
+            let env_map = if stdio.env.is_empty() {
+                None
+            } else {
+                Some(stdio.env.into_iter().collect::<HashMap<_, _>>())
+            };
+            McpServerTransportConfig::Stdio {
+                command,
+                args,
+                env: env_map,
+                env_vars: Vec::new(),
+                cwd: None,
+            }
+        }
+        AddMcpTransportArgs {
+            streamable_http:
+                Some(AddMcpStreamableHttpArgs {
+                    url,
+                    bearer_token_env_var,
+                }),
+            ..
+        } => McpServerTransportConfig::StreamableHttp {
+            url,
+            bearer_token_env_var,
+            http_headers: None,
+            env_http_headers: None,
+            bearer_token: None,
         },
+        AddMcpTransportArgs { .. } => bail!("exactly one of --command or --url must be provided"),
+    };
+
+    let new_entry = McpServerConfig {
+        transport,
+        enabled: true,
         startup_timeout_sec: None,
         tool_timeout_sec: None,
     };
@@ -204,16 +253,34 @@ fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Resul
             .into_iter()
             .map(|(name, cfg)| {
                 let transport = match &cfg.transport {
-                    McpServerTransportConfig::Stdio { command, args, env } => serde_json::json!({
+                    McpServerTransportConfig::Stdio {
+                        command,
+                        args,
+                        env,
+                        env_vars,
+                        cwd,
+                    } => serde_json::json!({
                         "type": "stdio",
                         "command": command,
                         "args": args,
                         "env": env,
+                        "env_vars": env_vars,
+                        "cwd": cwd,
                     }),
-                    McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
+                    McpServerTransportConfig::StreamableHttp {
+                        url,
+                        bearer_token_env_var,
+                        http_headers,
+                        env_http_headers,
+                        bearer_token,
+                    } => {
                         serde_json::json!({
                             "type": "streamable_http",
                             "url": url,
+                            "bearer_token_env_var": bearer_token_env_var,
+                            "http_headers": http_headers,
+                            "env_http_headers": env_http_headers,
+                            // legacy value if present
                             "bearer_token": bearer_token,
                         })
                     }
@@ -221,6 +288,7 @@ fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Resul
 
                 serde_json::json!({
                     "name": name,
+                    "enabled": cfg.enabled,
                     "transport": transport,
                     "startup_timeout_sec": cfg
                         .startup_timeout_sec
@@ -241,45 +309,56 @@ fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Resul
         return Ok(());
     }
 
-    let mut stdio_rows: Vec<[String; 4]> = Vec::new();
-    let mut http_rows: Vec<[String; 3]> = Vec::new();
+    let mut stdio_rows: Vec<[String; 5]> = Vec::new();
+    let mut http_rows: Vec<[String; 4]> = Vec::new();
 
     for (name, cfg) in entries {
         match &cfg.transport {
-            McpServerTransportConfig::Stdio { command, args, env } => {
+            McpServerTransportConfig::Stdio {
+                command,
+                args,
+                env,
+                env_vars,
+                cwd,
+            } => {
                 let args_display = if args.is_empty() {
                     "-".to_string()
                 } else {
                     args.join(" ")
                 };
-                let env_display = match env.as_ref() {
-                    None => "-".to_string(),
-                    Some(map) if map.is_empty() => "-".to_string(),
-                    Some(map) => {
-                        let mut pairs: Vec<_> = map.iter().collect();
-                        pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
-                        pairs
-                            .into_iter()
-                            .map(|(k, v)| format!("{k}={v}"))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    }
-                };
-                stdio_rows.push([name.clone(), command.clone(), args_display, env_display]);
+                let env_display = format_env_display(env.as_ref(), env_vars.clone());
+                let cwd_display = cwd
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "-".to_string());
+                stdio_rows.push([
+                    name.clone(),
+                    command.clone(),
+                    args_display,
+                    cwd_display,
+                    env_display,
+                ]);
             }
-            McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
-                let has_bearer = if bearer_token.is_some() {
-                    "True"
-                } else {
-                    "False"
-                };
-                http_rows.push([name.clone(), url.clone(), has_bearer.into()]);
+            McpServerTransportConfig::StreamableHttp {
+                url,
+                bearer_token_env_var,
+                ..
+            } => {
+                let env_var = bearer_token_env_var.as_deref().unwrap_or("-").to_string();
+                http_rows.push([name.clone(), url.clone(), env_var, cfg.enabled.to_string()]);
             }
         }
     }
 
     if !stdio_rows.is_empty() {
-        let mut widths = ["Name".len(), "Command".len(), "Args".len(), "Env".len()];
+        let mut widths = [
+            "Name".len(),
+            "Command".len(),
+            "Args".len(),
+            "Cwd".len(),
+            "Env".len(),
+        ];
         for row in &stdio_rows {
             for (i, cell) in row.iter().enumerate() {
                 widths[i] = widths[i].max(cell.len());
@@ -287,28 +366,32 @@ fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Resul
         }
 
         println!(
-            "{:<name_w$}  {:<cmd_w$}  {:<args_w$}  {:<env_w$}",
+            "{:<name_w$}  {:<cmd_w$}  {:<args_w$}  {:<cwd_w$}  {:<env_w$}",
             "Name",
             "Command",
             "Args",
+            "Cwd",
             "Env",
             name_w = widths[0],
             cmd_w = widths[1],
             args_w = widths[2],
-            env_w = widths[3],
+            cwd_w = widths[3],
+            env_w = widths[4],
         );
 
         for row in &stdio_rows {
             println!(
-                "{:<name_w$}  {:<cmd_w$}  {:<args_w$}  {:<env_w$}",
+                "{:<name_w$}  {:<cmd_w$}  {:<args_w$}  {:<cwd_w$}  {:<env_w$}",
                 row[0],
                 row[1],
                 row[2],
                 row[3],
+                row[4],
                 name_w = widths[0],
                 cmd_w = widths[1],
                 args_w = widths[2],
-                env_w = widths[3],
+                cwd_w = widths[3],
+                env_w = widths[4],
             );
         }
     }
@@ -318,7 +401,12 @@ fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Resul
     }
 
     if !http_rows.is_empty() {
-        let mut widths = ["Name".len(), "Url".len(), "Has Bearer Token".len()];
+        let mut widths = [
+            "Name".len(),
+            "Url".len(),
+            "Bearer Token Env".len(),
+            "Enabled".len(),
+        ];
         for row in &http_rows {
             for (i, cell) in row.iter().enumerate() {
                 widths[i] = widths[i].max(cell.len());
@@ -326,24 +414,28 @@ fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Resul
         }
 
         println!(
-            "{:<name_w$}  {:<url_w$}  {:<token_w$}",
+            "{:<name_w$}  {:<url_w$}  {:<envvar_w$}  {:<enabled_w$}",
             "Name",
             "Url",
-            "Has Bearer Token",
+            "Bearer Token Env",
+            "Enabled",
             name_w = widths[0],
             url_w = widths[1],
-            token_w = widths[2],
+            envvar_w = widths[2],
+            enabled_w = widths[3],
         );
 
         for row in &http_rows {
             println!(
-                "{:<name_w$}  {:<url_w$}  {:<token_w$}",
+                "{:<name_w$}  {:<url_w$}  {:<envvar_w$}  {:<enabled_w$}",
                 row[0],
                 row[1],
                 row[2],
+                row[3],
                 name_w = widths[0],
                 url_w = widths[1],
-                token_w = widths[2],
+                envvar_w = widths[2],
+                enabled_w = widths[3],
             );
         }
     }
@@ -362,20 +454,26 @@ fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<(
 
     if get_args.json {
         let transport = match &server.transport {
-            McpServerTransportConfig::Stdio { command, args, env } => serde_json::json!({
+            McpServerTransportConfig::Stdio { command, args, env, env_vars, cwd } => serde_json::json!({
                 "type": "stdio",
                 "command": command,
                 "args": args,
                 "env": env,
+                "env_vars": env_vars,
+                "cwd": cwd,
             }),
-            McpServerTransportConfig::StreamableHttp { url, bearer_token } => serde_json::json!({
+            McpServerTransportConfig::StreamableHttp { url, bearer_token_env_var, http_headers, env_http_headers, bearer_token } => serde_json::json!({
                 "type": "streamable_http",
                 "url": url,
+                "bearer_token_env_var": bearer_token_env_var,
+                "http_headers": http_headers,
+                "env_http_headers": env_http_headers,
                 "bearer_token": bearer_token,
             }),
         };
         let output = serde_json::to_string_pretty(&serde_json::json!({
             "name": get_args.name,
+            "enabled": server.enabled,
             "transport": transport,
             "startup_timeout_sec": server
                 .startup_timeout_sec
@@ -389,8 +487,15 @@ fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<(
     }
 
     println!("{}", get_args.name);
+    println!("  enabled: {}", server.enabled);
     match &server.transport {
-        McpServerTransportConfig::Stdio { command, args, env } => {
+        McpServerTransportConfig::Stdio {
+            command,
+            args,
+            env,
+            env_vars,
+            cwd,
+        } => {
             println!("  transport: stdio");
             println!("  command: {command}");
             let args_display = if args.is_empty() {
@@ -399,10 +504,28 @@ fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<(
                 args.join(" ")
             };
             println!("  args: {args_display}");
-            let env_display = match env.as_ref() {
-                None => "-".to_string(),
-                Some(map) if map.is_empty() => "-".to_string(),
-                Some(map) => {
+            let cwd_display = cwd
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "-".to_string());
+            println!("  cwd: {cwd_display}");
+            let env_display = format_env_display(env.as_ref(), env_vars.clone());
+            println!("  env: {env_display}");
+        }
+        McpServerTransportConfig::StreamableHttp {
+            url,
+            bearer_token_env_var,
+            http_headers,
+            env_http_headers,
+            bearer_token,
+        } => {
+            println!("  transport: streamable_http");
+            println!("  url: {url}");
+            let env_var = bearer_token_env_var.as_deref().unwrap_or("-");
+            println!("  bearer_token_env_var: {env_var}");
+            let headers_display = match http_headers {
+                Some(map) if !map.is_empty() => {
                     let mut pairs: Vec<_> = map.iter().collect();
                     pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
                     pairs
@@ -411,14 +534,25 @@ fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<(
                         .collect::<Vec<_>>()
                         .join(", ")
                 }
+                _ => "-".to_string(),
             };
-            println!("  env: {env_display}");
-        }
-        McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
-            println!("  transport: streamable_http");
-            println!("  url: {url}");
-            let bearer = bearer_token.as_deref().unwrap_or("-");
-            println!("  bearer_token: {bearer}");
+            println!("  http_headers: {headers_display}");
+            let env_headers_display = match env_http_headers {
+                Some(map) if !map.is_empty() => {
+                    let mut pairs: Vec<_> = map.iter().collect();
+                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    pairs
+                        .into_iter()
+                        .map(|(k, v)| format!("{k}={v}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }
+                _ => "-".to_string(),
+            };
+            println!("  env_http_headers: {env_headers_display}");
+            if bearer_token.is_some() {
+                println!("  bearer_token: set (legacy)");
+            }
         }
     }
     if let Some(timeout) = server.startup_timeout_sec {
