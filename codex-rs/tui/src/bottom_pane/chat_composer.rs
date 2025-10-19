@@ -176,6 +176,14 @@ impl ChatComposer {
             }
     }
 
+    pub(crate) fn current_cursor(&self) -> usize {
+        self.textarea.cursor()
+    }
+
+    pub(crate) fn set_cursor(&mut self, pos: usize) {
+        self.textarea.set_cursor(pos);
+    }
+
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
         let footer_props = self.footer_props();
         let footer_hint_height = self

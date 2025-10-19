@@ -2051,6 +2051,10 @@ impl ChatWidget {
         self.bottom_pane.set_composer_text(text);
     }
 
+    pub(crate) fn set_composer_cursor(&mut self, pos: usize) {
+        self.bottom_pane.set_composer_cursor(pos);
+    }
+
     pub(crate) fn show_esc_backtrack_hint(&mut self) {
         self.bottom_pane.show_esc_backtrack_hint();
     }
@@ -2279,6 +2283,18 @@ impl ChatWidget {
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         let [_, _, bottom_pane_area] = self.layout_areas(area);
         self.bottom_pane.cursor_pos(bottom_pane_area)
+    }
+
+    pub(crate) fn composer_text(&self) -> String {
+        self.bottom_pane.composer_text()
+    }
+
+    pub(crate) fn composer_cursor(&self) -> usize {
+        self.bottom_pane.composer_cursor()
+    }
+
+    pub(crate) fn is_task_running(&self) -> bool {
+        self.bottom_pane.is_task_running()
     }
 }
 

@@ -38,5 +38,4 @@ pub mod model_presets;
 // Not to be confused with AskForApproval, which we should probably rename to EscalationPolicy.
 pub mod approval_presets;
 
-// Utilities for formatting environment variables for display.
-pub mod format_env_display;
+// Utilities for formatting environment variables for display are behind the `cli` feature.

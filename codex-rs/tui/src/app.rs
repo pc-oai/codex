@@ -39,6 +39,7 @@ use std::thread;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
+use tokio::time::interval;
 // use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -169,6 +170,10 @@ impl App {
         let tui_events = tui.event_stream();
         tokio::pin!(tui_events);
 
+        // Talon file RPC: periodically poll for a request under ~/.codex-talon/
+        let talon_paths = crate::talon::resolve_paths().ok();
+        let mut talon_tick = interval(Duration::from_millis(200));
+
         tui.frame_requester().schedule_frame();
 
         while select! {
@@ -177,6 +182,75 @@ impl App {
             }
             Some(event) = tui_events.next() => {
                 app.handle_tui_event(tui, event).await?
+            }
+            _ = talon_tick.tick() => {
+                if let Some(paths) = &talon_paths {
+                    if let Ok(Some(req)) = crate::talon::read_request(paths) {
+                        let mut applied: Vec<String> = Vec::new();
+
+                        for cmd in req.commands {
+                            use crate::talon::TalonCommand::*;
+                            match cmd {
+                                SetBuffer { text, cursor } => {
+                                    app.chat_widget.set_composer_text(text);
+                                    if let Some(pos) = cursor {
+                                        app.chat_widget.set_composer_cursor(pos);
+                                    }
+                                    applied.push("set_buffer".to_string());
+                                }
+                                SetCursor { cursor } => {
+                                    app.chat_widget.set_composer_cursor(cursor);
+                                    applied.push("set_cursor".to_string());
+                                }
+                                GetState => {
+                                    applied.push("get_state".to_string());
+                                }
+                                Notify { message } => {
+                                    // Only posts when unfocused; this is intended.
+                                    let _ = tui.notify(message);
+                                    applied.push("notify".to_string());
+                                }
+                                // Not yet wired: treat as no-op for now
+                                EditPreviousMessage { .. } => applied.push("edit_previous_message".to_string()),
+                                HistoryPrevious => applied.push("history_previous".to_string()),
+                                HistoryNext => applied.push("history_next".to_string()),
+                            }
+                        }
+
+                        // Snapshot editor state
+                        let buffer = app.chat_widget.composer_text();
+                        let cursor = app.chat_widget.composer_cursor();
+                        let is_task_running = app.chat_widget.is_task_running();
+                        let state = crate::talon::TalonEditorState {
+                            buffer,
+                            cursor,
+                            is_task_running,
+                            task_summary: crate::talon::status_summary(),
+                            session_id: app
+                                .chat_widget
+                                .conversation_id()
+                                .map(|id| id.to_string()),
+                            cwd: Some(app.config.cwd.display().to_string()),
+                        };
+
+                        let resp = crate::talon::TalonResponse {
+                            version: 1,
+                            status: crate::talon::TalonResponseStatus::Ok,
+                            state,
+                            applied,
+                            error: None,
+                            timestamp_ms: crate::talon::now_timestamp_ms(),
+                        };
+
+                        let _ = crate::talon::write_response(paths, &resp);
+                        let _ = crate::talon::remove_request(paths);
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
             }
         } {}
         tui.terminal.clear()?;
