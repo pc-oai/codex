@@ -55,6 +55,16 @@ enum Command {
         /// Text to display.
         message: String,
     },
+    /// Navigate to the previous entry in the composer history.
+    HistoryPrevious,
+    /// Navigate to the next entry in the composer history.
+    HistoryNext,
+    /// Prefill the composer by stepping back N entries in history.
+    EditPrevious {
+        /// Number of entries to step back from the latest.
+        #[arg(default_value_t = 0)]
+        steps_back: usize,
+    },
 }
 
 #[derive(Serialize)]
@@ -78,6 +88,12 @@ enum TalonCommand {
     Notify {
         message: String,
     },
+    EditPreviousMessage {
+        #[serde(default)]
+        steps_back: usize,
+    },
+    HistoryPrevious,
+    HistoryNext,
 }
 
 fn main() -> Result<()> {
@@ -120,6 +136,30 @@ fn main() -> Result<()> {
             };
             write_request(&request_path, request)?;
             format!("requested notification via {}", request_path.display())
+        }
+        Command::HistoryPrevious => {
+            let request = TalonRequest {
+                commands: vec![TalonCommand::HistoryPrevious],
+            };
+            write_request(&request_path, request)?;
+            format!("requested history_previous via {}", request_path.display())
+        }
+        Command::HistoryNext => {
+            let request = TalonRequest {
+                commands: vec![TalonCommand::HistoryNext],
+            };
+            write_request(&request_path, request)?;
+            format!("requested history_next via {}", request_path.display())
+        }
+        Command::EditPrevious { steps_back } => {
+            let request = TalonRequest {
+                commands: vec![TalonCommand::EditPreviousMessage { steps_back }],
+            };
+            write_request(&request_path, request)?;
+            format!(
+                "requested edit_previous_message({steps_back}) via {}",
+                request_path.display()
+            )
         }
         Command::ShowState { raw } => {
             print_state(&response_path, raw)?;
