@@ -1,6 +1,5 @@
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
-use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -20,18 +19,6 @@ struct TextElement {
     range: Range<usize>,
 }
 
-#[derive(Debug, Clone)]
-struct TextSnapshot {
-    text: String,
-    cursor_pos: usize,
-    elements: Vec<TextElement>,
-}
-
-#[derive(Debug, Default, Clone)]
-struct MetaSequence {
-    buffer: String,
-}
-
 #[derive(Debug)]
 pub(crate) struct TextArea {
     text: String,
@@ -39,9 +26,7 @@ pub(crate) struct TextArea {
     wrap_cache: RefCell<Option<WrapCache>>,
     preferred_col: Option<usize>,
     elements: Vec<TextElement>,
-    undo_stack: Vec<TextSnapshot>,
-    redo_stack: Vec<TextSnapshot>,
-    pending_meta_sequence: Option<MetaSequence>,
+    kill_buffer: String,
 }
 
 #[derive(Debug, Clone)]
@@ -64,9 +49,7 @@ impl TextArea {
             wrap_cache: RefCell::new(None),
             preferred_col: None,
             elements: Vec::new(),
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            pending_meta_sequence: None,
+            kill_buffer: String::new(),
         }
     }
 
@@ -76,7 +59,7 @@ impl TextArea {
         self.wrap_cache.replace(None);
         self.preferred_col = None;
         self.elements.clear();
-        self.pending_meta_sequence = None;
+        self.kill_buffer.clear();
     }
 
     pub fn text(&self) -> &str {
@@ -88,8 +71,6 @@ impl TextArea {
     }
 
     pub fn insert_str_at(&mut self, pos: usize, text: &str) {
-        self.push_undo_snapshot();
-        self.redo_stack.clear();
         let pos = self.clamp_pos_for_insertion(pos);
         self.text.insert_str(pos, text);
         self.wrap_cache.replace(None);
@@ -98,7 +79,6 @@ impl TextArea {
         }
         self.shift_elements(pos, 0, text.len());
         self.preferred_col = None;
-        self.pending_meta_sequence = None;
     }
 
     pub fn replace_range(&mut self, range: std::ops::Range<usize>, text: &str) {
@@ -108,8 +88,6 @@ impl TextArea {
 
     fn replace_range_raw(&mut self, range: std::ops::Range<usize>, text: &str) {
         assert!(range.start <= range.end);
-        self.push_undo_snapshot();
-        self.redo_stack.clear();
         let start = range.start.clamp(0, self.text.len());
         let end = range.end.clamp(0, self.text.len());
         let removed_len = end - start;
@@ -123,7 +101,6 @@ impl TextArea {
         self.wrap_cache.replace(None);
         self.preferred_col = None;
         self.update_elements_after_replace(start, end, inserted_len);
-        self.pending_meta_sequence = None;
 
         // Update the cursor position to account for the edit.
         self.cursor_pos = if self.cursor_pos < start {
@@ -229,67 +206,7 @@ impl TextArea {
     }
 
     pub fn input(&mut self, event: KeyEvent) {
-        if self.handle_meta_sequence(&event) {
-            return;
-        }
         match event {
-            // Undo/Redo bindings
-            // Undo: Ctrl+Z, Ctrl+_, Shift+Alt+Z, and ^Z fallback. Some terminals send Ctrl+_ as 0x1F.
-            // Alt+Z (ergonomic on Mac) => undo
-            KeyEvent { code: KeyCode::Char('z' | 'Z'), modifiers, .. }
-                if modifiers.contains(KeyModifiers::ALT)
-                    && !modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                self.undo();
-            }
-            // Redo: Ctrl+Shift+Z must be checked before plain Ctrl+Z
-            KeyEvent { code: KeyCode::Char('z' | 'Z'), modifiers, .. }
-                if modifiers.contains(KeyModifiers::CONTROL)
-                    && modifiers.contains(KeyModifiers::SHIFT) =>
-            {
-                self.redo();
-            }
-            KeyEvent { code: KeyCode::Char('z'), modifiers, .. }
-                if modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                self.undo();
-            }
-            KeyEvent { code: KeyCode::Char('_' | '\u{001f}'), modifiers, .. }
-                if modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                self.undo();
-            }
-            KeyEvent { code: KeyCode::Char('\u{001a}'), modifiers: KeyModifiers::NONE, .. } => {
-                // ^Z fallback
-                self.undo();
-            }
-            KeyEvent { code: KeyCode::Char('z'), modifiers, .. }
-                if modifiers.contains(KeyModifiers::ALT)
-                    && modifiers.contains(KeyModifiers::SHIFT) =>
-            {
-                // Per earlier mapping, Shift+Alt+Z also performs undo
-                self.undo();
-            }
-            // Redo: Ctrl+Y (common convention)
-            KeyEvent { code: KeyCode::Char('y' | 'Y'), modifiers, .. }
-                if modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                self.redo();
-            }
-            // Alt-based redo variants for Mac ergonomics
-            KeyEvent { code: KeyCode::Char('y' | 'Y'), modifiers, .. }
-                if modifiers.contains(KeyModifiers::ALT)
-                    && !modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                self.redo();
-            }
-            KeyEvent { code: KeyCode::Char('y' | 'Y'), modifiers, .. }
-                if modifiers.contains(KeyModifiers::ALT)
-                    && modifiers.contains(KeyModifiers::SHIFT)
-                    && !modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                self.redo();
-            }
             // Some terminals (or configurations) send Control key chords as
             // C0 control characters without reporting the CONTROL modifier.
             // Handle common fallbacks for Ctrl-B/Ctrl-F here so they don't get
@@ -324,20 +241,6 @@ impl TextArea {
             } if modifiers == (KeyModifiers::CONTROL | KeyModifiers::ALT) => {
                 self.delete_backward_word()
             },
-            KeyEvent { code: KeyCode::Backspace, modifiers, .. }
-                if modifiers.contains(KeyModifiers::CONTROL)
-                    && !modifiers.contains(KeyModifiers::ALT) =>
-            {
-                // Ctrl+Backspace => delete current line
-                self.delete_current_line();
-            }
-            // Shift+Alt+Backspace => backward kill line (to wrapped start)
-            KeyEvent { code: KeyCode::Backspace, modifiers, .. }
-                if modifiers.contains(KeyModifiers::ALT)
-                    && modifiers.contains(KeyModifiers::SHIFT) =>
-            {
-                self.kill_to_beginning_of_visual_line_or_bol();
-            }
             KeyEvent {
                 code: KeyCode::Backspace,
                 modifiers: KeyModifiers::ALT,
@@ -357,48 +260,6 @@ impl TextArea {
                 modifiers: KeyModifiers::ALT,
                 ..
             }  => self.delete_forward_word(),
-            KeyEvent { code: KeyCode::Char('d' | 'D'), modifiers, .. }
-                if modifiers.contains(KeyModifiers::ALT)
-                    && !modifiers.contains(KeyModifiers::CONTROL)
-                    && !modifiers.contains(KeyModifiers::SHIFT) =>
-            {
-                self.delete_forward_word();
-            }
-            KeyEvent { code: KeyCode::Char('f' | 'F'), modifiers, .. }
-                if modifiers.contains(KeyModifiers::CONTROL)
-                    && modifiers.contains(KeyModifiers::SHIFT)
-                    && !modifiers.contains(KeyModifiers::ALT) =>
-            {
-                self.delete_forward_word();
-            }
-            KeyEvent { code: KeyCode::Char('f' | 'F'), modifiers, .. }
-                if modifiers.contains(KeyModifiers::ALT)
-                    && modifiers.contains(KeyModifiers::SHIFT)
-                    && !modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                self.delete_forward_word();
-            }
-            // Shift+Alt+Delete => kill line (to EOL)
-            KeyEvent { code: KeyCode::Delete, modifiers, .. }
-                if modifiers.contains(KeyModifiers::ALT)
-                    && modifiers.contains(KeyModifiers::SHIFT) =>
-            {
-                self.kill_to_end_of_visual_line_or_eol();
-            }
-            KeyEvent { code: KeyCode::Char('d' | 'D'), modifiers, .. }
-                if modifiers.contains(KeyModifiers::CONTROL)
-                    && modifiers.contains(KeyModifiers::SHIFT)
-                    && !modifiers.contains(KeyModifiers::ALT) =>
-            {
-                self.kill_to_end_of_line();
-            }
-            KeyEvent { code: KeyCode::Char('d' | 'D'), modifiers, .. }
-                if modifiers.contains(KeyModifiers::ALT)
-                    && modifiers.contains(KeyModifiers::SHIFT)
-                    && !modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                self.kill_to_end_of_visual_line_or_eol();
-            }
             KeyEvent {
                 code: KeyCode::Delete,
                 ..
@@ -447,6 +308,13 @@ impl TextArea {
             } => {
                 self.kill_to_end_of_line();
             }
+            KeyEvent {
+                code: KeyCode::Char('y'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                self.yank();
+            }
 
             // Cursor movement
             KeyEvent {
@@ -480,29 +348,28 @@ impl TextArea {
             // Some terminals send Alt+Arrow for word-wise movement:
             // Option/Left -> Alt+Left (previous word start)
             // Option/Right -> Alt+Right (next word end)
-            // Word-wise navigation (token): allow Alt and Alt+Shift
-            KeyEvent { code: KeyCode::Left, modifiers, .. }
-                if modifiers.contains(KeyModifiers::ALT) =>
-            {
-                self.set_cursor(self.beginning_of_previous_word());
+            KeyEvent {
+                code: KeyCode::Left,
+                modifiers: KeyModifiers::ALT,
+                ..
             }
             | KeyEvent {
                 code: KeyCode::Left,
-                modifiers,
+                modifiers: KeyModifiers::CONTROL,
                 ..
-            } if modifiers.contains(KeyModifiers::CONTROL) => {
+            } => {
                 self.set_cursor(self.beginning_of_previous_word());
             }
-            KeyEvent { code: KeyCode::Right, modifiers, .. }
-                if modifiers.contains(KeyModifiers::ALT) =>
-            {
-                self.set_cursor(self.end_of_next_word());
+            KeyEvent {
+                code: KeyCode::Right,
+                modifiers: KeyModifiers::ALT,
+                ..
             }
             | KeyEvent {
                 code: KeyCode::Right,
-                modifiers,
+                modifiers: KeyModifiers::CONTROL,
                 ..
-            } if modifiers.contains(KeyModifiers::CONTROL) => {
+            } => {
                 self.set_cursor(self.end_of_next_word());
             }
             KeyEvent {
@@ -516,14 +383,10 @@ impl TextArea {
             } => {
                 self.move_cursor_down();
             }
-            // Buffer boundaries on Alt/Ctrl+Home/End
-            KeyEvent { code: KeyCode::Home, modifiers, .. }
-                if modifiers.contains(KeyModifiers::ALT)
-                    || modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                self.set_cursor(0);
-            }
-            KeyEvent { code: KeyCode::Home, .. } => {
+            KeyEvent {
+                code: KeyCode::Home,
+                ..
+            } => {
                 self.move_cursor_to_beginning_of_line(false);
             }
             KeyEvent {
@@ -534,13 +397,9 @@ impl TextArea {
                 self.move_cursor_to_beginning_of_line(true);
             }
 
-            KeyEvent { code: KeyCode::End, modifiers, .. }
-                if modifiers.contains(KeyModifiers::ALT)
-                    || modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                self.set_cursor(self.text.len());
-            }
-            KeyEvent { code: KeyCode::End, .. } => {
+            KeyEvent {
+                code: KeyCode::End, ..
+            } => {
                 self.move_cursor_to_end_of_line(false);
             }
             KeyEvent {
@@ -588,7 +447,7 @@ impl TextArea {
 
     pub fn delete_backward_word(&mut self) {
         let start = self.beginning_of_previous_word();
-        self.replace_range(start..self.cursor_pos, "");
+        self.kill_range(start..self.cursor_pos);
     }
 
     /// Delete text to the right of the cursor using "word" semantics.
@@ -599,117 +458,61 @@ impl TextArea {
     pub fn delete_forward_word(&mut self) {
         let end = self.end_of_next_word();
         if end > self.cursor_pos {
-            self.replace_range(self.cursor_pos..end, "");
+            self.kill_range(self.cursor_pos..end);
         }
     }
 
     pub fn kill_to_end_of_line(&mut self) {
         let eol = self.end_of_current_line();
-        if self.cursor_pos == eol {
+        let range = if self.cursor_pos == eol {
             if eol < self.text.len() {
-                self.replace_range(self.cursor_pos..eol + 1, "");
+                Some(self.cursor_pos..eol + 1)
+            } else {
+                None
             }
         } else {
-            self.replace_range(self.cursor_pos..eol, "");
+            Some(self.cursor_pos..eol)
+        };
+
+        if let Some(range) = range {
+            self.kill_range(range);
         }
     }
 
     pub fn kill_to_beginning_of_line(&mut self) {
         let bol = self.beginning_of_current_line();
-        if self.cursor_pos == bol {
-            if bol > 0 {
-                self.replace_range(bol - 1..bol, "");
-            }
+        let range = if self.cursor_pos == bol {
+            if bol > 0 { Some(bol - 1..bol) } else { None }
         } else {
-            self.replace_range(bol..self.cursor_pos, "");
-        }
-    }
-
-    /// Delete from the cursor to the beginning of the current visual (wrapped)
-    /// line if wrapping information is available and the current logical line
-    /// spans multiple wrapped segments. Otherwise, fall back to killing to BOL.
-    pub fn kill_to_beginning_of_visual_line_or_bol(&mut self) {
-        let bol = self.beginning_of_current_line();
-        let maybe_start = {
-            let cache_ref = self.wrap_cache.borrow();
-            if let Some(cache) = cache_ref.as_ref() {
-                let lines = &cache.lines;
-                if let Some(idx) = Self::wrapped_line_index_by_start(lines, self.cursor_pos) {
-                    let seg = &lines[idx];
-                    if seg.start > bol && seg.start < self.cursor_pos {
-                        Some(seg.start)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
+            Some(bol..self.cursor_pos)
         };
 
-        if let Some(start) = maybe_start {
-            self.replace_range(start..self.cursor_pos, "");
-        } else {
-            // Fallback: delete to BOL (including previous newline when at BOL)
-            self.kill_to_beginning_of_line();
+        if let Some(range) = range {
+            self.kill_range(range);
         }
     }
 
-    /// Delete from the cursor to the end of the current visual (wrapped) line if
-    /// wrapping information is available and the current logical line spans
-    /// multiple wrapped segments. Otherwise, fall back to killing to EOL.
-    pub fn kill_to_end_of_visual_line_or_eol(&mut self) {
-        let eol = self.end_of_current_line();
-        let maybe_end = {
-            let cache_ref = self.wrap_cache.borrow();
-            if let Some(cache) = cache_ref.as_ref() {
-                let lines = &cache.lines;
-                if let Some(idx) = Self::wrapped_line_index_by_start(lines, self.cursor_pos) {
-                    let seg = &lines[idx];
-                    if seg.end < eol {
-                        let end = seg.end.min(self.text.len());
-                        if end > self.cursor_pos {
-                            Some(end)
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        };
-
-        if let Some(end) = maybe_end {
-            self.replace_range(self.cursor_pos..end, "");
-        } else {
-            // Fallback: delete to EOL (including newline when at EOL)
-            self.kill_to_end_of_line();
+    pub fn yank(&mut self) {
+        if self.kill_buffer.is_empty() {
+            return;
         }
+        let text = self.kill_buffer.clone();
+        self.insert_str(&text);
     }
 
-    /// Delete the entire current logical line. If the line is not the last line,
-    /// also remove its trailing newline. If it is the last line and not the only
-    /// line, remove the preceding newline so the line is fully removed.
-    pub fn delete_current_line(&mut self) {
-        let bol = self.beginning_of_current_line();
-        let eol = self.end_of_current_line();
-        if eol < self.text.len() {
-            // Has a trailing newline; remove the line and its newline.
-            self.replace_range(bol..eol + 1, "");
-        } else if bol > 0 {
-            // Last line and there is a previous line: remove the preceding newline too.
-            self.replace_range(bol - 1..eol, "");
-        } else {
-            // Single line buffer: remove everything.
-            self.replace_range(0..eol, "");
+    fn kill_range(&mut self, range: Range<usize>) {
+        let range = self.expand_range_to_element_boundaries(range);
+        if range.start >= range.end {
+            return;
         }
+
+        let removed = self.text[range.clone()].to_string();
+        if removed.is_empty() {
+            return;
+        }
+
+        self.kill_buffer = removed;
+        self.replace_range_raw(range, "");
     }
 
     /// Move the cursor left by a single grapheme cluster.
@@ -878,204 +681,12 @@ impl TextArea {
     // ===== Text elements support =====
 
     pub fn insert_element(&mut self, text: &str) {
-        self.push_undo_snapshot();
-        self.redo_stack.clear();
         let start = self.clamp_pos_for_insertion(self.cursor_pos);
         self.insert_str_at(start, text);
         let end = start + text.len();
         self.add_element(start..end);
         // Place cursor at end of inserted element
         self.set_cursor(end);
-        self.pending_meta_sequence = None;
-    }
-
-    // ===== Undo support =====
-    fn push_undo_snapshot(&mut self) {
-        const MAX_UNDO: usize = 200;
-        self.undo_stack.push(TextSnapshot {
-            text: self.text.clone(),
-            cursor_pos: self.cursor_pos,
-            elements: self.elements.clone(),
-        });
-        if self.undo_stack.len() > MAX_UNDO {
-            let overflow = self.undo_stack.len() - MAX_UNDO;
-            self.undo_stack.drain(0..overflow);
-        }
-    }
-
-    fn undo(&mut self) {
-        if let Some(prev) = self.undo_stack.pop() {
-            let cur = TextSnapshot {
-                text: self.text.clone(),
-                cursor_pos: self.cursor_pos,
-                elements: self.elements.clone(),
-            };
-            self.redo_stack.push(cur);
-            self.text = prev.text;
-            self.cursor_pos = prev.cursor_pos.min(self.text.len());
-            self.elements = prev.elements;
-            self.wrap_cache.replace(None);
-            self.preferred_col = None;
-        }
-    }
-
-    fn redo(&mut self) {
-        if let Some(next) = self.redo_stack.pop() {
-            let cur = TextSnapshot {
-                text: self.text.clone(),
-                cursor_pos: self.cursor_pos,
-                elements: self.elements.clone(),
-            };
-            self.undo_stack.push(cur);
-            self.text = next.text;
-            self.cursor_pos = next.cursor_pos.min(self.text.len());
-            self.elements = next.elements;
-            self.wrap_cache.replace(None);
-            self.preferred_col = None;
-        }
-    }
-
-    fn clear_meta_sequence(&mut self) {
-        self.pending_meta_sequence = None;
-    }
-
-    fn handle_meta_sequence(&mut self, event: &KeyEvent) -> bool {
-        if event.code == KeyCode::Esc {
-            match event.kind {
-                KeyEventKind::Press | KeyEventKind::Repeat => {
-                    self.pending_meta_sequence = Some(MetaSequence::default());
-                    return true;
-                }
-                KeyEventKind::Release => {
-                    if self.pending_meta_sequence.is_some() {
-                        self.clear_meta_sequence();
-                        return true;
-                    }
-                    return false;
-                }
-            }
-        }
-
-        if self.pending_meta_sequence.is_none()
-            && event
-                .modifiers
-                .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL)
-        {
-            return false;
-        }
-
-        match event.code {
-            KeyCode::Char(c) => {
-                let Some(seq) = self.pending_meta_sequence.as_mut() else {
-                    return false;
-                };
-                seq.buffer.push(c);
-                if seq.buffer.len() == 1 && c != '[' && c != 'O' {
-                    let handled = self.handle_meta_char(c);
-                    self.clear_meta_sequence();
-                    handled
-                } else if matches!(c, 'A' | 'B' | 'C' | 'D' | 'F' | 'H' | '~') {
-                    let buffer = seq.buffer.clone();
-                    self.clear_meta_sequence();
-                    self.handle_meta_escape_sequence(&buffer)
-                } else if seq.buffer.len() > 8 {
-                    self.clear_meta_sequence();
-                    false
-                } else {
-                    true
-                }
-            }
-            _ => {
-                self.clear_meta_sequence();
-                false
-            }
-        }
-    }
-
-    fn handle_meta_char(&mut self, c: char) -> bool {
-        match c {
-            'b' | 'B' => {
-                self.set_cursor(self.beginning_of_previous_word());
-                true
-            }
-            'f' | 'F' => {
-                self.set_cursor(self.end_of_next_word());
-                true
-            }
-            'd' | 'D' => {
-                self.delete_forward_word();
-                true
-            }
-            'u' | 'U' => {
-                self.kill_to_beginning_of_line();
-                true
-            }
-            'k' | 'K' => {
-                self.kill_to_end_of_line();
-                true
-            }
-            _ => false,
-        }
-    }
-
-    fn handle_meta_escape_sequence(&mut self, sequence: &str) -> bool {
-        let Some(last) = sequence.chars().last() else {
-            return false;
-        };
-
-        let params = if sequence.starts_with('[') && sequence.len() > 1 {
-            &sequence[1..sequence.len() - 1]
-        } else {
-            ""
-        };
-        let (_shift, alt, ctrl) = parse_csi_modifiers(params);
-
-        match last {
-            'A' => {
-                if alt || ctrl {
-                    self.move_cursor_up();
-                    true
-                } else {
-                    false
-                }
-            }
-            'B' => {
-                if alt || ctrl {
-                    self.move_cursor_down();
-                    true
-                } else {
-                    false
-                }
-            }
-            'C' => {
-                self.set_cursor(self.end_of_next_word());
-                true
-            }
-            'D' => {
-                self.set_cursor(self.beginning_of_previous_word());
-                true
-            }
-            'F' => {
-                self.move_cursor_to_end_of_line(false);
-                true
-            }
-            'H' => {
-                self.move_cursor_to_beginning_of_line(false);
-                true
-            }
-            '~' => match params.split(';').next() {
-                Some("1") | Some("7") | Some("H") => {
-                    self.move_cursor_to_beginning_of_line(false);
-                    true
-                }
-                Some("4") | Some("8") | Some("F") => {
-                    self.move_cursor_to_end_of_line(false);
-                    true
-                }
-                _ => false,
-            },
-            _ => false,
-        }
     }
 
     fn add_element(&mut self, range: Range<usize>) {
@@ -1229,16 +840,22 @@ impl TextArea {
     }
 
     pub(crate) fn beginning_of_previous_word(&self) -> usize {
-        if let Some(first_non_ws) = self.text[..self.cursor_pos].rfind(|c: char| !c.is_whitespace())
-        {
-            let candidate = self.text[..first_non_ws]
-                .rfind(|c: char| c.is_whitespace())
-                .map(|i| i + 1)
-                .unwrap_or(0);
-            self.adjust_pos_out_of_elements(candidate, true)
-        } else {
-            0
-        }
+        let prefix = &self.text[..self.cursor_pos];
+        let Some((first_non_ws_idx, _)) = prefix
+            .char_indices()
+            .rev()
+            .find(|&(_, ch)| !ch.is_whitespace())
+        else {
+            return 0;
+        };
+        let before = &prefix[..first_non_ws_idx];
+        let candidate = before
+            .char_indices()
+            .rev()
+            .find(|&(_, ch)| ch.is_whitespace())
+            .map(|(idx, ch)| idx + ch.len_utf8())
+            .unwrap_or(0);
+        self.adjust_pos_out_of_elements(candidate, true)
     }
 
     pub(crate) fn end_of_next_word(&self) -> usize {
@@ -1321,23 +938,6 @@ impl TextArea {
         }
         scroll
     }
-}
-
-fn parse_csi_modifiers(params: &str) -> (bool, bool, bool) {
-    let last_param = params
-        .split(';')
-        .filter(|s| !s.is_empty())
-        .next_back()
-        .and_then(|s| s.parse::<u16>().ok())
-        .unwrap_or(1);
-    if last_param <= 1 {
-        return (false, false, false);
-    }
-    let mask = last_param - 1;
-    let shift = mask & 1 != 0;
-    let alt = mask & 2 != 0;
-    let ctrl = mask & 4 != 0;
-    (shift, alt, ctrl)
 }
 
 impl WidgetRef for &TextArea {
@@ -1640,6 +1240,39 @@ mod tests {
     }
 
     #[test]
+    fn yank_restores_last_kill() {
+        let mut t = ta_with("hello");
+        t.set_cursor(0);
+        t.kill_to_end_of_line();
+        assert_eq!(t.text(), "");
+        assert_eq!(t.cursor(), 0);
+
+        t.yank();
+        assert_eq!(t.text(), "hello");
+        assert_eq!(t.cursor(), 5);
+
+        let mut t = ta_with("hello world");
+        t.set_cursor(t.text().len());
+        t.delete_backward_word();
+        assert_eq!(t.text(), "hello ");
+        assert_eq!(t.cursor(), 6);
+
+        t.yank();
+        assert_eq!(t.text(), "hello world");
+        assert_eq!(t.cursor(), 11);
+
+        let mut t = ta_with("hello");
+        t.set_cursor(5);
+        t.kill_to_beginning_of_line();
+        assert_eq!(t.text(), "");
+        assert_eq!(t.cursor(), 0);
+
+        t.yank();
+        assert_eq!(t.text(), "hello");
+        assert_eq!(t.cursor(), 5);
+    }
+
+    #[test]
     fn cursor_left_and_right_handle_graphemes() {
         let mut t = ta_with("a👍b");
         t.set_cursor(t.text().len());
@@ -1710,16 +1343,19 @@ mod tests {
     }
 
     #[test]
+    fn delete_backward_word_handles_narrow_no_break_space() {
+        let mut t = ta_with("32\u{202F}AM");
+        t.set_cursor(t.text().len());
+        t.input(KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT));
+        pretty_assertions::assert_eq!(t.text(), "32\u{202F}");
+        pretty_assertions::assert_eq!(t.cursor(), t.text().len());
+    }
+
+    #[test]
     fn delete_forward_word_with_without_alt_modifier() {
         let mut t = ta_with("hello world");
         t.set_cursor(0);
         t.input(KeyEvent::new(KeyCode::Delete, KeyModifiers::ALT));
-        assert_eq!(t.text(), " world");
-        assert_eq!(t.cursor(), 0);
-
-        let mut t = ta_with("hello world");
-        t.set_cursor(0);
-        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::ALT));
         assert_eq!(t.text(), " world");
         assert_eq!(t.cursor(), 0);
 

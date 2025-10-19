@@ -4,4 +4,10 @@ use thiserror::Error;
 pub enum FunctionCallError {
     #[error("{0}")]
     RespondToModel(String),
+    #[error("{0}")]
+    Denied(String),
+    #[error("LocalShellCall without call_id or id")]
+    MissingLocalShellCallId,
+    #[error("Fatal error: {0}")]
+    Fatal(String),
 }

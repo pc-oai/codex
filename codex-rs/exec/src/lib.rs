@@ -1,13 +1,14 @@
+// - In the default output mode, it is paramount that the only thing written to
+//   stdout is the final message (if any).
+// - In --json mode, stdout must be valid JSONL, one event per line.
+// For both modes, any other output must be written to stderr.
+#![deny(clippy::print_stdout)]
+
 mod cli;
 mod event_processor;
 mod event_processor_with_human_output;
-pub mod event_processor_with_json_output;
+pub mod event_processor_with_jsonl_output;
 pub mod exec_events;
-pub mod experimental_event_processor_with_json_output;
-
-use std::io::IsTerminal;
-use std::io::Read;
-use std::path::PathBuf;
 
 pub use cli::Cli;
 use codex_core::AuthManager;
@@ -16,30 +17,42 @@ use codex_core::ConversationManager;
 use codex_core::NewConversation;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::features::Feature;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+use codex_core::protocol::SessionSource;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
-use experimental_event_processor_with_json_output::ExperimentalEventProcessorWithJsonOutput;
+use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
+use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use serde_json::Value;
+use std::io::IsTerminal;
+use std::io::Read;
+use std::path::PathBuf;
+use supports_color::Stream;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::prelude::*;
 
 use crate::cli::Command as ExecCommand;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
-use crate::event_processor_with_json_output::EventProcessorWithJsonOutput;
+use codex_core::default_client::set_default_originator;
 use codex_core::find_conversation_path_by_id_str;
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
+    if let Err(err) = set_default_originator("codex_exec".to_string()) {
+        tracing::warn!(?err, "Failed to set codex exec originator override {err:?}");
+    }
+
     let Cli {
         command,
         images,
@@ -53,7 +66,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         color,
         last_message_file,
         json: json_mode,
-        experimental_json,
         sandbox_mode: sandbox_mode_cli_arg,
         prompt,
         output_schema: output_schema_path,
@@ -109,24 +121,23 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         cli::Color::Always => (true, true),
         cli::Color::Never => (false, false),
         cli::Color::Auto => (
-            std::io::stdout().is_terminal(),
-            std::io::stderr().is_terminal(),
+            supports_color::on_cached(Stream::Stdout).is_some(),
+            supports_color::on_cached(Stream::Stderr).is_some(),
         ),
     };
 
-    // TODO(mbolin): Take a more thoughtful approach to logging.
+    // Build fmt layer (existing logging) to compose with OTEL layer.
     let default_level = "error";
-    let _ = tracing_subscriber::fmt()
-        // Fallback to the `default_level` log filter if the environment
-        // variable is not set _or_ contains an invalid value
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .or_else(|_| EnvFilter::try_new(default_level))
-                .unwrap_or_else(|_| EnvFilter::new(default_level)),
-        )
+
+    // Build env_filter separately and attach via with_filter.
+    let env_filter = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new(default_level))
+        .unwrap_or_else(|_| EnvFilter::new(default_level));
+
+    let fmt_layer = tracing_subscriber::fmt::layer()
         .with_ansi(stderr_with_ansi)
         .with_writer(std::io::stderr)
-        .try_init();
+        .with_filter(env_filter);
 
     let sandbox_mode = if full_auto {
         Some(SandboxMode::WorkspaceWrite)
@@ -158,8 +169,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         model,
         review_model: None,
         config_profile,
-        // This CLI is intended to be headless and has no affordances for asking
-        // the user for approval.
+        // Default to never ask for approvals in headless mode. Feature flags can override.
         approval_policy: Some(AskForApproval::Never),
         sandbox_mode,
         cwd: cwd.map(|p| p.canonicalize().unwrap_or(p)),
@@ -171,6 +181,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         include_view_image_tool: None,
         show_raw_agent_reasoning: oss.then_some(true),
         tools_web_search_request: None,
+        additional_writable_roots: Vec::new(),
     };
     // Parse `-c` overrides.
     let cli_kv_overrides = match config_overrides.parse_overrides() {
@@ -181,18 +192,35 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         }
     };
 
-    let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
-    let mut event_processor: Box<dyn EventProcessor> = match (json_mode, experimental_json) {
-        (_, true) => Box::new(ExperimentalEventProcessorWithJsonOutput::new(
-            last_message_file.clone(),
-        )),
-        (true, _) => {
-            eprintln!(
-                "The existing `--json` output format is being deprecated. Please try the new format using `--experimental-json`."
-            );
+    let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides).await?;
+    let approve_all_enabled = config.features.enabled(Feature::ApproveAll);
 
-            Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone()))
+    let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"));
+
+    #[allow(clippy::print_stderr)]
+    let otel = match otel {
+        Ok(otel) => otel,
+        Err(e) => {
+            eprintln!("Could not create otel exporter: {e}");
+            std::process::exit(1);
         }
+    };
+
+    if let Some(provider) = otel.as_ref() {
+        let otel_layer = OpenTelemetryTracingBridge::new(&provider.logger).with_filter(
+            tracing_subscriber::filter::filter_fn(codex_core::otel_init::codex_export_filter),
+        );
+
+        let _ = tracing_subscriber::registry()
+            .with(fmt_layer)
+            .with(otel_layer)
+            .try_init();
+    } else {
+        let _ = tracing_subscriber::registry().with(fmt_layer).try_init();
+    }
+
+    let mut event_processor: Box<dyn EventProcessor> = match json_mode {
+        true => Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone())),
         _ => Box::new(EventProcessorWithHumanOutput::create_with_ansi(
             stdout_with_ansi,
             &config,
@@ -218,8 +246,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         std::process::exit(1);
     }
 
-    let conversation_manager =
-        ConversationManager::new(AuthManager::shared(config.codex_home.clone()));
+    let auth_manager = AuthManager::shared(config.codex_home.clone(), true);
+    let conversation_manager = ConversationManager::new(auth_manager.clone(), SessionSource::Exec);
 
     // Handle resume subcommand by resolving a rollout path and using explicit resume API.
     let NewConversation {
@@ -231,11 +259,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
         if let Some(path) = resume_path {
             conversation_manager
-                .resume_conversation_from_rollout(
-                    config.clone(),
-                    path,
-                    AuthManager::shared(config.codex_home.clone()),
-                )
+                .resume_conversation_from_rollout(config.clone(), path, auth_manager.clone())
                 .await?
         } else {
             conversation_manager
@@ -338,6 +362,34 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         if matches!(event.msg, EventMsg::Error(_)) {
             error_seen = true;
         }
+        // Auto-approve requests when the approve_all feature is enabled.
+        if approve_all_enabled {
+            match &event.msg {
+                EventMsg::ExecApprovalRequest(_) => {
+                    if let Err(e) = conversation
+                        .submit(Op::ExecApproval {
+                            id: event.id.clone(),
+                            decision: codex_core::protocol::ReviewDecision::Approved,
+                        })
+                        .await
+                    {
+                        error!("failed to auto-approve exec: {e}");
+                    }
+                }
+                EventMsg::ApplyPatchApprovalRequest(_) => {
+                    if let Err(e) = conversation
+                        .submit(Op::PatchApproval {
+                            id: event.id.clone(),
+                            decision: codex_core::protocol::ReviewDecision::Approved,
+                        })
+                        .await
+                    {
+                        error!("failed to auto-approve patch: {e}");
+                    }
+                }
+                _ => {}
+            }
+        }
         let shutdown: CodexStatus = event_processor.process_event(event);
         match shutdown {
             CodexStatus::Running => continue,
@@ -349,6 +401,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             }
         }
     }
+    event_processor.print_final_output();
     if error_seen {
         std::process::exit(1);
     }
@@ -361,7 +414,9 @@ async fn resolve_resume_path(
     args: &crate::cli::ResumeArgs,
 ) -> anyhow::Result<Option<PathBuf>> {
     if args.last {
-        match codex_core::RolloutRecorder::list_conversations(&config.codex_home, 1, None).await {
+        match codex_core::RolloutRecorder::list_conversations(&config.codex_home, 1, None, &[])
+            .await
+        {
             Ok(page) => Ok(page.items.first().map(|it| it.path.clone())),
             Err(e) => {
                 error!("Error listing conversations: {e}");

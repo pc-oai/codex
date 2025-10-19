@@ -1,7 +1,9 @@
 use super::new_status_output;
 use super::rate_limit_snapshot_display;
 use crate::history_cell::HistoryCell;
+use chrono::Duration as ChronoDuration;
 use chrono::TimeZone;
+use chrono::Utc;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
@@ -81,6 +83,12 @@ fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+fn reset_at_from(captured_at: &chrono::DateTime<chrono::Local>, seconds: i64) -> String {
+    (*captured_at + ChronoDuration::seconds(seconds))
+        .with_timezone(&Utc)
+        .to_rfc3339()
+}
+
 #[test]
 fn status_snapshot_includes_reasoning_details() {
     let temp_home = TempDir::new().expect("temp home");
@@ -106,25 +114,25 @@ fn status_snapshot_includes_reasoning_details() {
         total_tokens: 2_250,
     };
 
-    let snapshot = RateLimitSnapshot {
-        primary: Some(RateLimitWindow {
-            used_percent: 72.5,
-            window_minutes: Some(300),
-            resets_in_seconds: Some(600),
-        }),
-        secondary: Some(RateLimitWindow {
-            used_percent: 45.0,
-            window_minutes: Some(10080),
-            resets_in_seconds: Some(1_200),
-        }),
-    };
     let captured_at = chrono::Local
         .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
         .single()
         .expect("timestamp");
+    let snapshot = RateLimitSnapshot {
+        primary: Some(RateLimitWindow {
+            used_percent: 72.5,
+            window_minutes: Some(300),
+            resets_at: Some(reset_at_from(&captured_at, 600)),
+        }),
+        secondary: Some(RateLimitWindow {
+            used_percent: 45.0,
+            window_minutes: Some(10080),
+            resets_at: Some(reset_at_from(&captured_at, 1_200)),
+        }),
+    };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
-    let composite = new_status_output(&config, &usage, &None, Some(&rate_display));
+    let composite = new_status_output(&config, &usage, Some(&usage), &None, Some(&rate_display));
     let mut rendered_lines = render_lines(&composite.display_lines(80));
     if cfg!(windows) {
         for line in &mut rendered_lines {
@@ -151,21 +159,21 @@ fn status_snapshot_includes_monthly_limit() {
         total_tokens: 1_200,
     };
 
-    let snapshot = RateLimitSnapshot {
-        primary: Some(RateLimitWindow {
-            used_percent: 12.0,
-            window_minutes: Some(43_200),
-            resets_in_seconds: Some(86_400),
-        }),
-        secondary: None,
-    };
     let captured_at = chrono::Local
         .with_ymd_and_hms(2024, 5, 6, 7, 8, 9)
         .single()
         .expect("timestamp");
+    let snapshot = RateLimitSnapshot {
+        primary: Some(RateLimitWindow {
+            used_percent: 12.0,
+            window_minutes: Some(43_200),
+            resets_at: Some(reset_at_from(&captured_at, 86_400)),
+        }),
+        secondary: None,
+    };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
-    let composite = new_status_output(&config, &usage, &None, Some(&rate_display));
+    let composite = new_status_output(&config, &usage, Some(&usage), &None, Some(&rate_display));
     let mut rendered_lines = render_lines(&composite.display_lines(80));
     if cfg!(windows) {
         for line in &mut rendered_lines {
@@ -191,7 +199,7 @@ fn status_card_token_usage_excludes_cached_tokens() {
         total_tokens: 2_100,
     };
 
-    let composite = new_status_output(&config, &usage, &None, None);
+    let composite = new_status_output(&config, &usage, Some(&usage), &None, None);
     let rendered = render_lines(&composite.display_lines(120));
 
     assert!(
@@ -218,21 +226,21 @@ fn status_snapshot_truncates_in_narrow_terminal() {
         total_tokens: 2_250,
     };
 
-    let snapshot = RateLimitSnapshot {
-        primary: Some(RateLimitWindow {
-            used_percent: 72.5,
-            window_minutes: Some(300),
-            resets_in_seconds: Some(600),
-        }),
-        secondary: None,
-    };
     let captured_at = chrono::Local
         .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
         .single()
         .expect("timestamp");
+    let snapshot = RateLimitSnapshot {
+        primary: Some(RateLimitWindow {
+            used_percent: 72.5,
+            window_minutes: Some(300),
+            resets_at: Some(reset_at_from(&captured_at, 600)),
+        }),
+        secondary: None,
+    };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
-    let composite = new_status_output(&config, &usage, &None, Some(&rate_display));
+    let composite = new_status_output(&config, &usage, Some(&usage), &None, Some(&rate_display));
     let mut rendered_lines = render_lines(&composite.display_lines(46));
     if cfg!(windows) {
         for line in &mut rendered_lines {
@@ -259,7 +267,7 @@ fn status_snapshot_shows_missing_limits_message() {
         total_tokens: 750,
     };
 
-    let composite = new_status_output(&config, &usage, &None, None);
+    let composite = new_status_output(&config, &usage, Some(&usage), &None, None);
     let mut rendered_lines = render_lines(&composite.display_lines(80));
     if cfg!(windows) {
         for line in &mut rendered_lines {
@@ -295,7 +303,7 @@ fn status_snapshot_shows_empty_limits_message() {
         .expect("timestamp");
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
-    let composite = new_status_output(&config, &usage, &None, Some(&rate_display));
+    let composite = new_status_output(&config, &usage, Some(&usage), &None, Some(&rate_display));
     let mut rendered_lines = render_lines(&composite.display_lines(80));
     if cfg!(windows) {
         for line in &mut rendered_lines {
@@ -304,4 +312,42 @@ fn status_snapshot_shows_empty_limits_message() {
     }
     let sanitized = sanitize_directory(sanitize_version(rendered_lines)).join("\n");
     assert_snapshot!(sanitized);
+}
+
+#[test]
+fn status_context_window_uses_last_usage() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home);
+    config.model_context_window = Some(272_000);
+
+    let total_usage = TokenUsage {
+        input_tokens: 12_800,
+        cached_input_tokens: 0,
+        output_tokens: 879,
+        reasoning_output_tokens: 0,
+        total_tokens: 102_000,
+    };
+    let last_usage = TokenUsage {
+        input_tokens: 12_800,
+        cached_input_tokens: 0,
+        output_tokens: 879,
+        reasoning_output_tokens: 0,
+        total_tokens: 13_679,
+    };
+
+    let composite = new_status_output(&config, &total_usage, Some(&last_usage), &None, None);
+    let rendered_lines = render_lines(&composite.display_lines(80));
+    let context_line = rendered_lines
+        .into_iter()
+        .find(|line| line.contains("Context window"))
+        .expect("context line");
+
+    assert!(
+        context_line.contains("13.7K used / 272K"),
+        "expected context line to reflect last usage tokens, got: {context_line}"
+    );
+    assert!(
+        !context_line.contains("102K"),
+        "context line should not use total aggregated tokens, got: {context_line}"
+    );
 }
