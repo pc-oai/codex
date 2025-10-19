@@ -23,13 +23,21 @@ Codex supports a rich set of configuration options. Note that the Rust CLI uses 
 
 ### Model Context Protocol Support
 
-Codex CLI functions as an MCP client that can connect to MCP servers on startup. See the [`mcp_servers`](../docs/config.md#mcp_servers) section in the configuration documentation for details.
+#### MCP client
 
-It is still experimental, but you can also launch Codex as an MCP _server_ by running `codex mcp`. Use the [`@modelcontextprotocol/inspector`](https://github.com/modelcontextprotocol/inspector) to try it out:
+Codex CLI functions as an MCP client that allows the Codex CLI and IDE extension to connect to MCP servers on startup. See the [`configuration documentation`](../docs/config.md#mcp_servers) for details.
+
+#### MCP server (experimental)
+
+Codex can be launched as an MCP _server_ by running `codex mcp-server`. This allows _other_ MCP clients to use Codex as a tool for another agent.
+
+Use the [`@modelcontextprotocol/inspector`](https://github.com/modelcontextprotocol/inspector) to try it out:
 
 ```shell
-npx @modelcontextprotocol/inspector codex mcp
+npx @modelcontextprotocol/inspector codex mcp-server
 ```
+
+Use `codex mcp` to add/list/get/remove MCP server launchers defined in `config.toml`, and `codex mcp-server` to run the MCP server directly.
 
 ### Notifications
 
@@ -53,6 +61,16 @@ In the transcript preview, the footer shows an `Esc edit prev` hint while editin
 
 Sometimes it is not convenient to `cd` to the directory you want Codex to use as the "working root" before running Codex. Fortunately, `codex` supports a `--cd` option so you can specify whatever folder you want. You can confirm that Codex is honoring `--cd` by double-checking the **workdir** it reports in the TUI at the start of a new session.
 
+### `--add-dir` flag
+
+Need to work across multiple projects? Pass `--add-dir` one or more times to expose extra directories as writable roots for the current session while keeping the main working directory unchanged. For example:
+
+```shell
+codex --cd apps/frontend --add-dir ../backend --add-dir ../shared
+```
+
+Codex can now inspect and edit files in each listed directory without leaving the primary workspace.
+
 ### Shell completions
 
 Generate shell completion scripts via:
@@ -69,9 +87,13 @@ To test to see what happens when a command is run under the sandbox provided by 
 
 ```
 # macOS
-codex debug seatbelt [--full-auto] [COMMAND]...
+codex sandbox macos [--full-auto] [COMMAND]...
 
 # Linux
+codex sandbox linux [--full-auto] [COMMAND]...
+
+# Legacy aliases
+codex debug seatbelt [--full-auto] [COMMAND]...
 codex debug landlock [--full-auto] [COMMAND]...
 ```
 
