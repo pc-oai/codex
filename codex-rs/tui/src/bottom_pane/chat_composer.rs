@@ -1393,6 +1393,13 @@ impl ChatComposer {
         }
     }
 
+    pub(crate) fn clear(&mut self) {
+        self.set_text_content(String::new(), Vec::new(), Vec::new());
+        self.remote_image_urls.clear();
+        self.selected_remote_image_index = None;
+        self.history.reset_navigation();
+        self.sync_popups();
+    }
     pub(crate) fn clear_for_ctrl_c(&mut self) -> Option<String> {
         if self.is_empty() {
             return None;
