@@ -526,6 +526,19 @@ async fn streaming_final_answer_keeps_task_running_state() {
 }
 
 #[tokio::test]
+async fn ctrl_x_clears_composer_without_emitting_ops() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.bottom_pane
+        .set_composer_text("clear me\nentirely".to_string(), Vec::new(), Vec::new());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL));
+
+    assert!(chat.composer_is_empty());
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
 async fn idle_commit_ticks_do_not_restore_status_without_commentary_completion() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

@@ -5034,6 +5034,17 @@ impl ChatWidget {
                 modifiers,
                 kind: KeyEventKind::Press,
                 ..
+            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'x') => {
+                if !self.bottom_pane.composer_is_empty() {
+                    self.bottom_pane.clear_composer();
+                }
+                return;
+            }
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
             } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'d') => {
                 if self.on_ctrl_d() {
                     return;

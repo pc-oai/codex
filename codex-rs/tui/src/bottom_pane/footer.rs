@@ -762,6 +762,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut file_paths = Line::from("");
     let mut paste_image = Line::from("");
     let mut external_editor = Line::from("");
+    let mut clear_composer = Line::from("");
     let mut edit_previous = Line::from("");
     let mut history_search = Line::from("");
     let mut quit = Line::from("");
@@ -778,6 +779,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::FilePaths => file_paths = text,
                 ShortcutId::PasteImage => paste_image = text,
                 ShortcutId::ExternalEditor => external_editor = text,
+                ShortcutId::ClearComposer => clear_composer = text,
                 ShortcutId::EditPrevious => edit_previous = text,
                 ShortcutId::HistorySearch => history_search = text,
                 ShortcutId::Quit => quit = text,
@@ -795,6 +797,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         file_paths,
         paste_image,
         external_editor,
+        clear_composer,
         edit_previous,
         history_search,
         quit,
@@ -878,6 +881,7 @@ enum ShortcutId {
     FilePaths,
     PasteImage,
     ExternalEditor,
+    ClearComposer,
     EditPrevious,
     HistorySearch,
     Quit,
@@ -1028,6 +1032,15 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         }],
         prefix: "",
         label: " to edit in external editor",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::ClearComposer,
+        bindings: &[ShortcutBinding {
+            key: key_hint::ctrl(KeyCode::Char('x')),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " to clear input",
     },
     ShortcutDescriptor {
         id: ShortcutId::EditPrevious,
