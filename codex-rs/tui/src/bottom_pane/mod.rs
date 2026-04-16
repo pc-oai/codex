@@ -790,6 +790,39 @@ impl BottomPane {
         self.composer.current_text()
     }
 
+    pub(crate) fn set_composer_cursor(&mut self, pos: usize) {
+        self.composer.set_cursor(pos);
+        self.request_redraw();
+    }
+
+    pub(crate) fn composer_cursor(&self) -> usize {
+        self.composer.current_cursor()
+    }
+
+    pub(crate) fn history_previous(&mut self) -> bool {
+        let changed = self.composer.history_previous();
+        if changed {
+            self.request_redraw();
+        }
+        changed
+    }
+
+    pub(crate) fn history_next(&mut self) -> bool {
+        let changed = self.composer.history_next();
+        if changed {
+            self.request_redraw();
+        }
+        changed
+    }
+
+    pub(crate) fn history_edit_previous(&mut self, steps_back: usize) -> bool {
+        let changed = self.composer.history_edit_previous(steps_back);
+        if changed {
+            self.request_redraw();
+        }
+        changed
+    }
+
     pub(crate) fn composer_text_elements(&self) -> Vec<TextElement> {
         self.composer.text_elements()
     }
