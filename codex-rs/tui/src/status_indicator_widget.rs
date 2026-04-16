@@ -24,6 +24,7 @@ use crate::key_hint;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::renderable::Renderable;
 use crate::shimmer::shimmer_spans;
+use crate::talon;
 use crate::text_formatting::capitalize_first;
 use crate::tui::FrameRequester;
 use crate::wrapping::RtOptions;
@@ -194,6 +195,27 @@ impl StatusIndicatorWidget {
         self.elapsed_seconds_at(Instant::now())
     }
 
+    pub(crate) fn summary_string_at(&self, now: Instant) -> String {
+        let pretty_elapsed = fmt_elapsed_compact(self.elapsed_seconds_at(now));
+        let interrupt = if self.show_interrupt_hint {
+            " • Esc to interrupt"
+        } else {
+            ""
+        };
+        let mut summary = format!("{} ({pretty_elapsed}{interrupt})", self.header);
+        if let Some(message) = self.inline_message.as_deref() {
+            summary.push_str(" · ");
+            summary.push_str(message);
+        } else if let Some(details) = self.details.as_deref() {
+            let first_detail = details.lines().next().unwrap_or_default().trim();
+            if !first_detail.is_empty() {
+                summary.push_str(" · ");
+                summary.push_str(first_detail);
+            }
+        }
+        summary
+    }
+
     /// Wrap the details text into a fixed width and return the lines, truncating if necessary.
     fn wrapped_details_lines(&self, width: u16) -> Vec<Line<'static>> {
         let Some(details) = self.details.as_deref() else {
@@ -245,6 +267,7 @@ impl Renderable for StatusIndicatorWidget {
         let now = Instant::now();
         let elapsed_duration = self.elapsed_duration_at(now);
         let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
+        talon::set_status_summary(Some(self.summary_string_at(now)));
 
         let mut spans = Vec::with_capacity(5);
         spans.push(spinner(Some(self.last_resume_at), self.animations_enabled));

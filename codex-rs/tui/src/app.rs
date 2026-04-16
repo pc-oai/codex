@@ -160,6 +160,7 @@ use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::JoinHandle;
+use tokio::time::interval;
 use toml::Value as TomlValue;
 use uuid::Uuid;
 mod agent_navigation;
@@ -1114,6 +1115,75 @@ fn active_turn_steer_race(error: &TypedRequestError) -> Option<ActiveTurnSteerRa
 }
 
 impl App {
+    fn handle_talon_file_rpc(&mut self, tui: &mut tui::Tui, paths: &crate::talon::TalonPaths) {
+        let Ok(Some(req)) = crate::talon::read_request(paths) else {
+            return;
+        };
+
+        let mut applied: Vec<String> = Vec::new();
+
+        for cmd in req.commands {
+            use crate::talon::TalonCommand::*;
+            match cmd {
+                SetBuffer { text, cursor } => {
+                    self.chat_widget
+                        .set_composer_text(text, Vec::new(), Vec::new());
+                    if let Some(pos) = cursor {
+                        self.chat_widget.set_composer_cursor(pos);
+                    }
+                    applied.push("set_buffer".to_string());
+                }
+                SetCursor { cursor } => {
+                    self.chat_widget.set_composer_cursor(cursor);
+                    applied.push("set_cursor".to_string());
+                }
+                GetState => {
+                    applied.push("get_state".to_string());
+                }
+                Notify { message } => {
+                    let _ = tui.notify(message);
+                    applied.push("notify".to_string());
+                }
+                EditPreviousMessage { steps_back } => {
+                    if self.chat_widget.history_edit_previous(steps_back) {
+                        applied.push("edit_previous_message".to_string());
+                    }
+                }
+                HistoryPrevious => {
+                    if self.chat_widget.history_previous() {
+                        applied.push("history_previous".to_string());
+                    }
+                }
+                HistoryNext => {
+                    if self.chat_widget.history_next() {
+                        applied.push("history_next".to_string());
+                    }
+                }
+            }
+        }
+
+        let state = crate::talon::TalonEditorState {
+            buffer: self.chat_widget.composer_text(),
+            cursor: self.chat_widget.composer_cursor(),
+            is_task_running: self.chat_widget.is_task_running(),
+            task_summary: crate::talon::status_summary(),
+            session_id: self.chat_widget.thread_id().map(|id| id.to_string()),
+            cwd: Some(self.config.cwd.display().to_string()),
+        };
+
+        let resp = crate::talon::TalonResponse {
+            version: 1,
+            status: crate::talon::TalonResponseStatus::Ok,
+            state,
+            applied,
+            error: None,
+            timestamp_ms: crate::talon::now_timestamp_ms(),
+        };
+
+        let _ = crate::talon::write_response(paths, &resp);
+        let _ = crate::talon::remove_request(paths);
+    }
+
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
         tui: &mut tui::Tui,
@@ -4056,6 +4126,9 @@ impl App {
         let tui_events = tui.event_stream();
         tokio::pin!(tui_events);
 
+        let talon_paths = crate::talon::resolve_paths().ok();
+        let mut talon_tick = interval(Duration::from_millis(200));
+
         tui.frame_requester().schedule_frame();
         // Kick off a non-blocking rate-limit prefetch so the first `/status`
         // already has data, without delaying the initial frame render.
@@ -4136,6 +4209,12 @@ impl App {
                                 listen_for_app_server_events = false;
                                 tracing::warn!("app-server event stream closed");
                             }
+                        }
+                        AppRunControl::Continue
+                    }
+                    _ = talon_tick.tick() => {
+                        if let Some(paths) = &talon_paths {
+                            app.handle_talon_file_rpc(tui, paths);
                         }
                         AppRunControl::Continue
                     }
