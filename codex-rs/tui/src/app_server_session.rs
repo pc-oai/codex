@@ -991,7 +991,7 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/start failed during TUI bootstrap")?;
-        started_thread_from_start_response(response, &config).await
+        started_thread_from_start_response(response, &config, thread_params_mode).await
     }
 
     pub(crate) async fn skills_list_with_request_handle(

@@ -26,7 +26,6 @@ use crate::motion::ReducedMotionIndicator;
 use crate::motion::activity_indicator;
 use crate::motion::shimmer_text;
 use crate::render::renderable::Renderable;
-use crate::shimmer::shimmer_spans;
 use crate::talon;
 use crate::text_formatting::capitalize_first;
 use crate::tui::FrameRequester;

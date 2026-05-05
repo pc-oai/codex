@@ -636,6 +636,17 @@ impl App {
             AppEvent::McpInventoryLoaded { result, detail } => {
                 self.handle_mcp_inventory_result(result, detail);
             }
+            AppEvent::InitialThreadStarted { result } => match result {
+                Ok(started) => {
+                    self.enqueue_primary_thread_session(started.session, started.turns)
+                        .await?;
+                }
+                Err(err) => {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to start a fresh session through the app server: {err}"
+                    ));
+                }
+            },
             AppEvent::SkillsListLoaded { result } => {
                 self.handle_skills_list_result(
                     result.map_err(|err| color_eyre::eyre::eyre!(err)),

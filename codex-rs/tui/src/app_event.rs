@@ -378,11 +378,6 @@ pub(crate) enum AppEvent {
         result: Result<AppServerStartedThread, String>,
     },
 
-    /// Result of the initial background skills refresh during startup.
-    StartupSkillsLoaded {
-        result: Result<SkillsListResponse, String>,
-    },
-
     /// Replace the plugins popup with a plugin-detail loading state.
     OpenPluginDetailLoading {
         plugin_display_name: String,

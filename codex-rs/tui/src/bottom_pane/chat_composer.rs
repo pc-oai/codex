@@ -1292,7 +1292,7 @@ impl ChatComposer {
         self.sync_popups();
     }
 
-    fn current_cursor(&self) -> usize {
+    fn draft_cursor(&self) -> usize {
         self.textarea.cursor() + if self.is_bash_mode { 1 } else { 0 }
     }
 
@@ -1305,7 +1305,7 @@ impl ChatComposer {
         {
             self.current_text().len()
         } else {
-            self.current_cursor()
+            self.draft_cursor()
         }
     }
 
@@ -1350,7 +1350,7 @@ impl ChatComposer {
             remote_image_urls: self.remote_image_urls.clone(),
             mention_bindings: self.snapshot_mention_bindings(),
             pending_pastes: self.pending_pastes.clone(),
-            cursor: self.current_cursor(),
+            cursor: self.draft_cursor(),
         }
     }
 

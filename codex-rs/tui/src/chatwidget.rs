@@ -4329,7 +4329,7 @@ impl ChatWidget {
             // calls), render a separator before starting the next streamed assistant message.
             if self.needs_final_message_separator && self.had_work_activity {
                 self.add_to_history(history_cell::FinalMessageSeparator::new(
-                    elapsed_seconds,
+                    /*elapsed_seconds*/ None,
                     /*runtime_metrics*/ None,
                     self.config.tui_timing.clone(),
                 ));

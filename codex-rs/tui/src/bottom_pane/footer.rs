@@ -1082,6 +1082,7 @@ impl ShortcutDescriptor {
             ShortcutId::InsertNewline => state.key_hints.insert_newline,
             ShortcutId::QueueMessageTab => state.key_hints.queue,
             ShortcutId::ExternalEditor => state.key_hints.external_editor,
+            ShortcutId::ClearComposer => self.binding_for(state).map(|binding| binding.key),
             ShortcutId::EditPrevious => state.key_hints.edit_previous,
             ShortcutId::ShowTranscript => state.key_hints.show_transcript,
             ShortcutId::HistorySearch => state.key_hints.history_search,

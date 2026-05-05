@@ -3171,12 +3171,6 @@ impl Config {
                 .map(|t| t.keymap.clone())
                 .unwrap_or_default(),
             tui_timing: cfg.tui.as_ref().and_then(|t| t.timing.clone()),
-            terminal_resize_reflow,
-            tui_keymap: cfg
-                .tui
-                .as_ref()
-                .map(|t| t.keymap.clone())
-                .unwrap_or_default(),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
