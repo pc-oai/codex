@@ -57,6 +57,9 @@ use codex_app_server_protocol::ToolRequestUserInputAnswer;
 use codex_app_server_protocol::ToolRequestUserInputQuestion;
 use codex_app_server_protocol::WebSearchAction;
 use codex_config::types::McpServerTransportConfig;
+use codex_config::types::TuiTiming;
+use codex_config::types::TuiTimingMetric;
+use codex_config::types::TuiTimingSymbols;
 #[cfg(test)]
 use codex_mcp::qualified_mcp_tool_name_prefix;
 use codex_otel::RuntimeMetricsSummary;
@@ -2918,16 +2921,19 @@ pub(crate) fn new_reasoning_summary_block(
 pub struct FinalMessageSeparator {
     elapsed_seconds: Option<u64>,
     runtime_metrics: Option<RuntimeMetricsSummary>,
+    timing_config: Option<TuiTiming>,
 }
 impl FinalMessageSeparator {
     /// Creates a separator; completed turns should pass protocol turn duration when available.
     pub(crate) fn new(
         elapsed_seconds: Option<u64>,
         runtime_metrics: Option<RuntimeMetricsSummary>,
+        timing_config: Option<TuiTiming>,
     ) -> Self {
         Self {
             elapsed_seconds,
             runtime_metrics,
+            timing_config,
         }
     }
 }
@@ -2941,7 +2947,10 @@ impl HistoryCell for FinalMessageSeparator {
         {
             label_parts.push(format!("Worked for {elapsed_seconds}"));
         }
-        if let Some(metrics_label) = self.runtime_metrics.and_then(runtime_metrics_label) {
+        if let Some(metrics_label) = self
+            .runtime_metrics
+            .and_then(|summary| separator_metrics_label(summary, self.timing_config.as_ref()))
+        {
             label_parts.push(metrics_label);
         }
 
@@ -2961,7 +2970,35 @@ impl HistoryCell for FinalMessageSeparator {
     }
 }
 
-pub(crate) fn runtime_metrics_label(summary: RuntimeMetricsSummary) -> Option<String> {
+fn separator_metrics_label(
+    summary: RuntimeMetricsSummary,
+    timing_config: Option<&TuiTiming>,
+) -> Option<String> {
+    if timing_config.is_some_and(|config| config.enabled) {
+        let calls = summary.tool_calls.count;
+        let duration_ms = summary.tool_calls.duration_ms;
+        return if calls > 0 {
+            let noun = pluralize(calls, "tool", "tools");
+            Some(format!(
+                "{calls} {noun} {}",
+                format_duration_ms(duration_ms)
+            ))
+        } else {
+            None
+        };
+    }
+
+    runtime_metrics_label(summary, timing_config)
+}
+
+pub(crate) fn runtime_metrics_label(
+    summary: RuntimeMetricsSummary,
+    timing_config: Option<&TuiTiming>,
+) -> Option<String> {
+    if let Some(config) = timing_config {
+        return compact_runtime_metrics_label(summary, config);
+    }
+
     let mut parts = Vec::new();
     if summary.tool_calls.count > 0 {
         let duration = format_duration_ms(summary.tool_calls.duration_ms);
@@ -3054,6 +3091,179 @@ fn format_duration_ms(duration_ms: u64) -> String {
     }
 }
 
+fn compact_runtime_metrics_label(
+    summary: RuntimeMetricsSummary,
+    config: &TuiTiming,
+) -> Option<String> {
+    if !config.enabled {
+        return None;
+    }
+
+    let metrics = config
+        .show
+        .clone()
+        .unwrap_or_else(|| vec![TuiTimingMetric::Ttft, TuiTimingMetric::Tbt]);
+    let symbols = config.symbols.as_ref();
+
+    let mut parts = Vec::new();
+    for metric in metrics {
+        let part = match metric {
+            TuiTimingMetric::Ttft => preferred_timing_metric(
+                summary.responses_api_engine_service_ttft_ms,
+                summary.responses_api_engine_iapi_ttft_ms,
+            )
+            .map(|duration| {
+                format!(
+                    "{}{}",
+                    metric_symbol(symbols, metric),
+                    format_duration_ms(duration)
+                )
+            }),
+            TuiTimingMetric::Tbt => preferred_timing_metric(
+                summary.responses_api_engine_service_tbt_ms,
+                summary.responses_api_engine_iapi_tbt_ms,
+            )
+            .map(|duration| {
+                format!(
+                    "{}{}",
+                    metric_symbol(symbols, metric),
+                    format_duration_ms(duration)
+                )
+            }),
+            TuiTimingMetric::Model => (summary.responses_api_inference_time_ms > 0).then(|| {
+                format!(
+                    "{}{}",
+                    metric_symbol(symbols, metric),
+                    format_duration_ms(summary.responses_api_inference_time_ms)
+                )
+            }),
+            TuiTimingMetric::Overhead => (summary.responses_api_overhead_ms > 0).then(|| {
+                format!(
+                    "{}{}",
+                    metric_symbol(symbols, metric),
+                    format_duration_ms(summary.responses_api_overhead_ms)
+                )
+            }),
+        };
+        if let Some(part) = part {
+            parts.push(part);
+        }
+    }
+
+    (!parts.is_empty()).then(|| parts.join("  "))
+}
+
+fn preferred_timing_metric(primary_ms: u64, fallback_ms: u64) -> Option<u64> {
+    if primary_ms > 0 {
+        Some(primary_ms)
+    } else if fallback_ms > 0 {
+        Some(fallback_ms)
+    } else {
+        None
+    }
+}
+
+fn metric_symbol(symbols: Option<&TuiTimingSymbols>, metric: TuiTimingMetric) -> &str {
+    match metric {
+        TuiTimingMetric::Ttft => symbols.and_then(|s| s.ttft.as_deref()).unwrap_or("⚡"),
+        TuiTimingMetric::Tbt => symbols.and_then(|s| s.tbt.as_deref()).unwrap_or("≋"),
+        TuiTimingMetric::Model => symbols.and_then(|s| s.model.as_deref()).unwrap_or("◉"),
+        TuiTimingMetric::Overhead => symbols.and_then(|s| s.overhead.as_deref()).unwrap_or("+"),
+    }
+}
+
+fn metric_color(metric: TuiTimingMetric, duration_ms: u64) -> Color {
+    match metric {
+        TuiTimingMetric::Ttft => {
+            if duration_ms <= 1_000 {
+                Color::Green
+            } else if duration_ms <= 3_000 {
+                Color::Yellow
+            } else {
+                Color::Red
+            }
+        }
+        TuiTimingMetric::Tbt => {
+            if duration_ms <= 10 {
+                Color::Green
+            } else if duration_ms <= 50 {
+                Color::Yellow
+            } else {
+                Color::Red
+            }
+        }
+        TuiTimingMetric::Model => Color::DarkGray,
+        TuiTimingMetric::Overhead => {
+            if duration_ms <= 250 {
+                Color::DarkGray
+            } else if duration_ms <= 1_000 {
+                Color::Yellow
+            } else {
+                Color::Red
+            }
+        }
+    }
+}
+
+pub(crate) fn compact_timing_line(
+    summary: RuntimeMetricsSummary,
+    timing_config: Option<&TuiTiming>,
+) -> Option<Line<'static>> {
+    let config = timing_config?;
+    if !config.enabled {
+        return None;
+    }
+
+    let metrics = config
+        .show
+        .clone()
+        .unwrap_or_else(|| vec![TuiTimingMetric::Ttft, TuiTimingMetric::Tbt]);
+    let symbols = config.symbols.as_ref();
+
+    let mut spans: Vec<Span<'static>> = vec!["• ".dim()];
+    let mut first = true;
+
+    for metric in metrics {
+        let duration = match metric {
+            TuiTimingMetric::Ttft => preferred_timing_metric(
+                summary.responses_api_engine_service_ttft_ms,
+                summary.responses_api_engine_iapi_ttft_ms,
+            ),
+            TuiTimingMetric::Tbt => preferred_timing_metric(
+                summary.responses_api_engine_service_tbt_ms,
+                summary.responses_api_engine_iapi_tbt_ms,
+            ),
+            TuiTimingMetric::Model => (summary.responses_api_inference_time_ms > 0)
+                .then_some(summary.responses_api_inference_time_ms),
+            TuiTimingMetric::Overhead => {
+                (summary.responses_api_overhead_ms > 0).then_some(summary.responses_api_overhead_ms)
+            }
+        };
+
+        let Some(duration) = duration else { continue };
+        if !first {
+            spans.push("  ".dark_gray());
+        }
+        first = false;
+        let color = metric_color(metric, duration);
+        spans.push(Span::styled(
+            metric_symbol(symbols, metric).to_string(),
+            Style::default().fg(color),
+        ));
+        spans.push(Span::styled(
+            format_duration_ms(duration),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    if first {
+        None
+    } else {
+        spans.insert(1, "Timing: ".dark_gray());
+        Some(Line::from(spans))
+    }
+}
+
 fn pluralize(count: u64, singular: &'static str, plural: &'static str) -> &'static str {
     if count == 1 { singular } else { plural }
 }
@@ -3093,6 +3303,9 @@ mod tests {
     use codex_app_server_protocol::McpAuthStatus;
     use codex_config::types::McpServerConfig;
     use codex_config::types::McpServerDisabledReason;
+    use codex_config::types::TuiTiming;
+    use codex_config::types::TuiTimingMetric;
+    use codex_config::types::TuiTimingSymbols;
     use codex_otel::RuntimeMetricTotals;
     use codex_otel::RuntimeMetricsSummary;
     use codex_protocol::ThreadId;
@@ -3354,7 +3567,7 @@ mod tests {
             turn_ttft_ms: 0,
             turn_ttfm_ms: 0,
         };
-        let cell = FinalMessageSeparator::new(Some(12), Some(summary));
+        let cell = FinalMessageSeparator::new(Some(12), Some(summary), /*timing_config*/ None);
         let rendered = render_lines(&cell.display_lines(/*width*/ 600));
 
         assert_eq!(rendered.len(), 1);
@@ -3372,11 +3585,90 @@ mod tests {
 
     #[test]
     fn final_message_separator_includes_worked_label_after_one_minute() {
-        let cell = FinalMessageSeparator::new(Some(61), /*runtime_metrics*/ None);
+        let cell = FinalMessageSeparator::new(
+            Some(61),
+            /*runtime_metrics*/ None,
+            /*timing_config*/ None,
+        );
         let rendered = render_lines(&cell.display_lines(/*width*/ 200));
 
         assert_eq!(rendered.len(), 1);
         assert!(rendered[0].contains("Worked for"));
+    }
+
+    #[test]
+    fn compact_timing_label_defaults_to_ttft_and_tbt() {
+        let summary = RuntimeMetricsSummary {
+            responses_api_engine_iapi_ttft_ms: 900,
+            responses_api_engine_service_ttft_ms: 800,
+            responses_api_engine_iapi_tbt_ms: 5,
+            responses_api_engine_service_tbt_ms: 3,
+            responses_api_inference_time_ms: 1_200,
+            responses_api_overhead_ms: 120,
+            ..RuntimeMetricsSummary::default()
+        };
+        let config = TuiTiming::default();
+
+        assert_eq!(
+            runtime_metrics_label(summary, Some(&config)).as_deref(),
+            Some("⚡800ms  ≋3ms")
+        );
+    }
+
+    #[test]
+    fn compact_timing_label_honors_shown_metrics_and_symbols() {
+        let summary = RuntimeMetricsSummary {
+            responses_api_engine_service_ttft_ms: 800,
+            responses_api_inference_time_ms: 1_200,
+            responses_api_overhead_ms: 120,
+            ..RuntimeMetricsSummary::default()
+        };
+        let config = TuiTiming {
+            enabled: true,
+            show: Some(vec![
+                TuiTimingMetric::Ttft,
+                TuiTimingMetric::Model,
+                TuiTimingMetric::Overhead,
+            ]),
+            symbols: Some(TuiTimingSymbols {
+                ttft: Some("T".to_string()),
+                model: Some("M".to_string()),
+                overhead: Some("O".to_string()),
+                ..TuiTimingSymbols::default()
+            }),
+        };
+
+        assert_eq!(
+            runtime_metrics_label(summary, Some(&config)).as_deref(),
+            Some("T800ms  M1.2s  O120ms")
+        );
+    }
+
+    #[test]
+    fn compact_separator_shows_only_tool_summary() {
+        let summary = RuntimeMetricsSummary {
+            tool_calls: RuntimeMetricTotals {
+                count: 63,
+                duration_ms: 87_400,
+            },
+            responses_api_engine_service_ttft_ms: 2_000,
+            responses_api_engine_service_tbt_ms: 3,
+            websocket_calls: RuntimeMetricTotals {
+                count: 64,
+                duration_ms: 150,
+            },
+            websocket_events: RuntimeMetricTotals {
+                count: 733,
+                duration_ms: 117_300,
+            },
+            ..RuntimeMetricsSummary::default()
+        };
+        let config = TuiTiming::default();
+
+        assert_eq!(
+            separator_metrics_label(summary, Some(&config)).as_deref(),
+            Some("tools 87.4s")
+        );
     }
 
     #[test]

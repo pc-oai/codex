@@ -34,6 +34,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
 
 use crate::app_command::AppCommand;
+use crate::app_server_session::AppServerStartedThread;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
@@ -370,6 +371,16 @@ pub(crate) enum AppEvent {
     MarketplaceUpgradeLoaded {
         cwd: PathBuf,
         result: Result<MarketplaceUpgradeResponse, String>,
+    },
+
+    /// Result of the initial background thread start during startup.
+    InitialThreadStarted {
+        result: Result<AppServerStartedThread, String>,
+    },
+
+    /// Result of the initial background skills refresh during startup.
+    StartupSkillsLoaded {
+        result: Result<SkillsListResponse, String>,
     },
 
     /// Replace the plugins popup with a plugin-detail loading state.

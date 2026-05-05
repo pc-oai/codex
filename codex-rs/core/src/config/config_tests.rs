@@ -563,6 +563,7 @@ fn config_toml_deserializes_model_availability_nux() {
                 ]),
             },
             terminal_resize_reflow_max_rows: None,
+            timing: None,
         }
     );
 }
@@ -2133,6 +2134,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
             terminal_resize_reflow_max_rows: None,
+            timing: None,
         }
     );
 }
@@ -6461,6 +6463,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             tui_status_line_use_colors: true,
             tui_terminal_title: None,
             tui_theme: None,
+            tui_timing: None,
             otel: OtelConfig::default(),
         },
         o3_profile_config
@@ -6663,6 +6666,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_timing: None,
         otel: OtelConfig::default(),
     };
 
@@ -6819,6 +6823,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_timing: None,
         otel: OtelConfig::default(),
     };
 
@@ -6960,6 +6965,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         tui_status_line_use_colors: true,
         tui_terminal_title: None,
         tui_theme: None,
+        tui_timing: None,
         otel: OtelConfig::default(),
     };
 

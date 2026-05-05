@@ -1982,9 +1982,17 @@ impl ChatWidget {
     }
 
     fn log_websocket_timing_totals(&mut self, delta: RuntimeMetricsSummary) {
-        if let Some(label) = history_cell::runtime_metrics_label(delta.responses_api_summary()) {
+        if let Some(line) = history_cell::compact_timing_line(
+            delta.responses_api_summary(),
+            self.config.tui_timing.as_ref(),
+        ) {
+            self.add_plain_history_lines(vec![line]);
+        } else if let Some(label) = history_cell::runtime_metrics_label(
+            delta.responses_api_summary(),
+            self.config.tui_timing.as_ref(),
+        ) {
             self.add_plain_history_lines(vec![
-                vec!["• ".dim(), format!("WebSocket timing: {label}").dark_gray()].into(),
+                vec!["• ".dim(), format!("Timing: {label}").dark_gray()].into(),
             ]);
         }
     }
@@ -2531,6 +2539,7 @@ impl ChatWidget {
                 self.add_to_history(history_cell::FinalMessageSeparator::new(
                     elapsed_seconds,
                     runtime_metrics,
+                    self.config.tui_timing.clone(),
                 ));
             }
             self.turn_runtime_metrics = RuntimeMetricsSummary::default();
@@ -4320,7 +4329,9 @@ impl ChatWidget {
             // calls), render a separator before starting the next streamed assistant message.
             if self.needs_final_message_separator && self.had_work_activity {
                 self.add_to_history(history_cell::FinalMessageSeparator::new(
-                    /*elapsed_seconds*/ None, /*runtime_metrics*/ None,
+                    elapsed_seconds,
+                    /*runtime_metrics*/ None,
+                    self.config.tui_timing.clone(),
                 ));
                 self.needs_final_message_separator = false;
             } else if self.needs_final_message_separator {

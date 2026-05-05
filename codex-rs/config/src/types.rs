@@ -595,6 +595,52 @@ pub struct ModelAvailabilityNuxConfig {
 /// Fallback resize-reflow row cap when Codex cannot identify a terminal-specific scrollback size.
 pub const DEFAULT_TERMINAL_RESIZE_REFLOW_FALLBACK_MAX_ROWS: usize = 1_000;
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum TuiTimingMetric {
+    Ttft,
+    Tbt,
+    Model,
+    Overhead,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct TuiTimingSymbols {
+    pub ttft: Option<String>,
+    pub tbt: Option<String>,
+    pub model: Option<String>,
+    pub overhead: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct TuiTiming {
+    /// Enable compact timing output in the TUI transcript.
+    /// Defaults to `true` when the section is present.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Ordered list of metrics to display.
+    /// Defaults to: `ttft`, `tbt`.
+    #[serde(default)]
+    pub show: Option<Vec<TuiTimingMetric>>,
+
+    /// Optional per-metric symbol overrides.
+    #[serde(default)]
+    pub symbols: Option<TuiTimingSymbols>,
+}
+
+impl Default for TuiTiming {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            show: None,
+            symbols: None,
+        }
+    }
+}
+
 /// Collection of settings that are specific to the TUI.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -673,6 +719,10 @@ pub struct Tui {
     #[serde(default)]
     #[schemars(range(min = 0))]
     pub terminal_resize_reflow_max_rows: Option<usize>,
+
+    /// Compact per-turn timing display settings.
+    #[serde(default)]
+    pub timing: Option<TuiTiming>,
 }
 
 const fn default_true() -> bool {

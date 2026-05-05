@@ -63,8 +63,7 @@ enum TalonResponseStatus {
     Error,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct TalonEditorState {
     #[serde(default)]
     buffer: String,
@@ -79,7 +78,6 @@ struct TalonEditorState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cwd: Option<String>,
 }
-
 
 #[derive(Debug, Serialize)]
 struct TalonResponse {

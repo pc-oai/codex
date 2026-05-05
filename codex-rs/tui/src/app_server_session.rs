@@ -102,6 +102,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInput;
+use codex_models_manager::bundled_models_response;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentEvent;
@@ -119,6 +120,8 @@ use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
 
 fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
     color_eyre::eyre::eyre!("{context}: {err}")
@@ -152,7 +155,7 @@ pub(crate) struct AppServerSession {
 }
 
 #[derive(Clone, Copy)]
-enum ThreadParamsMode {
+pub(crate) enum ThreadParamsMode {
     Embedded,
     Remote,
 }
@@ -166,10 +169,13 @@ impl ThreadParamsMode {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct AppServerStartedThread {
     pub(crate) session: ThreadSessionState,
     pub(crate) turns: Vec<Turn>,
 }
+
+static BACKGROUND_REQUEST_ID: AtomicI64 = AtomicI64::new(-1);
 
 impl AppServerSession {
     pub(crate) fn new(client: AppServerClient) -> Self {
@@ -195,38 +201,6 @@ impl AppServerSession {
 
     pub(crate) async fn bootstrap(&mut self, config: &Config) -> Result<AppServerBootstrap> {
         let account = self.read_account().await?;
-        let model_request_id = self.next_request_id();
-        let models: ModelListResponse = self
-            .client
-            .request_typed(ClientRequest::ModelList {
-                request_id: model_request_id,
-                params: ModelListParams {
-                    cursor: None,
-                    limit: None,
-                    include_hidden: Some(true),
-                },
-            })
-            .await
-            .map_err(|err| {
-                bootstrap_request_error("model/list failed during TUI bootstrap", err)
-            })?;
-        let available_models = models
-            .data
-            .into_iter()
-            .map(model_preset_from_api_model)
-            .collect::<Vec<_>>();
-        let default_model = config
-            .model
-            .clone()
-            .or_else(|| {
-                available_models
-                    .iter()
-                    .find(|model| model.is_default)
-                    .map(|model| model.model.clone())
-            })
-            .or_else(|| available_models.first().map(|model| model.model.clone()))
-            .wrap_err("model/list returned no models for TUI bootstrap")?;
-
         let (
             account_email,
             auth_mode,
@@ -266,6 +240,41 @@ impl AppServerSession {
             }
             None => (None, None, None, None, FeedbackAudience::External, false),
         };
+        let available_models = match &self.client {
+            AppServerClient::InProcess(_) => local_bootstrap_models(config, has_chatgpt_account)
+                .wrap_err("failed to load local bundled models during TUI bootstrap")?,
+            AppServerClient::Remote(_) => {
+                let model_request_id = self.next_request_id();
+                let models: ModelListResponse = self
+                    .client
+                    .request_typed(ClientRequest::ModelList {
+                        request_id: model_request_id,
+                        params: ModelListParams {
+                            cursor: None,
+                            limit: None,
+                            include_hidden: Some(true),
+                        },
+                    })
+                    .await
+                    .wrap_err("model/list failed during TUI bootstrap")?;
+                models
+                    .data
+                    .into_iter()
+                    .map(model_preset_from_api_model)
+                    .collect::<Vec<_>>()
+            }
+        };
+        let default_model = config
+            .model
+            .clone()
+            .or_else(|| {
+                available_models
+                    .iter()
+                    .find(|model| model.is_default)
+                    .map(|model| model.model.clone())
+            })
+            .or_else(|| available_models.first().map(|model| model.model.clone()))
+            .wrap_err("model/list returned no models for TUI bootstrap")?;
         Ok(AppServerBootstrap {
             account_email,
             auth_mode,
@@ -325,6 +334,7 @@ impl AppServerSession {
         self.client.next_event().await
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) async fn start_thread(&mut self, config: &Config) -> Result<AppServerStartedThread> {
         self.start_thread_with_session_start_source(config, /*session_start_source*/ None)
             .await
@@ -962,6 +972,41 @@ impl AppServerSession {
         self.client.request_handle()
     }
 
+    pub(crate) async fn start_thread_with_request_handle(
+        request_handle: AppServerRequestHandle,
+        config: Config,
+        thread_params_mode: ThreadParamsMode,
+        remote_cwd_override: Option<PathBuf>,
+        session_start_source: Option<ThreadStartSource>,
+    ) -> Result<AppServerStartedThread> {
+        let response: ThreadStartResponse = request_handle
+            .request_typed(ClientRequest::ThreadStart {
+                request_id: next_background_request_id(),
+                params: thread_start_params_from_config(
+                    &config,
+                    thread_params_mode,
+                    remote_cwd_override.as_deref(),
+                    session_start_source,
+                ),
+            })
+            .await
+            .wrap_err("thread/start failed during TUI bootstrap")?;
+        started_thread_from_start_response(response, &config).await
+    }
+
+    pub(crate) async fn skills_list_with_request_handle(
+        request_handle: AppServerRequestHandle,
+        params: SkillsListParams,
+    ) -> Result<SkillsListResponse> {
+        request_handle
+            .request_typed(ClientRequest::SkillsList {
+                request_id: next_background_request_id(),
+                params,
+            })
+            .await
+            .wrap_err("skills/list failed in TUI")
+    }
+
     fn next_request_id(&mut self) -> RequestId {
         let request_id = self.next_request_id;
         self.next_request_id += 1;
@@ -1056,6 +1101,22 @@ fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
         supported_in_api: true,
         input_modalities: model.input_modalities,
     }
+}
+
+fn local_bootstrap_models(config: &Config, has_chatgpt_account: bool) -> Result<Vec<ModelPreset>> {
+    let response = config
+        .model_catalog
+        .clone()
+        .or_else(|| bundled_models_response().ok())
+        .wrap_err("no bundled model catalog available")?;
+    let mut presets: Vec<ModelPreset> = response.models.into_iter().map(Into::into).collect();
+    presets = ModelPreset::filter_by_auth(presets, has_chatgpt_account);
+    ModelPreset::mark_default_by_picker_visibility(&mut presets);
+    Ok(presets)
+}
+
+fn next_background_request_id() -> RequestId {
+    RequestId::Integer(BACKGROUND_REQUEST_ID.fetch_sub(1, Ordering::Relaxed))
 }
 
 fn approvals_reviewer_override_from_config(
