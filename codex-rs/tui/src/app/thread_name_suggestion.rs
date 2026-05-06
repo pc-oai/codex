@@ -20,6 +20,7 @@ pub(super) struct ThreadNameSuggestionJob {
     pub(super) parent_thread_id: ThreadId,
     pub(super) kind: ThreadNameSuggestionKind,
     pub(super) current_name: Option<String>,
+    pub(super) latest_final_answer: Option<String>,
     pub(super) completion_queued: bool,
 }
 
@@ -75,6 +76,7 @@ impl App {
                 parent_thread_id,
                 kind,
                 current_name,
+                latest_final_answer: None,
                 completion_queued: false,
             },
         );
@@ -126,14 +128,21 @@ impl App {
             return true;
         }
 
+        if let Some(suggestion) = suggestion_from_notification(notification) {
+            job.latest_final_answer = Some(suggestion.to_string());
+            return true;
+        }
+
         let ServerNotification::TurnCompleted(notification) = notification else {
             return true;
         };
         job.completion_queued = true;
         let result = match notification.turn.status {
-            TurnStatus::Completed => suggestion_from_turn(&notification.turn)
-                .map(ToOwned::to_owned)
-                .ok_or_else(|| "title generator completed without a final answer".to_string()),
+            TurnStatus::Completed => {
+                completed_suggestion(job.latest_final_answer.as_deref(), &notification.turn)
+                    .map(ToOwned::to_owned)
+                    .ok_or_else(|| "title generator completed without a final answer".to_string())
+            }
             TurnStatus::Interrupted => Err("title generator was interrupted".to_string()),
             TurnStatus::Failed => Err(notification
                 .turn
@@ -233,9 +242,32 @@ fn suggestion_from_turn(turn: &Turn) -> Option<&str> {
     })
 }
 
+fn suggestion_from_notification(notification: &ServerNotification) -> Option<&str> {
+    let ServerNotification::ItemCompleted(notification) = notification else {
+        return None;
+    };
+
+    match &notification.item {
+        ThreadItem::AgentMessage { text, phase, .. }
+            if matches!(phase, Some(MessagePhase::FinalAnswer) | None) =>
+        {
+            Some(text.as_str())
+        }
+        _ => None,
+    }
+}
+
+fn completed_suggestion<'a>(
+    latest_final_answer: Option<&'a str>,
+    turn: &'a Turn,
+) -> Option<&'a str> {
+    latest_final_answer.or_else(|| suggestion_from_turn(turn))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_app_server_protocol::ItemCompletedNotification;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -264,5 +296,43 @@ mod tests {
         };
 
         assert_eq!(suggestion_from_turn(&turn), Some("🧭 Session title"));
+    }
+
+    #[test]
+    fn suggestion_from_notification_reads_completed_final_agent_message() {
+        let notification = ServerNotification::ItemCompleted(ItemCompletedNotification {
+            item: ThreadItem::AgentMessage {
+                id: "final".to_string(),
+                text: "🧭 Session title".to_string(),
+                phase: Some(MessagePhase::FinalAnswer),
+                memory_citation: None,
+            },
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
+        });
+
+        assert_eq!(
+            suggestion_from_notification(&notification),
+            Some("🧭 Session title")
+        );
+    }
+
+    #[test]
+    fn completed_suggestion_uses_streamed_final_answer_when_completion_has_no_items() {
+        let turn = Turn {
+            id: "turn-1".to_string(),
+            items: Vec::new(),
+            status: TurnStatus::Completed,
+            error: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
+        };
+
+        assert_eq!(
+            completed_suggestion(Some("🧭 Session title"), &turn),
+            Some("🧭 Session title")
+        );
     }
 }
