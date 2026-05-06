@@ -460,6 +460,11 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadArchiveResponse,
     },
+    ThreadDelete => "thread/delete" {
+        params: v2::ThreadDeleteParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadDeleteResponse,
+    },
     ThreadUnsubscribe => "thread/unsubscribe" {
         params: v2::ThreadUnsubscribeParams,
         serialization: thread_id(params.thread_id),
@@ -2183,6 +2188,7 @@ mod tests {
                     agent_role: None,
                     git_info: None,
                     name: None,
+                    user_message_count: 0,
                     turns: Vec::new(),
                 },
                 model: "gpt-5".to_string(),
@@ -2225,6 +2231,7 @@ mod tests {
                         "agentRole": null,
                         "gitInfo": null,
                         "name": null,
+                        "userMessageCount": 0,
                         "turns": []
                     },
                     "model": "gpt-5",

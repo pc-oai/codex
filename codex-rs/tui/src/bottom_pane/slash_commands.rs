@@ -44,6 +44,23 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .collect()
 }
 
+/// Return visible built-ins expanded with short aliases used by autocomplete.
+pub(crate) fn builtins_for_completion(
+    flags: BuiltinCommandFlags,
+) -> Vec<(&'static str, SlashCommand)> {
+    builtins_for_input(flags)
+        .into_iter()
+        .flat_map(|(name, cmd)| {
+            std::iter::once((name, cmd)).chain(
+                cmd.completion_aliases()
+                    .iter()
+                    .copied()
+                    .map(move |alias| (alias, cmd)),
+            )
+        })
+        .collect()
+}
+
 /// Find a single built-in command by exact name, after applying feature gating.
 ///
 /// Side-conversation gating is intentionally enforced by dispatch rather than exact lookup so a
@@ -61,7 +78,7 @@ pub(crate) fn find_builtin_command(name: &str, flags: BuiltinCommandFlags) -> Op
 
 /// Whether any visible built-in fuzzily matches the provided prefix.
 pub(crate) fn has_builtin_prefix(name: &str, flags: BuiltinCommandFlags) -> bool {
-    builtins_for_input(flags)
+    builtins_for_completion(flags)
         .into_iter()
         .any(|(command_name, _)| fuzzy_match(command_name, name).is_some())
 }
@@ -117,6 +134,20 @@ mod tests {
     }
 
     #[test]
+    fn completion_entries_include_short_aliases() {
+        let entries = builtins_for_completion(all_enabled_flags());
+        assert!(entries.contains(&("m", SlashCommand::Model)));
+        assert!(entries.contains(&("e", SlashCommand::Effort)));
+        assert!(entries.contains(&("r", SlashCommand::Reload)));
+        assert!(entries.contains(&("c", SlashCommand::Compact)));
+        assert!(entries.contains(&("i", SlashCommand::Id)));
+        assert!(entries.contains(&("rev", SlashCommand::Review)));
+        assert!(entries.contains(&("t", SlashCommand::Title)));
+        assert!(entries.contains(&("rt", SlashCommand::Retitle)));
+        assert!(entries.contains(&("em", SlashCommand::Emoji)));
+    }
+
+    #[test]
     fn fast_command_is_hidden_when_disabled() {
         let mut flags = all_enabled_flags();
         flags.fast_command_enabled = false;
@@ -166,7 +197,9 @@ mod tests {
             commands,
             vec![
                 SlashCommand::Ide,
+                SlashCommand::Id,
                 SlashCommand::Copy,
+                SlashCommand::CopyLastRequest,
                 SlashCommand::Diff,
                 SlashCommand::Mention,
                 SlashCommand::Status,

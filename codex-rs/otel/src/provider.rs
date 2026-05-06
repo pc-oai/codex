@@ -23,6 +23,7 @@ use opentelemetry_otlp::tonic_types::metadata::MetadataMap;
 use opentelemetry_otlp::tonic_types::transport::ClientTlsConfig;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::logs::SdkLoggerProvider;
+use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::runtime;
 use opentelemetry_sdk::trace::BatchSpanProcessor;
@@ -70,19 +71,34 @@ impl OtelProvider {
         let trace_enabled = !matches!(settings.trace_exporter, OtelExporter::None);
 
         let metric_exporter = crate::config::resolve_exporter(&settings.metrics_exporter);
-        let metrics = if matches!(metric_exporter, OtelExporter::None) {
+        let metrics = if matches!(metric_exporter, OtelExporter::None) && !settings.runtime_metrics
+        {
             None
         } else {
             let mut config = MetricsConfig::otlp(
                 settings.environment.clone(),
                 settings.service_name.clone(),
                 settings.service_version.clone(),
-                metric_exporter,
+                metric_exporter.clone(),
             );
             if settings.runtime_metrics {
                 config = config.with_runtime_reader();
             }
-            Some(MetricsClient::new(config)?)
+            let metrics = if matches!(metric_exporter, OtelExporter::None) {
+                let mut config = MetricsConfig::in_memory(
+                    settings.environment.clone(),
+                    settings.service_name.clone(),
+                    settings.service_version.clone(),
+                    InMemoryMetricExporter::default(),
+                );
+                if settings.runtime_metrics {
+                    config = config.with_runtime_reader();
+                }
+                MetricsClient::new(config)?
+            } else {
+                MetricsClient::new(config)?
+            };
+            Some(metrics)
         };
 
         if let Some(metrics) = metrics.as_ref() {
@@ -455,6 +471,24 @@ mod tests {
         assert!(is_trace_safe_target("codex_otel.trace_safe.summary"));
         assert!(!is_trace_safe_target("codex_otel.log_only"));
         assert!(!is_trace_safe_target("codex_otel.network_proxy"));
+    }
+
+    #[test]
+    fn runtime_metrics_create_local_metrics_client_without_exporter() {
+        let mut settings = test_otel_settings();
+        settings.runtime_metrics = true;
+
+        let provider = OtelProvider::from(&settings)
+            .expect("provider construction should succeed")
+            .expect("runtime metrics should keep a provider alive without exporters");
+
+        let metrics = provider
+            .metrics
+            .as_ref()
+            .expect("runtime metrics should create a local metrics client");
+        metrics
+            .snapshot()
+            .expect("runtime metrics should expose a manual snapshot reader");
     }
 
     fn test_otel_settings() -> OtelSettings {

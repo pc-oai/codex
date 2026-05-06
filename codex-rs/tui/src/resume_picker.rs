@@ -1,10 +1,11 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::app_server_session::AppServerSession;
-use crate::diff_render::display_path_for;
+use crate::exec_command::relativize_to_home;
 use crate::key_hint;
 use crate::legacy_core::config::Config;
 use crate::session_resume::resolve_session_thread_id;
@@ -29,6 +30,7 @@ use crossterm::event::KeyModifiers;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
 use ratatui::style::Stylize as _;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -99,8 +101,16 @@ struct PageLoadRequest {
     cursor: Option<PageCursor>,
     request_token: usize,
     search_token: Option<usize>,
+    cwd_filter: Option<PathBuf>,
+    purpose: LoadPurpose,
     provider_filter: ProviderFilter,
     sort_key: ThreadSortKey,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LoadPurpose {
+    Active,
+    WarmAllDirectories,
 }
 
 #[derive(Clone)]
@@ -115,6 +125,7 @@ enum BackgroundEvent {
     PageLoaded {
         request_token: usize,
         search_token: Option<usize>,
+        purpose: LoadPurpose,
         page: std::io::Result<PickerPage>,
     },
 }
@@ -129,6 +140,10 @@ struct PickerPage {
     next_cursor: Option<PageCursor>,
     num_scanned_files: usize,
     reached_scan_cap: bool,
+}
+
+struct WarmAllDirectoriesCache {
+    page: PickerPage,
 }
 
 /// Interactive session picker that lists app-server threads with simple search
@@ -155,9 +170,9 @@ pub async fn run_resume_picker_with_app_server(
 ) -> Result<SessionSelection> {
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
     let is_remote = app_server.is_remote();
-    let cwd_filter = picker_cwd_filter(
+    let scope_cwd_filter = picker_cwd_filter(
         config.cwd.as_path(),
-        show_all,
+        /*show_all*/ false,
         is_remote,
         app_server.remote_cwd_override(),
     );
@@ -165,9 +180,10 @@ pub async fn run_resume_picker_with_app_server(
         tui,
         config,
         show_all,
+        scope_cwd_filter,
         SessionPickerAction::Resume,
         is_remote,
-        spawn_app_server_page_loader(app_server, cwd_filter, include_non_interactive, bg_tx),
+        spawn_app_server_page_loader(app_server, include_non_interactive, bg_tx),
         bg_rx,
     )
     .await
@@ -181,9 +197,9 @@ pub async fn run_fork_picker_with_app_server(
 ) -> Result<SessionSelection> {
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
     let is_remote = app_server.is_remote();
-    let cwd_filter = picker_cwd_filter(
+    let scope_cwd_filter = picker_cwd_filter(
         config.cwd.as_path(),
-        show_all,
+        /*show_all*/ false,
         is_remote,
         app_server.remote_cwd_override(),
     );
@@ -191,11 +207,10 @@ pub async fn run_fork_picker_with_app_server(
         tui,
         config,
         show_all,
+        scope_cwd_filter,
         SessionPickerAction::Fork,
         is_remote,
-        spawn_app_server_page_loader(
-            app_server, cwd_filter, /*include_non_interactive*/ false, bg_tx,
-        ),
+        spawn_app_server_page_loader(app_server, /*include_non_interactive*/ false, bg_tx),
         bg_rx,
     )
     .await
@@ -205,6 +220,7 @@ async fn run_session_picker_with_loader(
     tui: &mut Tui,
     config: &Config,
     show_all: bool,
+    scope_cwd_filter: Option<PathBuf>,
     action: SessionPickerAction,
     is_remote: bool,
     page_loader: PageLoader,
@@ -219,14 +235,12 @@ async fn run_session_picker_with_loader(
     // Remote sessions live in the server's filesystem namespace, so the client
     // process cwd is not a meaningful row filter. Local cwd filtering and explicit
     // remote --cd filtering are handled server-side in thread/list.
-    let filter_cwd = None;
-
     let mut state = PickerState::new(
         alt.tui.frame_requester(),
         page_loader,
         provider_filter,
         show_all,
-        filter_cwd,
+        scope_cwd_filter,
         action,
     );
     state.start_initial_load();
@@ -286,7 +300,6 @@ fn picker_cwd_filter(
 
 fn spawn_app_server_page_loader(
     app_server: AppServerSession,
-    cwd_filter: Option<PathBuf>,
     include_non_interactive: bool,
     bg_tx: mpsc::UnboundedSender<BackgroundEvent>,
 ) -> PageLoader {
@@ -299,7 +312,7 @@ fn spawn_app_server_page_loader(
             let page = load_app_server_page(
                 &mut app_server,
                 cursor,
-                cwd_filter.as_deref(),
+                request.cwd_filter.as_deref(),
                 request.provider_filter,
                 request.sort_key,
                 include_non_interactive,
@@ -308,6 +321,7 @@ fn spawn_app_server_page_loader(
             let _ = bg_tx.send(BackgroundEvent::PageLoaded {
                 request_token: request.request_token,
                 search_token: request.search_token,
+                purpose: request.purpose,
                 page,
             });
         }
@@ -367,7 +381,9 @@ struct PickerState {
     view_rows: Option<usize>,
     provider_filter: ProviderFilter,
     show_all: bool,
-    filter_cwd: Option<PathBuf>,
+    custom_titles_only: bool,
+    scope_cwd_filter: Option<PathBuf>,
+    warm_all_directories: Option<WarmAllDirectoriesCache>,
     action: SessionPickerAction,
     sort_key: ThreadSortKey,
     inline_error: Option<String>,
@@ -460,6 +476,7 @@ struct Row {
     preview: String,
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
+    user_message_count: i64,
     created_at: Option<DateTime<Utc>>,
     updated_at: Option<DateTime<Utc>>,
     cwd: Option<PathBuf>,
@@ -484,6 +501,10 @@ impl Row {
         self.thread_name.as_deref().unwrap_or(&self.preview)
     }
 
+    fn has_custom_title(&self) -> bool {
+        self.thread_name.is_some()
+    }
+
     fn matches_query(&self, query: &str) -> bool {
         if self.preview.to_lowercase().contains(query) {
             return true;
@@ -503,7 +524,7 @@ impl PickerState {
         page_loader: PageLoader,
         provider_filter: ProviderFilter,
         show_all: bool,
-        filter_cwd: Option<PathBuf>,
+        scope_cwd_filter: Option<PathBuf>,
         action: SessionPickerAction,
     ) -> Self {
         Self {
@@ -528,7 +549,9 @@ impl PickerState {
             view_rows: None,
             provider_filter,
             show_all,
-            filter_cwd,
+            custom_titles_only: false,
+            scope_cwd_filter,
+            warm_all_directories: None,
             action,
             sort_key: ThreadSortKey::UpdatedAt,
             inline_error: None,
@@ -546,7 +569,7 @@ impl PickerState {
                 code: KeyCode::Esc, ..
             } => return Ok(Some(SessionSelection::StartFresh)),
             KeyEvent {
-                code: KeyCode::Char('c'),
+                code: KeyCode::Char('c' | 'q' | 'x'),
                 modifiers,
                 ..
             } if modifiers.contains(KeyModifiers::CONTROL) => {
@@ -653,6 +676,20 @@ impl PickerState {
                 self.request_frame();
             }
             KeyEvent {
+                code: KeyCode::Char('t'),
+                modifiers,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.toggle_custom_titles_only();
+            }
+            KeyEvent {
+                code: KeyCode::Char('a'),
+                modifiers,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.toggle_all_directories();
+            }
+            KeyEvent {
                 code: KeyCode::Backspace,
                 ..
             } => {
@@ -707,9 +744,24 @@ impl PickerState {
             cursor: None,
             request_token,
             search_token,
+            cwd_filter: self.current_cwd_filter(),
+            purpose: LoadPurpose::Active,
             provider_filter: self.provider_filter.clone(),
             sort_key: self.sort_key,
         });
+
+        if !self.show_all && self.scope_cwd_filter.is_some() {
+            let request_token = self.allocate_request_token();
+            (self.page_loader)(PageLoadRequest {
+                cursor: None,
+                request_token,
+                search_token: None,
+                cwd_filter: None,
+                purpose: LoadPurpose::WarmAllDirectories,
+                provider_filter: self.provider_filter.clone(),
+                sort_key: self.sort_key,
+            });
+        }
     }
 
     async fn handle_background_event(&mut self, event: BackgroundEvent) -> Result<()> {
@@ -717,8 +769,15 @@ impl PickerState {
             BackgroundEvent::PageLoaded {
                 request_token,
                 search_token,
+                purpose,
                 page,
             } => {
+                if purpose == LoadPurpose::WarmAllDirectories {
+                    if let Ok(page) = page {
+                        self.warm_all_directories = Some(WarmAllDirectoriesCache { page });
+                    }
+                    return Ok(());
+                }
                 let pending = match self.pagination.loading {
                     LoadingState::Pending(pending) => pending,
                     LoadingState::Idle => return Ok(()),
@@ -792,10 +851,13 @@ impl PickerState {
     }
 
     fn row_matches_filter(&self, row: &Row) -> bool {
+        if self.custom_titles_only && !row.has_custom_title() {
+            return false;
+        }
         if self.show_all {
             return true;
         }
-        let Some(filter_cwd) = self.filter_cwd.as_ref() else {
+        let Some(filter_cwd) = self.scope_cwd_filter.as_ref() else {
             return true;
         };
         let Some(row_cwd) = row.cwd.as_ref() else {
@@ -826,6 +888,47 @@ impl PickerState {
         let token = self.allocate_search_token();
         self.search_state = SearchState::Active { token };
         self.load_more_if_needed(LoadTrigger::Search { token });
+    }
+
+    fn toggle_custom_titles_only(&mut self) {
+        self.custom_titles_only = !self.custom_titles_only;
+        self.selected = 0;
+        self.apply_filter();
+        if !self.custom_titles_only || !self.filtered_rows.is_empty() {
+            self.search_state = SearchState::Idle;
+            return;
+        }
+        if self.pagination.reached_scan_cap || self.pagination.next_cursor.is_none() {
+            self.search_state = SearchState::Idle;
+            return;
+        }
+        let token = self.allocate_search_token();
+        self.search_state = SearchState::Active { token };
+        self.load_more_if_needed(LoadTrigger::Search { token });
+    }
+
+    fn toggle_all_directories(&mut self) {
+        self.show_all = !self.show_all;
+        if self.show_all
+            && let Some(cache) = self.warm_all_directories.take()
+        {
+            self.reset_pagination();
+            self.all_rows.clear();
+            self.filtered_rows.clear();
+            self.seen_rows.clear();
+            self.selected = 0;
+            self.ingest_page(cache.page);
+            return;
+        }
+        self.start_initial_load();
+    }
+
+    fn current_cwd_filter(&self) -> Option<PathBuf> {
+        if self.show_all {
+            None
+        } else {
+            self.scope_cwd_filter.clone()
+        }
     }
 
     fn continue_search_if_needed(&mut self) {
@@ -937,6 +1040,8 @@ impl PickerState {
             cursor: Some(cursor),
             request_token,
             search_token,
+            cwd_filter: self.current_cwd_filter(),
+            purpose: LoadPurpose::Active,
             provider_filter: self.provider_filter.clone(),
             sort_key: self.sort_key,
         });
@@ -986,6 +1091,7 @@ fn row_from_app_server_thread(thread: Thread) -> Option<Row> {
         },
         thread_id: Some(thread_id),
         thread_name: thread.name,
+        user_message_count: thread.user_message_count,
         created_at: chrono::DateTime::from_timestamp(thread.created_at, 0)
             .map(|dt| dt.with_timezone(&Utc)),
         updated_at: chrono::DateTime::from_timestamp(thread.updated_at, 0)
@@ -1052,6 +1158,26 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
             "Sort:".dim(),
             " ".into(),
             sort_key_label(state.sort_key).magenta(),
+            if state.custom_titles_only {
+                "  Filter:".dim()
+            } else {
+                "".into()
+            },
+            if state.custom_titles_only {
+                " custom titles".magenta()
+            } else {
+                "".into()
+            },
+            if state.show_all {
+                "  Scope:".dim()
+            } else {
+                "".into()
+            },
+            if state.show_all {
+                " all dirs".magenta()
+            } else {
+                "".into()
+            },
         ]
         .into();
         frame.render_widget_ref(header_line, header);
@@ -1083,6 +1209,12 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
             "    ".dim(),
             key_hint::plain(KeyCode::Tab).into(),
             " to toggle sort ".dim(),
+            "    ".dim(),
+            key_hint::ctrl(KeyCode::Char('t')).into(),
+            " titles only ".dim(),
+            "    ".dim(),
+            key_hint::ctrl(KeyCode::Char('a')).into(),
+            " all dirs ".dim(),
             "    ".dim(),
             key_hint::plain(KeyCode::Up).into(),
             "/".dim(),
@@ -1130,10 +1262,14 @@ fn render_list(
     let visibility = column_visibility(area.width, metrics, state.sort_key);
     let max_created_width = metrics.max_created_width;
     let max_updated_width = metrics.max_updated_width;
+    let max_message_count_width = metrics.max_message_count_width;
     let max_branch_width = metrics.max_branch_width;
     let max_cwd_width = metrics.max_cwd_width;
 
-    for (idx, (row, (created_label, updated_label, branch_label, cwd_label))) in rows[start..end]
+    for (
+        idx,
+        (row, (created_label, updated_label, message_count_label, branch_label, cwd_label)),
+    ) in rows[start..end]
         .iter()
         .zip(labels[start..end].iter())
         .enumerate()
@@ -1142,12 +1278,22 @@ fn render_list(
         let marker = if is_sel { "> ".bold() } else { "  ".into() };
         let marker_width = 2usize;
         let created_span = if visibility.show_created {
-            Some(Span::from(format!("{created_label:<max_created_width$}")).dim())
+            let span = Span::from(format!("{created_label:<max_created_width$}"));
+            Some(if row.has_custom_title() {
+                span
+            } else {
+                span.dim()
+            })
         } else {
             None
         };
         let updated_span = if visibility.show_updated {
-            Some(Span::from(format!("{updated_label:<max_updated_width$}")).dim())
+            let span = Span::from(format!("{updated_label:<max_updated_width$}"));
+            Some(if row.has_custom_title() {
+                span
+            } else {
+                span.dim()
+            })
         } else {
             None
         };
@@ -1177,7 +1323,12 @@ fn render_list(
                 .dim(),
             )
         } else {
-            Some(Span::from(format!("{cwd_label:<max_cwd_width$}")).dim())
+            let span = Span::from(format!("{cwd_label:<max_cwd_width$}"));
+            Some(if row.has_custom_title() {
+                span
+            } else {
+                span.dim()
+            })
         };
 
         let mut preview_width = area.width as usize;
@@ -1188,6 +1339,7 @@ fn render_list(
         if visibility.show_updated {
             preview_width = preview_width.saturating_sub(max_updated_width + 2);
         }
+        preview_width = preview_width.saturating_sub(max_message_count_width + 2);
         if visibility.show_branch {
             preview_width = preview_width.saturating_sub(max_branch_width + 2);
         }
@@ -1201,6 +1353,11 @@ fn render_list(
         if add_leading_gap {
             preview_width = preview_width.saturating_sub(2);
         }
+        let (preview_prefix, preview_width) = if row.has_custom_title() && preview_width >= 2 {
+            (Some("★ "), preview_width.saturating_sub(2))
+        } else {
+            (None, preview_width)
+        };
         let preview = truncate_text(row.display_preview(), preview_width);
         let mut spans: Vec<Span> = vec![marker];
         if let Some(created) = created_span {
@@ -1211,6 +1368,10 @@ fn render_list(
             spans.push(updated);
             spans.push("  ".into());
         }
+        spans.push(Span::from(format!(
+            "{message_count_label:>max_message_count_width$}"
+        )));
+        spans.push("  ".into());
         if let Some(branch) = branch_span {
             spans.push(branch);
             spans.push("  ".into());
@@ -1222,8 +1383,15 @@ fn render_list(
         if add_leading_gap {
             spans.push("  ".into());
         }
+        if let Some(prefix) = preview_prefix {
+            spans.push(prefix.magenta());
+        }
         spans.push(preview.into());
-
+        if row.has_custom_title() {
+            for span in &mut spans {
+                span.style = span.style.add_modifier(Modifier::BOLD);
+            }
+        }
         let line: Line = spans.into();
         let rect = Rect::new(area.x, y, area.width, 1);
         frame.render_widget_ref(line, rect);
@@ -1259,6 +1427,10 @@ fn render_empty_state_line(state: &PickerState) -> Line<'static> {
             return vec!["Loading sessions…".italic().dim()].into();
         }
         return vec!["Loading older sessions…".italic().dim()].into();
+    }
+
+    if state.custom_titles_only {
+        return vec!["No custom-titled sessions".italic().dim()].into();
     }
 
     vec!["No sessions yet".italic().dim()].into()
@@ -1343,6 +1515,13 @@ fn render_column_headers(
         spans.push(Span::from(label).bold());
         spans.push("  ".into());
     }
+    let label = format!(
+        "{text:>width$}",
+        text = "Msgs",
+        width = metrics.max_message_count_width
+    );
+    spans.push(Span::from(label).bold());
+    spans.push("  ".into());
     if visibility.show_branch {
         let label = format!(
             "{text:<width$}",
@@ -1372,10 +1551,11 @@ fn render_column_headers(
 struct ColumnMetrics {
     max_created_width: usize,
     max_updated_width: usize,
+    max_message_count_width: usize,
     max_branch_width: usize,
     max_cwd_width: usize,
-    /// (created_label, updated_label, branch_label, cwd_label) per row.
-    labels: Vec<(String, String, String, String)>,
+    /// (created_label, updated_label, message_count_label, branch_label, cwd_label) per row.
+    labels: Vec<(String, String, String, String, String)>,
 }
 
 /// Determines which columns to render given available terminal width.
@@ -1415,9 +1595,11 @@ fn calculate_column_metrics(
         format!("…{tail}")
     }
 
-    let mut labels: Vec<(String, String, String, String)> = Vec::with_capacity(rows.len());
+    let cwd_labels = cwd_labels_for_rows(rows, include_cwd);
+    let mut labels: Vec<(String, String, String, String, String)> = Vec::with_capacity(rows.len());
     let mut max_created_width = UnicodeWidthStr::width(CREATED_COLUMN_LABEL);
     let mut max_updated_width = UnicodeWidthStr::width(UPDATED_COLUMN_LABEL);
+    let mut max_message_count_width = UnicodeWidthStr::width("Msgs");
     let mut max_branch_width = UnicodeWidthStr::width("Branch");
     let mut max_cwd_width = if include_cwd {
         UnicodeWidthStr::width("CWD")
@@ -1425,35 +1607,89 @@ fn calculate_column_metrics(
         0
     };
 
-    for row in rows {
+    for (row, cwd_raw) in rows.iter().zip(cwd_labels) {
         let created = format_created_label_at(row, reference_now);
         let updated = format_updated_label_at(row, reference_now);
+        let message_count = row.user_message_count.to_string();
         let branch_raw = row.git_branch.clone().unwrap_or_default();
         let branch = right_elide(&branch_raw, /*max*/ 24);
         let cwd = if include_cwd {
-            let cwd_raw = row
-                .cwd
-                .as_ref()
-                .map(|p| display_path_for(p, std::path::Path::new("/")))
-                .unwrap_or_default();
             right_elide(&cwd_raw, /*max*/ 24)
         } else {
             String::new()
         };
         max_created_width = max_created_width.max(UnicodeWidthStr::width(created.as_str()));
         max_updated_width = max_updated_width.max(UnicodeWidthStr::width(updated.as_str()));
+        max_message_count_width =
+            max_message_count_width.max(UnicodeWidthStr::width(message_count.as_str()));
         max_branch_width = max_branch_width.max(UnicodeWidthStr::width(branch.as_str()));
         max_cwd_width = max_cwd_width.max(UnicodeWidthStr::width(cwd.as_str()));
-        labels.push((created, updated, branch, cwd));
+        labels.push((created, updated, message_count, branch, cwd));
     }
 
     ColumnMetrics {
         max_created_width,
         max_updated_width,
+        max_message_count_width,
         max_branch_width,
         max_cwd_width,
         labels,
     }
+}
+
+fn cwd_labels_for_rows(rows: &[Row], include_cwd: bool) -> Vec<String> {
+    if !include_cwd {
+        return vec![String::new(); rows.len()];
+    }
+
+    let mut paths_by_basename: HashMap<String, HashSet<PathBuf>> = HashMap::new();
+    for cwd in rows.iter().filter_map(|row| row.cwd.as_deref()) {
+        let Some(basename) = cwd_basename(cwd) else {
+            continue;
+        };
+        paths_by_basename
+            .entry(basename)
+            .or_default()
+            .insert(cwd.to_path_buf());
+    }
+
+    rows.iter()
+        .map(|row| {
+            let Some(cwd) = row.cwd.as_deref() else {
+                return String::new();
+            };
+            let Some(basename) = cwd_basename(cwd) else {
+                return abbreviated_cwd_path(cwd);
+            };
+            if paths_by_basename
+                .get(&basename)
+                .is_some_and(|paths| paths.len() == 1)
+            {
+                basename
+            } else {
+                abbreviated_cwd_path(cwd)
+            }
+        })
+        .collect()
+}
+
+fn cwd_basename(cwd: &Path) -> Option<String> {
+    cwd.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+}
+
+fn abbreviated_cwd_path(cwd: &Path) -> String {
+    relativize_to_home(cwd)
+        .map(|relative| {
+            if relative.as_os_str().is_empty() {
+                "~".to_string()
+            } else {
+                PathBuf::from_iter([Path::new("~"), relative.as_path()])
+                    .display()
+                    .to_string()
+            }
+        })
+        .unwrap_or_else(|| cwd.display().to_string())
 }
 
 /// Computes which columns fit in the available width.
@@ -1480,6 +1716,7 @@ fn column_visibility(
     if metrics.max_updated_width > 0 {
         preview_width = preview_width.saturating_sub(metrics.max_updated_width + 2);
     }
+    preview_width = preview_width.saturating_sub(metrics.max_message_count_width + 2);
     if show_branch {
         preview_width = preview_width.saturating_sub(metrics.max_branch_width + 2);
     }
@@ -1547,10 +1784,33 @@ mod tests {
             preview: preview.to_string(),
             thread_id: None,
             thread_name: None,
+            user_message_count: 0,
             created_at: Some(timestamp),
             updated_at: Some(timestamp),
             cwd: None,
             git_branch: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn control_q_and_control_x_exit_picker_like_control_c() {
+        for code in [KeyCode::Char('c'), KeyCode::Char('q'), KeyCode::Char('x')] {
+            let loader: PageLoader = Arc::new(|_| {});
+            let mut state = PickerState::new(
+                FrameRequester::test_dummy(),
+                loader,
+                ProviderFilter::MatchDefault(String::from("openai")),
+                /*show_all*/ true,
+                /*filter_cwd*/ None,
+                SessionPickerAction::Resume,
+            );
+
+            let selection = state
+                .handle_key(KeyEvent::new(code, KeyModifiers::CONTROL))
+                .await
+                .expect("exit shortcut should not abort the picker");
+
+            assert!(matches!(selection, Some(SessionSelection::Exit)));
         }
     }
 
@@ -1561,6 +1821,7 @@ mod tests {
             preview: String::from("first message"),
             thread_id: None,
             thread_name: Some(String::from("My session")),
+            user_message_count: 0,
             created_at: None,
             updated_at: None,
             cwd: None,
@@ -1568,6 +1829,40 @@ mod tests {
         };
 
         assert_eq!(row.display_preview(), "My session");
+    }
+
+    #[test]
+    fn row_display_preview_preserves_leading_emoji_cluster() {
+        let row = Row {
+            path: Some(PathBuf::from("/tmp/a.jsonl")),
+            preview: String::from("first message"),
+            thread_id: None,
+            thread_name: Some(String::from("🧪 🧭 🔎 My session")),
+            user_message_count: 0,
+            created_at: None,
+            updated_at: None,
+            cwd: None,
+            git_branch: None,
+        };
+
+        assert_eq!(row.display_preview(), "🧪 🧭 🔎 My session");
+    }
+
+    #[test]
+    fn row_with_thread_name_is_custom_titled() {
+        let row = Row {
+            path: Some(PathBuf::from("/tmp/a.jsonl")),
+            preview: String::from("first message"),
+            thread_id: None,
+            thread_name: Some(String::from("My session")),
+            user_message_count: 0,
+            created_at: None,
+            updated_at: None,
+            cwd: None,
+            git_branch: None,
+        };
+
+        assert!(row.has_custom_title());
     }
 
     #[test]
@@ -1645,6 +1940,7 @@ mod tests {
             preview: String::from("remote session"),
             thread_id: Some(ThreadId::new()),
             thread_name: None,
+            user_message_count: 0,
             created_at: None,
             updated_at: None,
             cwd: Some(PathBuf::from("/srv/remote-project")),
@@ -1652,6 +1948,106 @@ mod tests {
         };
 
         assert!(state.row_matches_filter(&row));
+    }
+
+    #[test]
+    fn cwd_labels_use_unique_basenames_when_possible() {
+        let rows = vec![
+            Row {
+                path: None,
+                preview: String::new(),
+                thread_id: None,
+                thread_name: None,
+                user_message_count: 0,
+                created_at: None,
+                updated_at: None,
+                cwd: Some(PathBuf::from("/Users/pc/code/codex")),
+                git_branch: None,
+            },
+            Row {
+                path: None,
+                preview: String::new(),
+                thread_id: None,
+                thread_name: None,
+                user_message_count: 0,
+                created_at: None,
+                updated_at: None,
+                cwd: Some(PathBuf::from("/tmp/other-project")),
+                git_branch: None,
+            },
+        ];
+
+        assert_eq!(
+            cwd_labels_for_rows(&rows, /*include_cwd*/ true),
+            vec![String::from("codex"), String::from("other-project")]
+        );
+    }
+
+    #[test]
+    fn cwd_labels_keep_repeated_same_directory_short() {
+        let rows = vec![
+            Row {
+                path: None,
+                preview: String::new(),
+                thread_id: None,
+                thread_name: None,
+                user_message_count: 0,
+                created_at: None,
+                updated_at: None,
+                cwd: Some(PathBuf::from("/Users/pc/code/codex")),
+                git_branch: None,
+            },
+            Row {
+                path: None,
+                preview: String::new(),
+                thread_id: None,
+                thread_name: None,
+                user_message_count: 0,
+                created_at: None,
+                updated_at: None,
+                cwd: Some(PathBuf::from("/Users/pc/code/codex")),
+                git_branch: None,
+            },
+        ];
+
+        assert_eq!(
+            cwd_labels_for_rows(&rows, /*include_cwd*/ true),
+            vec![String::from("codex"), String::from("codex")]
+        );
+    }
+
+    #[test]
+    fn cwd_labels_expand_duplicate_basenames_and_tilde_abbreviate_home() {
+        let home = dirs::home_dir().expect("home directory should be available");
+        let rows = vec![
+            Row {
+                path: None,
+                preview: String::new(),
+                thread_id: None,
+                thread_name: None,
+                user_message_count: 0,
+                created_at: None,
+                updated_at: None,
+                cwd: Some(home.join("code/codex")),
+                git_branch: None,
+            },
+            Row {
+                path: None,
+                preview: String::new(),
+                thread_id: None,
+                thread_name: None,
+                user_message_count: 0,
+                created_at: None,
+                updated_at: None,
+                cwd: Some(PathBuf::from("/tmp/codex")),
+                git_branch: None,
+            },
+        ];
+
+        assert_eq!(
+            cwd_labels_for_rows(&rows, /*include_cwd*/ true),
+            vec![String::from("~/code/codex"), String::from("/tmp/codex")]
+        );
     }
 
     #[test]
@@ -1678,6 +2074,7 @@ mod tests {
                 preview: String::from("Fix resume picker timestamps"),
                 thread_id: None,
                 thread_name: None,
+                user_message_count: 0,
                 created_at: Some(now - Duration::minutes(16)),
                 updated_at: Some(now - Duration::seconds(42)),
                 cwd: None,
@@ -1687,7 +2084,8 @@ mod tests {
                 path: Some(PathBuf::from("/tmp/b.jsonl")),
                 preview: String::from("Investigate lazy pagination cap"),
                 thread_id: None,
-                thread_name: None,
+                thread_name: Some(String::from("Resume picker cleanup")),
+                user_message_count: 12,
                 created_at: Some(now - Duration::hours(1)),
                 updated_at: Some(now - Duration::minutes(35)),
                 cwd: None,
@@ -1698,6 +2096,7 @@ mod tests {
                 preview: String::from("Explain the codebase"),
                 thread_id: None,
                 thread_name: None,
+                user_message_count: 0,
                 created_at: Some(now - Duration::hours(2)),
                 updated_at: Some(now - Duration::hours(2)),
                 cwd: None,
@@ -1863,6 +2262,7 @@ mod tests {
         let metrics = ColumnMetrics {
             max_created_width: 8,
             max_updated_width: 12,
+            max_message_count_width: 4,
             max_branch_width: 0,
             max_cwd_width: 0,
             labels: Vec::new(),
@@ -1890,7 +2290,7 @@ mod tests {
             }
         );
 
-        let wide = column_visibility(/*area_width*/ 40, &metrics, ThreadSortKey::CreatedAt);
+        let wide = column_visibility(/*area_width*/ 46, &metrics, ThreadSortKey::CreatedAt);
         assert_eq!(
             wide,
             ColumnVisibility {
@@ -2000,6 +2400,7 @@ mod tests {
             preview: String::from("missing metadata"),
             thread_id: None,
             thread_name: None,
+            user_message_count: 0,
             created_at: None,
             updated_at: None,
             cwd: None,
@@ -2039,6 +2440,7 @@ mod tests {
             preview: String::from("pathless thread"),
             thread_id: Some(thread_id),
             thread_name: None,
+            user_message_count: 0,
             created_at: None,
             updated_at: None,
             cwd: None,
@@ -2081,6 +2483,7 @@ mod tests {
             agent_role: None,
             git_info: None,
             name: Some(String::from("Named thread")),
+            user_message_count: 0,
             turns: Vec::new(),
         };
 
@@ -2171,6 +2574,7 @@ mod tests {
 
         state
             .handle_background_event(BackgroundEvent::PageLoaded {
+                purpose: LoadPurpose::Active,
                 request_token: first_request.request_token,
                 search_token: first_request.search_token,
                 page: Ok(page(
@@ -2193,6 +2597,7 @@ mod tests {
 
         state
             .handle_background_event(BackgroundEvent::PageLoaded {
+                purpose: LoadPurpose::Active,
                 request_token: second_request.request_token,
                 search_token: second_request.search_token,
                 page: Ok(page(
@@ -2222,6 +2627,7 @@ mod tests {
 
         state
             .handle_background_event(BackgroundEvent::PageLoaded {
+                purpose: LoadPurpose::Active,
                 request_token: second_request.request_token,
                 search_token: second_request.search_token,
                 page: Ok(page(
@@ -2237,6 +2643,7 @@ mod tests {
 
         state
             .handle_background_event(BackgroundEvent::PageLoaded {
+                purpose: LoadPurpose::Active,
                 request_token: active_request.request_token,
                 search_token: active_request.search_token,
                 page: Ok(page(
@@ -2252,5 +2659,101 @@ mod tests {
         assert!(state.filtered_rows.is_empty());
         assert!(!state.search_state.is_active());
         assert!(state.pagination.reached_scan_cap);
+    }
+
+    #[tokio::test]
+    async fn toggle_custom_titles_only_loads_until_named_thread_is_found() {
+        let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let request_sink = recorded_requests.clone();
+        let loader: PageLoader = Arc::new(move |req: PageLoadRequest| {
+            request_sink.lock().unwrap().push(req);
+        });
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*scope_cwd_filter*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.reset_pagination();
+        state.ingest_page(page(
+            vec![make_row(
+                "/tmp/start.jsonl",
+                "2025-01-01T00:00:00Z",
+                "alpha",
+            )],
+            Some("2025-01-02T00:00:00Z"),
+            /*num_scanned_files*/ 1,
+            /*reached_scan_cap*/ false,
+        ));
+        recorded_requests.lock().unwrap().clear();
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL))
+            .await
+            .unwrap();
+
+        let request = {
+            let guard = recorded_requests.lock().unwrap();
+            assert_eq!(guard.len(), 1);
+            guard[0].clone()
+        };
+        assert!(state.custom_titles_only);
+        assert!(state.search_state.is_active());
+        assert!(state.filtered_rows.is_empty());
+
+        let mut named_row = make_row("/tmp/named.jsonl", "2025-01-02T00:00:00Z", "beta");
+        named_row.thread_name = Some(String::from("Named session"));
+        state
+            .handle_background_event(BackgroundEvent::PageLoaded {
+                purpose: LoadPurpose::Active,
+                request_token: request.request_token,
+                search_token: request.search_token,
+                page: Ok(page(
+                    vec![named_row],
+                    Some("2025-01-03T00:00:00Z"),
+                    /*num_scanned_files*/ 1,
+                    /*reached_scan_cap*/ false,
+                )),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(state.filtered_rows.len(), 1);
+        assert_eq!(state.filtered_rows[0].display_preview(), "Named session");
+        assert!(!state.search_state.is_active());
+    }
+
+    #[tokio::test]
+    async fn toggle_all_directories_reloads_without_cwd_filter() {
+        let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let request_sink = recorded_requests.clone();
+        let loader: PageLoader = Arc::new(move |req: PageLoadRequest| {
+            request_sink.lock().unwrap().push(req);
+        });
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ false,
+            Some(PathBuf::from("/repo/current")),
+            SessionPickerAction::Resume,
+        );
+
+        state.start_initial_load();
+        assert_eq!(
+            recorded_requests.lock().unwrap()[0].cwd_filter,
+            Some(PathBuf::from("/repo/current"))
+        );
+        recorded_requests.lock().unwrap().clear();
+
+        state
+            .handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL))
+            .await
+            .unwrap();
+
+        assert!(state.show_all);
+        assert_eq!(recorded_requests.lock().unwrap()[0].cwd_filter, None);
     }
 }

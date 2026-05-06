@@ -1,3 +1,6 @@
+use super::slash_dispatch::EMOJI_PROMPT;
+use super::slash_dispatch::EMOJI_WITH_TITLE_PROMPT;
+use super::slash_dispatch::RETITLE_PROMPT;
 use super::*;
 use pretty_assertions::assert_eq;
 
@@ -1030,6 +1033,97 @@ async fn slash_rename_without_existing_thread_name_starts_empty() {
 }
 
 #[tokio::test]
+async fn slash_retitle_requests_out_of_band_suggestion() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.thread_name = Some("🧭 🗂️ Old title".to_string());
+
+    chat.dispatch_command(SlashCommand::Retitle);
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::GenerateThreadNameSuggestion {
+            parent_thread_id,
+            kind: crate::thread_name_suggestion::ThreadNameSuggestionKind::Retitle,
+            prompt,
+            current_name,
+        }) if parent_thread_id == thread_id
+            && prompt == RETITLE_PROMPT
+            && current_name.as_deref() == Some("🧭 🗂️ Old title")
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn slash_emoji_requests_emoji_only_when_title_exists() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.thread_name = Some("🧭 🗂️ Existing title".to_string());
+
+    chat.dispatch_command(SlashCommand::Emoji);
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::GenerateThreadNameSuggestion {
+            parent_thread_id,
+            kind: crate::thread_name_suggestion::ThreadNameSuggestionKind::Emoji,
+            prompt,
+            current_name,
+        }) if parent_thread_id == thread_id
+            && prompt == EMOJI_PROMPT
+            && current_name.as_deref() == Some("🧭 🗂️ Existing title")
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn slash_emoji_requests_full_title_when_thread_has_no_custom_name() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+
+    chat.dispatch_command(SlashCommand::Emoji);
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::GenerateThreadNameSuggestion {
+            parent_thread_id,
+            kind: crate::thread_name_suggestion::ThreadNameSuggestionKind::EmojiWithTitle,
+            prompt,
+            current_name,
+        }) if parent_thread_id == thread_id
+            && prompt == EMOJI_WITH_TITLE_PROMPT
+            && current_name.is_none()
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn slash_emoji_requests_full_title_for_placeholder_title() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.thread_name = Some("🔄🩺 Untitled session".to_string());
+
+    chat.dispatch_command(SlashCommand::Emoji);
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::GenerateThreadNameSuggestion {
+            parent_thread_id,
+            kind: crate::thread_name_suggestion::ThreadNameSuggestionKind::EmojiWithTitle,
+            prompt,
+            current_name,
+        }) if parent_thread_id == thread_id
+            && prompt == EMOJI_WITH_TITLE_PROMPT
+            && current_name.as_deref() == Some("🔄🩺 Untitled session")
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
 async fn usage_error_slash_command_is_available_from_local_recall() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     chat.set_feature_enabled(Feature::FastMode, /*enabled*/ true);
@@ -1120,6 +1214,15 @@ async fn slash_quit_requests_exit() {
 }
 
 #[tokio::test]
+async fn slash_delete_requests_session_deletion_and_exit() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Delete);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::DeleteCurrentSessionAndExit));
+}
+
+#[tokio::test]
 async fn slash_logout_requests_app_server_logout() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -1179,6 +1282,101 @@ async fn slash_copy_reports_when_no_agent_response_exists() {
     assert!(
         rendered.contains("No agent response to copy"),
         "expected no-output message, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn slash_effort_opens_current_model_reasoning_popup() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.dispatch_command(SlashCommand::Effort);
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(
+        popup.contains("Select Reasoning Level for gpt-5.4"),
+        "expected /effort to open the current model's reasoning picker, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn slash_id_copies_current_thread_id() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+
+    chat.copy_thread_id_with(|copied| {
+        assert_eq!(copied, thread_id.to_string());
+        Ok(Some(crate::clipboard_copy::ClipboardLease::test()))
+    });
+
+    assert!(chat.clipboard_lease.is_some());
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one success message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains(&format!("Copied thread ID to clipboard ({thread_id})")),
+        "expected copied-ID message, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn slash_id_reports_before_thread_exists() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Id);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one availability error");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Thread ID is unavailable before the session starts."),
+        "expected missing-thread message, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn slash_copy_last_request_requests_app_copy() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::CopyLastRequest);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::CopyLastRequest));
+}
+
+#[tokio::test]
+async fn copy_last_user_request_text_copies_request() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.copy_last_user_request_text_with(Some("please do the thing".to_string()), |request| {
+        assert_eq!(request, "please do the thing");
+        Ok(Some(crate::clipboard_copy::ClipboardLease::test()))
+    });
+
+    assert!(chat.clipboard_lease.is_some());
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one success message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Copied last request to clipboard"),
+        "expected copied-request message, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn recent_agent_markdowns_returns_newest_copyable_responses_first() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.record_visible_user_turn_for_copy();
+    chat.record_agent_markdown("first response");
+    chat.record_visible_user_turn_for_copy();
+    chat.record_agent_markdown("second response");
+    chat.record_visible_user_turn_for_copy();
+    chat.record_agent_markdown("third response");
+
+    assert_eq!(
+        chat.recent_agent_markdowns(2),
+        vec!["third response".to_string(), "second response".to_string()]
     );
 }
 
@@ -1722,6 +1920,31 @@ async fn slash_resume_opens_picker() {
     chat.dispatch_command(SlashCommand::Resume);
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::OpenResumePicker));
+}
+
+#[tokio::test]
+async fn slash_reload_requests_current_session_restart_when_thread_exists() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.dispatch_command(SlashCommand::Reload);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ReloadCurrentSession));
+}
+
+#[tokio::test]
+async fn slash_reload_requires_a_started_session() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Reload);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one reload availability error");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("'/reload' is unavailable before the session starts."),
+        "expected reload availability error, got {rendered:?}"
+    );
 }
 
 #[tokio::test]

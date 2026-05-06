@@ -227,6 +227,8 @@ pub struct StoredThread {
     pub token_usage: Option<TokenUsage>,
     /// First user message observed for this thread, if any.
     pub first_user_message: Option<String>,
+    /// Number of user messages observed in the thread.
+    pub user_message_count: i64,
     /// Persisted history, populated only when requested.
     pub history: Option<StoredThreadHistory>,
 }
@@ -271,5 +273,12 @@ pub struct UpdateThreadMetadataParams {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArchiveThreadParams {
     /// Thread id to archive or unarchive.
+    pub thread_id: ThreadId,
+}
+
+/// Parameters for deleting a thread.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeleteThreadParams {
+    /// Thread id to delete.
     pub thread_id: ThreadId,
 }

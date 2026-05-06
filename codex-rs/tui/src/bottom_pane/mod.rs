@@ -69,6 +69,7 @@ pub(crate) use mcp_server_elicitation::McpServerElicitationFormRequest;
 pub(crate) use mcp_server_elicitation::McpServerElicitationOverlay;
 pub(crate) use request_user_input::RequestUserInputOverlay;
 pub(crate) use status_line_style::status_line_from_segments;
+pub(crate) use status_line_style::status_line_from_segments_with_muting;
 mod bottom_pane_view;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -963,6 +964,11 @@ impl BottomPane {
         self.composer.status_line_text()
     }
 
+    #[cfg(test)]
+    pub(crate) fn status_line_right_text(&self) -> Option<String> {
+        self.composer.status_line_right_text()
+    }
+
     pub(crate) fn show_esc_backtrack_hint(&mut self) {
         self.esc_backtrack_hint = true;
         self.composer.set_esc_backtrack_hint(/*show*/ true);
@@ -1578,6 +1584,12 @@ impl BottomPane {
 
     pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) {
         if self.composer.set_status_line(status_line) {
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn set_status_line_right(&mut self, status_line: Option<Line<'static>>) {
+        if self.composer.set_status_line_right(status_line) {
             self.request_redraw();
         }
     }

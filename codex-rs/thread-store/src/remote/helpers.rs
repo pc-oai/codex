@@ -318,6 +318,7 @@ pub(super) fn stored_thread_from_proto(
             .map(|json| deserialize_json(json, "token_usage"))
             .transpose()?,
         first_user_message: thread.first_user_message,
+        user_message_count: 0,
         history: thread
             .history
             .map(stored_thread_history_from_proto)

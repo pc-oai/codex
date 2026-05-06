@@ -5,6 +5,7 @@ use std::any::Any;
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
 use crate::CreateThreadParams;
+use crate::DeleteThreadParams;
 use crate::ListThreadsParams;
 use crate::LoadThreadHistoryParams;
 use crate::ReadThreadByRolloutPathParams;
@@ -75,6 +76,9 @@ pub trait ThreadStore: Any + Send + Sync {
 
     /// Archives a thread.
     async fn archive_thread(&self, params: ArchiveThreadParams) -> ThreadStoreResult<()>;
+
+    /// Deletes a thread and its persisted history.
+    async fn delete_thread(&self, params: DeleteThreadParams) -> ThreadStoreResult<()>;
 
     /// Unarchives a thread and returns its updated metadata.
     async fn unarchive_thread(

@@ -549,10 +549,12 @@ fn config_toml_deserializes_model_availability_nux() {
             notification_settings: TuiNotificationSettings::default(),
             animations: true,
             show_tooltips: true,
+            compact_session_header: false,
             vim_mode_default: false,
             alternate_screen: AltScreenMode::default(),
             status_line: None,
             status_line_use_colors: true,
+            context_used_style: Default::default(),
             terminal_title: None,
             theme: None,
             keymap: TuiKeymap::default(),
@@ -2125,10 +2127,12 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             notification_settings: TuiNotificationSettings::default(),
             animations: true,
             show_tooltips: true,
+            compact_session_header: false,
             vim_mode_default: false,
             alternate_screen: AltScreenMode::Auto,
             status_line: None,
             status_line_use_colors: true,
+            context_used_style: Default::default(),
             terminal_title: None,
             theme: None,
             keymap: TuiKeymap::default(),
@@ -3478,6 +3482,24 @@ async fn load_global_mcp_servers_returns_empty_if_missing() -> anyhow::Result<()
     let servers = load_global_mcp_servers(codex_home.path()).await?;
     assert!(servers.is_empty());
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_can_disable_inherited_mcp_servers() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        "[mcp_servers.docs]\ncommand = \"echo\"\n",
+    )?;
+
+    let config = Config::load_default_with_cli_overrides_for_codex_home(
+        codex_home.path().to_path_buf(),
+        vec![("mcp_servers_enabled".to_string(), TomlValue::Boolean(false))],
+    )
+    .await?;
+
+    assert!(config.mcp_servers.get().is_empty());
     Ok(())
 }
 
@@ -6451,6 +6473,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
+            compact_session_header: false,
             tui_vim_mode_default: false,
             tui_keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
@@ -6461,6 +6484,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
             tui_status_line_use_colors: true,
+            tui_context_used_style: Default::default(),
             tui_terminal_title: None,
             tui_theme: None,
             tui_timing: None,
@@ -6654,6 +6678,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         tui_notifications: Default::default(),
         animations: true,
         show_tooltips: true,
+        compact_session_header: false,
         tui_vim_mode_default: false,
         tui_keymap: TuiKeymap::default(),
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
@@ -6664,6 +6689,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
         tui_status_line_use_colors: true,
+        tui_context_used_style: Default::default(),
         tui_terminal_title: None,
         tui_theme: None,
         tui_timing: None,
@@ -6811,6 +6837,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         tui_notifications: Default::default(),
         animations: true,
         show_tooltips: true,
+        compact_session_header: false,
         tui_vim_mode_default: false,
         tui_keymap: TuiKeymap::default(),
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
@@ -6821,6 +6848,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
         tui_status_line_use_colors: true,
+        tui_context_used_style: Default::default(),
         tui_terminal_title: None,
         tui_theme: None,
         tui_timing: None,
@@ -6953,6 +6981,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         tui_notifications: Default::default(),
         animations: true,
         show_tooltips: true,
+        compact_session_header: false,
         tui_vim_mode_default: false,
         tui_keymap: TuiKeymap::default(),
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
@@ -6963,6 +6992,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
         tui_status_line_use_colors: true,
+        tui_context_used_style: Default::default(),
         tui_terminal_title: None,
         tui_theme: None,
         tui_timing: None,

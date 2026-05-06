@@ -4,9 +4,11 @@
 //! behavior easier to review without paging through the rest of `chatwidget.rs`.
 
 use super::*;
-use crate::bottom_pane::status_line_from_segments;
+use crate::bottom_pane::status_line_from_segments_with_muting;
 use crate::branch_summary;
 use crate::status::format_tokens_compact;
+use crate::version::local_build_label;
+use codex_config::types::TuiContextUsedStyle;
 
 /// Items shown in the terminal title when the user has not configured a
 /// custom selection. Intentionally minimal: activity indicator + project name.
@@ -163,23 +165,49 @@ impl ChatWidget {
     }
 
     fn refresh_status_line_from_selections(&mut self, selections: &StatusSurfaceSelections) {
-        let enabled = !selections.status_line_items.is_empty();
+        let mcp_startup_progress = self.mcp_startup_progress_label();
+        let local_build_label = local_build_label();
+        let enabled = !selections.status_line_items.is_empty()
+            || mcp_startup_progress.is_some()
+            || local_build_label.is_some();
         self.bottom_pane.set_status_line_enabled(enabled);
         if !enabled {
             self.set_status_line(/*status_line*/ None);
+            self.set_status_line_right(/*status_line*/ None);
             self.set_status_line_hyperlink(/*url*/ None);
             return;
         }
 
-        let mut segments = Vec::new();
+        let mut left_segments = Vec::new();
+        let mut right_segments = Vec::new();
+        if let Some(value) = local_build_label {
+            right_segments.push((StatusLineItem::CodexVersion, value, /*muted*/ false));
+        }
         for item in &selections.status_line_items {
-            if let Some(value) = self.status_line_value_for_item(*item) {
-                segments.push((*item, value));
+            let value = if *item == StatusLineItem::Timing {
+                self.status_line_timing_value()
+            } else {
+                self.status_line_value_for_item(*item)
+                    .map(|value| (value, /*muted*/ false))
+            };
+            if let Some((value, muted)) = value {
+                if matches!(*item, StatusLineItem::Timing | StatusLineItem::ContextUsed) {
+                    right_segments.push((*item, value, muted));
+                } else {
+                    left_segments.push((*item, value, muted));
+                }
             }
         }
+        if let Some(value) = mcp_startup_progress {
+            right_segments.push((StatusLineItem::TaskProgress, value, /*muted*/ false));
+        }
 
-        self.set_status_line(status_line_from_segments(
-            segments,
+        self.set_status_line(status_line_from_segments_with_muting(
+            left_segments,
+            self.config.tui_status_line_use_colors,
+        ));
+        self.set_status_line_right(status_line_from_segments_with_muting(
+            right_segments,
             self.config.tui_status_line_use_colors,
         ));
         let hyperlink_url = selections
@@ -296,8 +324,7 @@ impl ChatWidget {
             return Some(self.action_required_terminal_title_text(selections, now));
         }
 
-        let mut previous = None;
-        let title = selections
+        let mut segments = selections
             .terminal_title_items
             .iter()
             .copied()
@@ -305,6 +332,22 @@ impl ChatWidget {
                 self.terminal_title_value_for_item(item, now)
                     .map(|value| (item, value))
             })
+            .collect::<Vec<_>>();
+        if selections
+            .terminal_title_items
+            .contains(&TerminalTitleItem::Thread)
+            && let Some(emoji) = self.leading_thread_title_emoji()
+        {
+            let insert_at = usize::from(
+                segments
+                    .first()
+                    .is_some_and(|(item, _)| *item == TerminalTitleItem::Spinner),
+            );
+            segments.insert(insert_at, (TerminalTitleItem::Thread, emoji));
+        }
+        let mut previous = None;
+        let title = segments
+            .into_iter()
             .fold(String::new(), |mut title, (item, value)| {
                 title.push_str(item.separator_from_previous(previous));
                 title.push_str(&value);
@@ -339,6 +382,13 @@ impl ChatWidget {
         } else {
             TERMINAL_TITLE_ACTION_REQUIRED_PREFIX_HIDDEN
         }
+    }
+
+    fn leading_thread_title_emoji(&self) -> Option<String> {
+        self.thread_name
+            .as_deref()
+            .and_then(|title| split_leading_emoji(title.trim()))
+            .map(|(emoji, _)| emoji)
     }
 
     fn terminal_title_shows_action_required_with_selections(
@@ -604,7 +654,7 @@ impl ChatWidget {
                 .map(|remaining| format!("Context {remaining}% left")),
             StatusLineItem::ContextUsed => self
                 .status_line_context_used_percent()
-                .map(|used| format!("Context {used}% used")),
+                .map(|used| format_context_used(used, self.config.tui_context_used_style)),
             StatusLineItem::FiveHourLimit => {
                 let window = self
                     .rate_limit_snapshots_by_limit_id
@@ -628,6 +678,7 @@ impl ChatWidget {
                 self.status_line_limit_display(window, &label)
             }
             StatusLineItem::CodexVersion => Some(CODEX_CLI_VERSION.to_string()),
+            StatusLineItem::Server => Some(self.config.model_provider_id.clone()),
             StatusLineItem::ContextWindowSize => self
                 .status_line_context_window_size()
                 .map(|cws| format!("{} window", format_tokens_compact(cws))),
@@ -652,7 +703,47 @@ impl ChatWidget {
                 (!trimmed.is_empty()).then(|| trimmed.to_string())
             }),
             StatusLineItem::TaskProgress => self.terminal_title_task_progress(),
+            StatusLineItem::Timing => self.config.tui_timing.as_ref().and_then(|config| {
+                crate::history_cell::compact_runtime_metrics_label(
+                    self.turn_runtime_metrics,
+                    config,
+                )
+            }),
         }
+    }
+
+    fn status_line_timing_value(&self) -> Option<(String, bool)> {
+        let config = self.config.tui_timing.as_ref()?;
+        crate::history_cell::compact_runtime_metrics_label(self.turn_runtime_metrics, config)
+            .map(|value| (value, /*muted*/ false))
+            .or_else(|| {
+                self.last_turn_runtime_metrics.and_then(|summary| {
+                    crate::history_cell::compact_runtime_metrics_label(summary, config)
+                        .map(|value| (value, /*muted*/ true))
+                })
+            })
+    }
+
+    fn mcp_startup_progress_label(&self) -> Option<String> {
+        let current = self.mcp_startup_status.as_ref()?;
+        if current.is_empty() {
+            return None;
+        }
+
+        let total = self
+            .mcp_startup_expected_servers
+            .as_ref()
+            .map_or(current.len(), HashSet::len)
+            .max(current.len());
+        if total == 0 {
+            return None;
+        }
+
+        let completed = current
+            .values()
+            .filter(|state| !matches!(state, McpStartupStatus::Starting))
+            .count();
+        Some(format!("MCP: {completed}/{total}"))
     }
 
     fn status_line_pull_request_url(&self) -> Option<String> {
@@ -682,6 +773,7 @@ impl ChatWidget {
             StatusSurfacePreviewItem::FiveHourLimit => StatusLineItem::FiveHourLimit,
             StatusSurfacePreviewItem::WeeklyLimit => StatusLineItem::WeeklyLimit,
             StatusSurfacePreviewItem::CodexVersion => StatusLineItem::CodexVersion,
+            StatusSurfacePreviewItem::Server => StatusLineItem::Server,
             StatusSurfacePreviewItem::ContextWindowSize => StatusLineItem::ContextWindowSize,
             StatusSurfacePreviewItem::UsedTokens => StatusLineItem::UsedTokens,
             StatusSurfacePreviewItem::TotalInputTokens => StatusLineItem::TotalInputTokens,
@@ -690,6 +782,7 @@ impl ChatWidget {
             StatusSurfacePreviewItem::FastMode => StatusLineItem::FastMode,
             StatusSurfacePreviewItem::Model => StatusLineItem::ModelName,
             StatusSurfacePreviewItem::ModelWithReasoning => StatusLineItem::ModelWithReasoning,
+            StatusSurfacePreviewItem::Timing => StatusLineItem::Timing,
         };
         self.status_line_value_for_item(status_line_item)
     }
@@ -712,7 +805,7 @@ impl ChatWidget {
             TerminalTitleItem::Spinner => self.terminal_title_spinner_text_at(now),
             TerminalTitleItem::Status => Some(self.run_state_status_text()),
             TerminalTitleItem::Thread => self.thread_name.as_ref().and_then(|name| {
-                let trimmed = name.trim();
+                let trimmed = thread_title_without_leading_emoji(name);
                 if trimmed.is_empty() {
                     None
                 } else {
@@ -885,6 +978,76 @@ impl ChatWidget {
         let mut truncated = head.graphemes(true).take(max_chars - 3).collect::<String>();
         truncated.push_str("...");
         truncated
+    }
+}
+
+fn thread_title_without_leading_emoji(title: &str) -> &str {
+    let trimmed = title.trim();
+    if let Some((_emoji, rest)) = split_leading_emoji(trimmed) {
+        rest.trim_start()
+    } else {
+        trimmed
+    }
+}
+
+fn split_leading_emoji(title: &str) -> Option<(String, &str)> {
+    let graphemes = title.grapheme_indices(true).collect::<Vec<_>>();
+    let mut pos = 0usize;
+    let mut emoji_count = 0usize;
+    let mut prefix_end = 0usize;
+
+    while emoji_count < 3
+        && let Some(&(idx, grapheme)) = graphemes.get(pos)
+        && grapheme.chars().any(is_emoji_like)
+    {
+        emoji_count += 1;
+        prefix_end = idx + grapheme.len();
+        pos += 1;
+
+        let mut next_non_whitespace = pos;
+        while graphemes
+            .get(next_non_whitespace)
+            .is_some_and(|(_, grapheme)| grapheme.chars().all(char::is_whitespace))
+        {
+            next_non_whitespace += 1;
+        }
+        if graphemes
+            .get(next_non_whitespace)
+            .is_some_and(|(_, grapheme)| grapheme.chars().any(is_emoji_like))
+        {
+            pos = next_non_whitespace;
+        } else {
+            break;
+        }
+    }
+
+    (emoji_count > 0).then_some((title[..prefix_end].to_string(), &title[prefix_end..]))
+}
+
+fn is_emoji_like(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{1F000}'..='\u{1FAFF}'
+            | '\u{2600}'..='\u{27BF}'
+            | '\u{FE0F}'
+    )
+}
+
+fn format_context_used(used: i64, style: TuiContextUsedStyle) -> String {
+    let used = used.clamp(0, 100);
+    let filled = ((used + 19) / 20) as usize;
+    let empty = 5usize.saturating_sub(filled);
+    match style {
+        TuiContextUsedStyle::Percent => format!("{used}% used"),
+        TuiContextUsedStyle::Blocks => {
+            format!("{}{} {used}% used", "▰".repeat(filled), "▱".repeat(empty))
+        }
+        TuiContextUsedStyle::SolidBlocks => {
+            format!("{}{} {used}% used", "█".repeat(filled), "░".repeat(empty))
+        }
+        TuiContextUsedStyle::Ascii => {
+            format!("[{}{}] {used}% used", "=".repeat(filled), ".".repeat(empty))
+        }
     }
 }
 

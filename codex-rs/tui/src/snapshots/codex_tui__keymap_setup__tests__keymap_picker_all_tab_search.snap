@@ -1,5 +1,6 @@
 ---
 source: tui/src/keymap_setup.rs
+assertion_line: 1195
 expression: snapshot
 ---
 Open Transcript | ctrl-t | Global open_transcript Open Transcript Open the transcript overlay. ctrl-t Default
@@ -9,8 +10,8 @@ Clear Terminal | ctrl-l | Global clear_terminal Clear Terminal Clear the termina
 Toggle Vim Mode | unbound | Global toggle_vim_mode Toggle Vim Mode Turn Vim composer mode on or off. unbound Default
 Decrease Reasoning Effort | alt-, | Chat decrease_reasoning_effort Decrease Reasoning Effort Decrease reasoning effort. alt-, Default
 Increase Reasoning Effort | alt-. | Chat increase_reasoning_effort Increase Reasoning Effort Increase reasoning effort. alt-. Default
-Edit Queued Message | alt-up, shift-left | Chat edit_queued_message Edit Queued Message Edit the most recently queued message. alt-up, shift-left Default
+Edit Queued Message | alt-up, ctrl-e, shift-left | Chat edit_queued_message Edit Queued Message Edit the most recently queued message. alt-up, ctrl-e, shift-left Default
+Steer Queued Message | alt-down, shift-right | Chat steer_queued_message Steer Queued Message Steer the most recently queued message now. alt-down, shift-right Default
 Submit | enter | Composer submit Submit Submit the current composer draft. enter Default
 Queue | tab | Composer queue Queue Queue the draft while a task is running. tab Default
 Toggle Shortcuts | ?, shift-? | Composer toggle_shortcuts Toggle Shortcuts Show or hide the composer shortcut overlay. ?, shift-? Default
-History Search Previous | ctrl-r | Composer history_search_previous History Search Previous Open history search or move to the previous match. ctrl-r Default

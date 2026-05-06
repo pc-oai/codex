@@ -298,8 +298,37 @@ impl App {
             AppEvent::CommitTick => {
                 self.chat_widget.on_commit_tick();
             }
+            AppEvent::ReloadCurrentSession => {
+                match std::env::current_dir() {
+                    Ok(current_cwd) => {
+                        let reload_cwd = crate::session_resume::resume_cwd_or_current(
+                            &current_cwd,
+                            self.chat_widget.config_ref().cwd.as_path(),
+                        );
+                        if reload_cwd != current_cwd
+                            && let Err(err) = std::env::set_current_dir(&reload_cwd)
+                        {
+                            tracing::warn!(
+                                error = %err,
+                                reload_cwd = %reload_cwd.display(),
+                                "failed to switch into session cwd before reload; keeping current cwd"
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            "failed to resolve current cwd before reload; keeping inherited cwd"
+                        );
+                    }
+                }
+                return Ok(AppRunControl::Exit(ExitReason::ReloadRequested));
+            }
             AppEvent::Exit(mode) => {
                 return Ok(self.handle_exit_mode(app_server, mode).await);
+            }
+            AppEvent::DeleteCurrentSessionAndExit => {
+                return Ok(self.delete_current_session_and_exit(app_server).await);
             }
             AppEvent::Logout => match app_server.logout_account().await {
                 Ok(()) => {
@@ -463,6 +492,10 @@ impl App {
                     }
                     self.fetch_plugins_list(app_server, cwd);
                 }
+            }
+            AppEvent::CopyLastRequest => {
+                let request = self.latest_user_request_text();
+                self.chat_widget.copy_last_user_request_text(request);
             }
             AppEvent::MarketplaceUpgradeLoaded { cwd, result } => {
                 let marketplace_contents_changed =
@@ -645,6 +678,15 @@ impl App {
                     self.chat_widget.add_error_message(format!(
                         "Failed to start a fresh session through the app server: {err}"
                     ));
+                }
+            },
+            AppEvent::ModelsLoaded { result } => match result {
+                Ok(models) => {
+                    self.model_catalog.replace_models(models);
+                    self.chat_widget.refresh_model_dependent_surfaces();
+                }
+                Err(err) => {
+                    tracing::warn!("failed to refresh model catalog after startup: {err}");
                 }
             },
             AppEvent::SkillsListLoaded { result } => {
@@ -1622,6 +1664,28 @@ impl App {
                     .handle_start_side(tui, app_server, parent_thread_id, user_message)
                     .await;
             }
+            AppEvent::GenerateThreadNameSuggestion {
+                parent_thread_id,
+                kind,
+                prompt,
+                current_name,
+            } => {
+                self.start_thread_name_suggestion(
+                    app_server,
+                    parent_thread_id,
+                    kind,
+                    prompt,
+                    current_name,
+                )
+                .await;
+            }
+            AppEvent::ThreadNameSuggestionFinished {
+                child_thread_id,
+                result,
+            } => {
+                self.finish_thread_name_suggestion(app_server, child_thread_id, result)
+                    .await;
+            }
             AppEvent::OpenSkillsList => {
                 self.chat_widget.open_skills_list();
             }
@@ -2110,6 +2174,28 @@ impl App {
             ExitMode::Immediate => {
                 self.pending_shutdown_exit_thread_id = None;
                 AppRunControl::Exit(ExitReason::UserRequested)
+            }
+        }
+    }
+
+    async fn delete_current_session_and_exit(
+        &mut self,
+        app_server: &mut AppServerSession,
+    ) -> AppRunControl {
+        let Some(thread_id) = self.active_thread_id.or(self.chat_widget.thread_id()) else {
+            return AppRunControl::Exit(ExitReason::UserRequested);
+        };
+
+        match app_server.thread_delete(thread_id).await {
+            Ok(()) => {
+                self.abort_thread_event_listener(thread_id);
+                AppRunControl::Exit(ExitReason::UserRequested)
+            }
+            Err(err) => {
+                tracing::error!("failed to delete thread {thread_id}: {err}");
+                self.chat_widget
+                    .add_error_message(format!("Delete failed: {err}"));
+                AppRunControl::Continue
             }
         }
     }

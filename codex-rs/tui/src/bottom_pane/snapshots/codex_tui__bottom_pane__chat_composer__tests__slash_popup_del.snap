@@ -1,0 +1,10 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+expression: terminal.backend()
+---
+"                                                            "
+"› /del                                                      "
+"                                                            "
+"                                                            "
+"                                                            "
+"  /delete  delete this chat and exit Codex                  "

@@ -58,7 +58,6 @@ use codex_utils_absolute_path::canonicalize_existing_preserving_symlinks;
 use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
 use color_eyre::eyre::WrapErr;
-use cwd_prompt::CwdPromptAction;
 use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
@@ -113,7 +112,6 @@ mod color;
 pub(crate) mod custom_terminal;
 pub use custom_terminal::Terminal;
 mod auto_review_denials;
-mod cwd_prompt;
 mod debug_config;
 mod diff_model;
 mod diff_render;
@@ -173,6 +171,7 @@ mod terminal_probe;
 mod terminal_title;
 mod text_formatting;
 mod theme_picker;
+mod thread_name_suggestion;
 mod token_usage;
 mod tooltips;
 mod transcript_reflow;
@@ -855,6 +854,7 @@ pub async fn run_main(
         model,
         approval_policy,
         sandbox_mode,
+        ephemeral: cli.private.then_some(true),
         cwd: if matches!(app_server_target, AppServerTarget::Remote { .. }) {
             None
         } else {
@@ -1391,44 +1391,25 @@ async fn run_ratatui_app(
     };
 
     let current_cwd = config.cwd.clone();
-    let allow_prompt = !remote_mode && cli.cwd.is_none();
-    let action_and_target_session_if_resume_or_fork = match &session_selection {
-        resume_picker::SessionSelection::Resume(target_session) => {
-            Some((CwdPromptAction::Resume, target_session))
-        }
-        resume_picker::SessionSelection::Fork(target_session) => {
-            Some((CwdPromptAction::Fork, target_session))
-        }
+    let target_session_if_resume_or_fork = match &session_selection {
+        resume_picker::SessionSelection::Resume(target_session)
+        | resume_picker::SessionSelection::Fork(target_session) => Some(target_session),
         _ => None,
     };
-    let fallback_cwd = match action_and_target_session_if_resume_or_fork {
-        Some((action, target_session)) => {
+    let fallback_cwd = match target_session_if_resume_or_fork {
+        Some(target_session) => {
             if remote_mode {
                 Some(current_cwd.to_path_buf())
             } else {
                 match resolve_cwd_for_resume_or_fork(
-                    &mut tui,
                     state_db.as_deref(),
                     &current_cwd,
                     target_session.thread_id,
                     target_session.path.as_deref(),
-                    action,
-                    allow_prompt,
                 )
                 .await?
                 {
                     ResolveCwdOutcome::Continue(cwd) => cwd,
-                    ResolveCwdOutcome::Exit => {
-                        terminal_restore_guard.restore_silently();
-                        session_log::log_session_end();
-                        return Ok(AppExitInfo {
-                            token_usage: crate::token_usage::TokenUsage::default(),
-                            thread_id: None,
-                            thread_name: None,
-                            update_action: None,
-                            exit_reason: ExitReason::UserRequested,
-                        });
-                    }
                 }
             }
         }

@@ -30,7 +30,7 @@ const STARTUP_BACKFILL_POLL_INTERVAL: Duration = Duration::from_secs(1);
 #[cfg(test)]
 const STARTUP_BACKFILL_POLL_INTERVAL: Duration = Duration::from_millis(10);
 #[cfg(not(test))]
-const STARTUP_BACKFILL_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+const STARTUP_BACKFILL_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(test)]
 const STARTUP_BACKFILL_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -125,6 +125,7 @@ async fn try_init_with_roots_inner(
             )
         })?;
         if backfill_state.status == codex_state::BackfillStatus::Complete {
+            spawn_user_message_count_backfill(runtime.clone(), default_model_provider_id.clone());
             return Ok(runtime);
         }
 
@@ -151,6 +152,7 @@ async fn try_init_with_roots_inner(
             )
         })?;
         if backfill_state.status == codex_state::BackfillStatus::Complete {
+            spawn_user_message_count_backfill(runtime.clone(), default_model_provider_id.clone());
             return Ok(runtime);
         }
         if wait_started.elapsed() >= STARTUP_BACKFILL_WAIT_TIMEOUT {
@@ -176,6 +178,12 @@ async fn try_init_with_roots_inner(
         }
         tokio::time::sleep(STARTUP_BACKFILL_POLL_INTERVAL).await;
     }
+}
+
+fn spawn_user_message_count_backfill(runtime: StateDbHandle, default_provider: String) {
+    tokio::spawn(async move {
+        metadata::backfill_user_message_counts(runtime.as_ref().clone(), default_provider).await;
+    });
 }
 
 fn emit_startup_warning(message: &str) {

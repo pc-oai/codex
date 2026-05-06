@@ -87,6 +87,7 @@ fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
             }
         }
         EventMsg::UserMessage(user) => {
+            metadata.user_message_count = metadata.user_message_count.saturating_add(1);
             if metadata.first_user_message.is_none() {
                 metadata.first_user_message = user_message_preview(user);
             }
@@ -450,6 +451,8 @@ mod tests {
             approval_mode: "on-request".to_string(),
             tokens_used: 1,
             first_user_message: None,
+            user_message_count: 0,
+            user_message_count_known: true,
             archived_at: None,
             git_sha: None,
             git_branch: None,

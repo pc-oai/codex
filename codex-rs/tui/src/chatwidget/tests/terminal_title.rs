@@ -73,6 +73,19 @@ async fn terminal_title_action_required_respects_spinner_setting() {
 }
 
 #[tokio::test]
+async fn terminal_title_promotes_leading_thread_emoji_after_spinner() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_terminal_title = Some(vec!["spinner".to_string(), "thread".to_string()]);
+    chat.thread_name = Some("🧭 🗂️ Resume picker".to_string());
+    chat.bottom_pane.set_task_running(/*running*/ true);
+    chat.refresh_terminal_title();
+
+    let title = chat.last_terminal_title.as_deref().expect("terminal title");
+    assert!(title.starts_with("⠋ 🧭 🗂️ "), "title={title:?}");
+    assert!(title.ends_with("Resume picker"));
+}
+
+#[tokio::test]
 async fn terminal_title_action_required_blinks_when_animations_are_enabled() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.bottom_pane.set_task_running(/*running*/ true);

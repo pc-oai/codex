@@ -637,21 +637,15 @@ impl App {
             current_cwd.clone()
         } else {
             match crate::session_resume::resolve_cwd_for_resume_or_fork(
-                tui,
                 self.state_db.as_deref(),
                 &current_cwd,
                 target_session.thread_id,
                 target_session.path.as_deref(),
-                CwdPromptAction::Resume,
-                /*allow_prompt*/ true,
             )
             .await?
             {
                 crate::session_resume::ResolveCwdOutcome::Continue(Some(cwd)) => cwd,
                 crate::session_resume::ResolveCwdOutcome::Continue(None) => current_cwd.clone(),
-                crate::session_resume::ResolveCwdOutcome::Exit => {
-                    return Ok(AppRunControl::Exit(ExitReason::UserRequested));
-                }
             }
         };
 

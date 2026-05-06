@@ -397,6 +397,7 @@ pub(crate) struct ChatComposer {
     side_conversation_active: bool,
     is_zellij: bool,
     status_line_value: Option<Line<'static>>,
+    status_line_right_value: Option<Line<'static>>,
     status_line_hyperlink_url: Option<String>,
     status_line_enabled: bool,
     side_conversation_context_label: Option<String>,
@@ -582,6 +583,7 @@ impl ChatComposer {
                 Some(codex_terminal_detection::Multiplexer::Zellij {})
             ),
             status_line_value: None,
+            status_line_right_value: None,
             status_line_hyperlink_url: None,
             status_line_enabled: false,
             side_conversation_context_label: None,
@@ -1116,7 +1118,13 @@ impl ChatComposer {
 
     fn mode_indicator_line(&self, show_cycle_hint: bool) -> Option<Line<'static>> {
         let mut spans: Vec<Span<'static>> = Vec::new();
+        if let Some(status_line_right) = self.status_line_right_value.as_ref() {
+            spans.extend(status_line_right.spans.clone());
+        }
         if let Some(vim_mode) = self.vim_mode_indicator_span() {
+            if !spans.is_empty() {
+                spans.push(" · ".dim());
+            }
             spans.push(vim_mode);
         }
         if let Some(indicators) = status_line_right_indicator_line(
@@ -1523,6 +1531,16 @@ impl ChatComposer {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn status_line_right_text(&self) -> Option<String> {
+        self.status_line_right_value.as_ref().map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+    }
+
     pub(crate) fn local_images(&self) -> Vec<LocalImageAttachment> {
         self.attached_images
             .iter()
@@ -1777,10 +1795,10 @@ impl ChatComposer {
                 let first_line = self.textarea.text().lines().next().unwrap_or("");
                 popup.on_composer_text_change(first_line.to_string());
                 let selected_cmd = popup.selected_item().map(|sel| {
-                    let CommandItem::Builtin(cmd) = sel;
-                    cmd
+                    let CommandItem::Builtin { name, command } = sel;
+                    (name, command)
                 });
-                if let Some(cmd) = selected_cmd {
+                if let Some((name, cmd)) = selected_cmd {
                     if cmd == SlashCommand::Skills {
                         self.stage_selected_slash_command_history(cmd);
                         self.textarea.set_text_clearing_elements("");
@@ -1788,12 +1806,12 @@ impl ChatComposer {
                         return (InputResult::Command(cmd), true);
                     }
 
-                    let selected_command_text = format!("/{}", cmd.command());
+                    let selected_command_text = format!("/{name}");
                     let starts_with_cmd =
                         first_line.trim_start().starts_with(&selected_command_text);
                     if !starts_with_cmd {
                         self.textarea
-                            .set_text_clearing_elements(&format!("/{} ", cmd.command()));
+                            .set_text_clearing_elements(&format!("/{name} "));
                         if !self.textarea.text().is_empty() {
                             self.textarea.set_cursor(self.textarea.text().len());
                         }
@@ -1815,16 +1833,14 @@ impl ChatComposer {
                 let first_line = self.textarea.text().lines().next().unwrap_or("");
                 popup.on_composer_text_change(first_line.to_string());
                 let selected_cmd = popup.selected_item().map(|sel| {
-                    let CommandItem::Builtin(cmd) = sel;
-                    cmd
+                    let CommandItem::Builtin { name, command } = sel;
+                    (name, command)
                 });
-                if let Some(cmd) = selected_cmd {
-                    let starts_with_cmd = first_line
-                        .trim_start()
-                        .starts_with(&format!("/{}", cmd.command()));
+                if let Some((name, _cmd)) = selected_cmd {
+                    let starts_with_cmd = first_line.trim_start().starts_with(&format!("/{name}"));
                     if !starts_with_cmd {
                         self.textarea
-                            .set_text_clearing_elements(&format!("/{} ", cmd.command()));
+                            .set_text_clearing_elements(&format!("/{name} "));
                         self.is_bash_mode = false;
                     }
                     if !self.textarea.text().is_empty() {
@@ -1839,7 +1855,7 @@ impl ChatComposer {
                 ..
             } => {
                 if let Some(sel) = popup.selected_item() {
-                    let CommandItem::Builtin(cmd) = sel;
+                    let CommandItem::Builtin { command: cmd, .. } = sel;
                     self.stage_selected_slash_command_history(cmd);
                     self.textarea.set_text_clearing_elements("");
                     self.is_bash_mode = false;
@@ -4083,6 +4099,14 @@ impl ChatComposer {
         true
     }
 
+    pub(crate) fn set_status_line_right(&mut self, status_line: Option<Line<'static>>) -> bool {
+        if self.status_line_right_value == status_line {
+            return false;
+        }
+        self.status_line_right_value = status_line;
+        true
+    }
+
     pub(crate) fn set_status_line_hyperlink(&mut self, url: Option<String>) -> bool {
         if self.status_line_hyperlink_url == url {
             return false;
@@ -4311,7 +4335,7 @@ impl ChatComposer {
                 };
                 if let Some(line) = self.history_search_footer_line() {
                     render_footer_line(hint_rect, buf, line);
-                } else if self.plan_mode_nudge_visible {
+                } else if self.plan_mode_nudge_visible && self.footer_hint_override.is_none() {
                     let available_width =
                         hint_rect.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
                     render_footer_line(
@@ -5017,6 +5041,22 @@ mod tests {
                 )));
                 composer.set_text_content("!".to_string(), Vec::new(), Vec::new());
                 let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+            },
+        );
+    }
+
+    #[test]
+    fn footer_mode_edit_last_message_snapshot() {
+        snapshot_composer_state(
+            "footer_mode_edit_last_message",
+            /*enhanced_keys_supported*/ true,
+            |composer| {
+                composer.set_text_content("original".to_string(), Vec::new(), Vec::new());
+                composer.set_footer_hint_override(Some(vec![
+                    ("Editing".to_string(), "previous message".to_string()),
+                    ("Enter".to_string(), "submit".to_string()),
+                    ("Esc".to_string(), "cancel".to_string()),
+                ]));
             },
         );
     }
@@ -7521,8 +7561,8 @@ mod tests {
 
         match &composer.active_popup {
             ActivePopup::Command(popup) => match popup.selected_item() {
-                Some(CommandItem::Builtin(cmd)) => {
-                    assert_eq!(cmd.command(), "model")
+                Some(CommandItem::Builtin { command, .. }) => {
+                    assert_eq!(command.command(), "model")
                 }
                 None => panic!("no selected command for '/mo'"),
             },
@@ -7574,12 +7614,63 @@ mod tests {
 
         match &composer.active_popup {
             ActivePopup::Command(popup) => match popup.selected_item() {
-                Some(CommandItem::Builtin(cmd)) => {
-                    assert_eq!(cmd.command(), "resume")
+                Some(CommandItem::Builtin { command, .. }) => {
+                    assert_eq!(command.command(), "resume")
                 }
                 None => panic!("no selected command for '/res'"),
             },
             _ => panic!("slash popup not active after typing '/res'"),
+        }
+    }
+
+    #[test]
+    fn slash_popup_delete_for_del_ui() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        type_chars_humanlike(&mut composer, &['/', 'd', 'e', 'l']);
+
+        let mut terminal = Terminal::new(TestBackend::new(60, 6)).expect("terminal");
+        terminal
+            .draw(|f| composer.render(f.area(), f.buffer_mut()))
+            .expect("draw composer");
+
+        insta::assert_snapshot!("slash_popup_del", terminal.backend());
+    }
+
+    #[test]
+    fn slash_popup_delete_for_del_logic() {
+        use super::super::command_popup::CommandItem;
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        type_chars_humanlike(&mut composer, &['/', 'd', 'e', 'l']);
+
+        match &composer.active_popup {
+            ActivePopup::Command(popup) => match popup.selected_item() {
+                Some(CommandItem::Builtin { command, .. }) => {
+                    assert_eq!(command.command(), "delete")
+                }
+                None => panic!("no selected command for '/del'"),
+            },
+            _ => panic!("slash popup not active after typing '/del'"),
         }
     }
 
@@ -8055,7 +8146,7 @@ mod tests {
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
 
         assert_eq!(result, InputResult::None);
-        assert_eq!(composer.textarea.text(), "/model ");
+        assert_eq!(composer.textarea.text(), "/m");
         assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
     }
 

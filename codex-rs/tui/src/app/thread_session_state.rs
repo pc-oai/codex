@@ -337,6 +337,7 @@ mod tests {
             agent_role: None,
             git_info: None,
             name: Some("read thread".to_string()),
+            user_message_count: 0,
             turns: Vec::new(),
         };
 

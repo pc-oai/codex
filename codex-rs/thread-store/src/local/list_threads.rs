@@ -80,11 +80,13 @@ pub(super) async fn list_threads(
         .map(|thread| thread.thread_id)
         .collect::<HashSet<_>>();
     let mut names = HashMap::<ThreadId, String>::with_capacity(thread_ids.len());
+    let mut user_message_counts = HashMap::<ThreadId, i64>::with_capacity(thread_ids.len());
     if let Some(state_db_ctx) = store.state_db().await {
         for &thread_id in &thread_ids {
             let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await else {
                 continue;
             };
+            user_message_counts.insert(thread_id, metadata.user_message_count);
             if let Some(title) = distinct_thread_metadata_title(&metadata) {
                 names.insert(thread_id, title);
             }
@@ -99,6 +101,9 @@ pub(super) async fn list_threads(
         }
     }
     for thread in &mut items {
+        if let Some(user_message_count) = user_message_counts.get(&thread.thread_id) {
+            thread.user_message_count = *user_message_count;
+        }
         if let Some(title) = names.get(&thread.thread_id).cloned() {
             set_thread_name_from_title(thread, title);
         }
@@ -406,6 +411,60 @@ mod tests {
         assert_eq!(page.items[0].model_provider, "test-provider");
         assert_eq!(page.items[0].cli_version, "test_version");
         assert_eq!(page.items[0].source, SessionSource::Cli);
+    }
+
+    #[tokio::test]
+    async fn list_threads_overlays_user_message_count_from_state_db() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let uuid = Uuid::from_u128(107);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let path =
+            write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
+        let runtime = codex_state::StateRuntime::init(
+            home.path().to_path_buf(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        runtime
+            .mark_backfill_complete(/*last_watermark*/ None)
+            .await
+            .expect("backfill should be complete");
+        let mut builder = codex_state::ThreadMetadataBuilder::new(
+            thread_id,
+            path,
+            Utc::now(),
+            SessionSource::Cli,
+        );
+        builder.model_provider = Some(config.default_model_provider_id.clone());
+        builder.cwd = home.path().to_path_buf();
+        builder.cli_version = Some("test_version".to_string());
+        let mut metadata = builder.build(config.default_model_provider_id.as_str());
+        metadata.user_message_count = 7;
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("state db upsert should succeed");
+        let store = LocalThreadStore::new(config, Some(runtime));
+
+        let page = store
+            .list_threads(ListThreadsParams {
+                page_size: 10,
+                cursor: None,
+                sort_key: ThreadSortKey::CreatedAt,
+                sort_direction: SortDirection::Desc,
+                allowed_sources: vec![SessionSource::Cli],
+                model_providers: Some(vec!["test-provider".to_string()]),
+                cwd_filters: None,
+                archived: false,
+                search_term: None,
+                use_state_db_only: false,
+            })
+            .await
+            .expect("thread listing");
+
+        assert_eq!(page.items[0].user_message_count, 7);
     }
 
     #[tokio::test]

@@ -155,6 +155,42 @@ async fn ignore_user_config_keeps_empty_user_layer() -> std::io::Result<()> {
 }
 
 #[tokio::test]
+async fn session_config_file_overlays_user_config() -> std::io::Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "model = \"from-user\"\n")
+        .expect("write user config");
+    let overlay = tmp.path().join("local.toml");
+    std::fs::write(&overlay, "model = \"from-session-file\"\n").expect("write overlay config");
+
+    let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        tmp.path(),
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides {
+            session_config_files: vec![overlay],
+            ..Default::default()
+        },
+        CloudRequirementsLoader::default(),
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+
+    assert_eq!(
+        layers.effective_config().get("model"),
+        Some(&TomlValue::String("from-session-file".to_string()))
+    );
+    assert!(
+        layers
+            .layers_high_to_low()
+            .iter()
+            .any(|layer| matches!(layer.name, ConfigLayerSource::SessionConfigFile { .. }))
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn ignore_rules_marks_config_stack_for_exec_policy_rule_skip() -> std::io::Result<()> {
     let tmp = tempdir().expect("tempdir");
     let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");

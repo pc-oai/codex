@@ -65,6 +65,31 @@ enum Command {
         #[arg(default_value_t = 0)]
         steps_back: usize,
     },
+    /// Rewind to the latest user message and prefill it for editing.
+    EditLast,
+    /// Copy the latest visible user request.
+    CopyLastRequest,
+    /// Copy the latest completed agent response.
+    CopyLastResponse,
+    /// Generate a fresh title suggestion for the current thread.
+    RetitleCurrentSession,
+    /// Generate or refresh the leading emoji for the current thread title.
+    EmojiCurrentSession,
+    /// Interrupt the currently running turn, if any.
+    InterruptCurrentTurn,
+    /// Exit Codex after graceful shutdown.
+    ExitCurrentSession,
+    /// Select a model and optional reasoning effort.
+    SetModel {
+        /// Model slug to select.
+        model: String,
+        /// Optional reasoning effort to select with the model.
+        effort: Option<String>,
+    },
+    /// Restart Codex only when no turn is currently running.
+    ReloadCurrentSessionIfIdle,
+    /// Restart Codex and resume the current session.
+    ReloadCurrentSession,
 }
 
 #[derive(Serialize)]
@@ -92,6 +117,20 @@ enum TalonCommand {
         #[serde(default)]
         steps_back: usize,
     },
+    EditLastMessage,
+    CopyLastRequest,
+    CopyLastResponse,
+    RetitleCurrentSession,
+    EmojiCurrentSession,
+    InterruptCurrentTurn,
+    ExitCurrentSession,
+    SetModel {
+        model: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        effort: Option<String>,
+    },
+    ReloadCurrentSessionIfIdle,
+    ReloadCurrentSession,
     HistoryPrevious,
     HistoryNext,
 }
@@ -158,6 +197,97 @@ fn main() -> Result<()> {
             write_request(&request_path, request)?;
             format!(
                 "requested edit_previous_message({steps_back}) via {}",
+                request_path.display()
+            )
+        }
+        Command::EditLast => {
+            let request = TalonRequest {
+                commands: vec![TalonCommand::EditLastMessage],
+            };
+            write_request(&request_path, request)?;
+            format!("requested edit_last_message via {}", request_path.display())
+        }
+        Command::CopyLastRequest => {
+            let request = TalonRequest {
+                commands: vec![TalonCommand::CopyLastRequest],
+            };
+            write_request(&request_path, request)?;
+            format!("requested copy_last_request via {}", request_path.display())
+        }
+        Command::CopyLastResponse => {
+            let request = TalonRequest {
+                commands: vec![TalonCommand::CopyLastResponse],
+            };
+            write_request(&request_path, request)?;
+            format!(
+                "requested copy_last_response via {}",
+                request_path.display()
+            )
+        }
+        Command::RetitleCurrentSession => {
+            let request = TalonRequest {
+                commands: vec![TalonCommand::RetitleCurrentSession],
+            };
+            write_request(&request_path, request)?;
+            format!(
+                "requested retitle_current_session via {}",
+                request_path.display()
+            )
+        }
+        Command::EmojiCurrentSession => {
+            let request = TalonRequest {
+                commands: vec![TalonCommand::EmojiCurrentSession],
+            };
+            write_request(&request_path, request)?;
+            format!(
+                "requested emoji_current_session via {}",
+                request_path.display()
+            )
+        }
+        Command::InterruptCurrentTurn => {
+            let request = TalonRequest {
+                commands: vec![TalonCommand::InterruptCurrentTurn],
+            };
+            write_request(&request_path, request)?;
+            format!(
+                "requested interrupt_current_turn via {}",
+                request_path.display()
+            )
+        }
+        Command::ExitCurrentSession => {
+            let request = TalonRequest {
+                commands: vec![TalonCommand::ExitCurrentSession],
+            };
+            write_request(&request_path, request)?;
+            format!(
+                "requested exit_current_session via {}",
+                request_path.display()
+            )
+        }
+        Command::SetModel { model, effort } => {
+            let request = TalonRequest {
+                commands: vec![TalonCommand::SetModel { model, effort }],
+            };
+            write_request(&request_path, request)?;
+            format!("requested set_model via {}", request_path.display())
+        }
+        Command::ReloadCurrentSessionIfIdle => {
+            let request = TalonRequest {
+                commands: vec![TalonCommand::ReloadCurrentSessionIfIdle],
+            };
+            write_request(&request_path, request)?;
+            format!(
+                "requested reload_current_session_if_idle via {}",
+                request_path.display()
+            )
+        }
+        Command::ReloadCurrentSession => {
+            let request = TalonRequest {
+                commands: vec![TalonCommand::ReloadCurrentSession],
+            };
+            write_request(&request_path, request)?;
+            format!(
+                "requested reload_current_session via {}",
                 request_path.display()
             )
         }

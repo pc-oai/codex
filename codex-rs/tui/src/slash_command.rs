@@ -12,7 +12,10 @@ use strum_macros::IntoStaticStr;
 pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
+    #[strum(to_string = "model", serialize = "m")]
     Model,
+    #[strum(to_string = "effort", serialize = "e")]
+    Effort,
     Fast,
     Ide,
     Permissions,
@@ -28,23 +31,35 @@ pub enum SlashCommand {
     Memories,
     Skills,
     Hooks,
+    #[strum(to_string = "review", serialize = "rev")]
     Review,
     Rename,
+    #[strum(to_string = "retitle", serialize = "rt")]
+    Retitle,
+    #[strum(to_string = "emoji", serialize = "em")]
+    Emoji,
     New,
     Resume,
+    #[strum(to_string = "reload", serialize = "r")]
+    Reload,
     Fork,
     Init,
+    #[strum(to_string = "compact", serialize = "c")]
     Compact,
     Plan,
     Goal,
     Collab,
     Agent,
     Side,
+    #[strum(to_string = "id", serialize = "i")]
+    Id,
     Copy,
+    CopyLastRequest,
     Diff,
     Mention,
     Status,
     DebugConfig,
+    #[strum(to_string = "title", serialize = "t")]
     Title,
     Statusline,
     Theme,
@@ -54,6 +69,7 @@ pub enum SlashCommand {
     Logout,
     Quit,
     Exit,
+    Delete,
     Feedback,
     Rollout,
     Ps,
@@ -83,11 +99,17 @@ impl SlashCommand {
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Rename => "rename the current thread",
+            SlashCommand::Retitle => "generate a concise title from this conversation",
+            SlashCommand::Emoji => "prepend a representative emoji to the thread title",
             SlashCommand::Resume => "resume a saved chat",
+            SlashCommand::Reload => "restart Codex and resume this chat",
             SlashCommand::Clear => "clear the terminal and start a new chat",
             SlashCommand::Fork => "fork the current chat",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
+            SlashCommand::Delete => "delete this chat and exit Codex",
+            SlashCommand::Id => "copy the current thread ID",
             SlashCommand::Copy => "copy last response as markdown",
+            SlashCommand::CopyLastRequest => "copy last user request",
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Mention => "mention a file",
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
@@ -102,6 +124,7 @@ impl SlashCommand {
             SlashCommand::MemoryDrop => "DO NOT USE",
             SlashCommand::MemoryUpdate => "DO NOT USE",
             SlashCommand::Model => "choose what model and reasoning effort to use",
+            SlashCommand::Effort => "choose reasoning effort for the current model",
             SlashCommand::Fast => {
                 "toggle Fast mode to enable fastest inference with increased plan usage"
             }
@@ -141,6 +164,26 @@ impl SlashCommand {
         self.into()
     }
 
+    /// Short command spellings that should appear in slash autocomplete.
+    ///
+    /// These stay separate from `command()` so selecting an alias can preserve
+    /// the short text in the composer while dispatch still resolves to the same
+    /// underlying command.
+    pub fn completion_aliases(self) -> &'static [&'static str] {
+        match self {
+            SlashCommand::Model => &["m"],
+            SlashCommand::Effort => &["e"],
+            SlashCommand::Reload => &["r"],
+            SlashCommand::Compact => &["c"],
+            SlashCommand::Id => &["i"],
+            SlashCommand::Review => &["rev"],
+            SlashCommand::Title => &["t"],
+            SlashCommand::Retitle => &["rt"],
+            SlashCommand::Emoji => &["em"],
+            _ => &[],
+        }
+    }
+
     /// Whether this command supports inline args (for example `/review ...`).
     pub fn supports_inline_args(self) -> bool {
         matches!(
@@ -163,7 +206,9 @@ impl SlashCommand {
     pub fn available_in_side_conversation(self) -> bool {
         matches!(
             self,
-            SlashCommand::Copy
+            SlashCommand::Id
+                | SlashCommand::Copy
+                | SlashCommand::CopyLastRequest
                 | SlashCommand::Diff
                 | SlashCommand::Mention
                 | SlashCommand::Status
@@ -176,10 +221,12 @@ impl SlashCommand {
         match self {
             SlashCommand::New
             | SlashCommand::Resume
+            | SlashCommand::Reload
             | SlashCommand::Fork
             | SlashCommand::Init
             | SlashCommand::Compact
             | SlashCommand::Model
+            | SlashCommand::Effort
             | SlashCommand::Fast
             | SlashCommand::Personality
             | SlashCommand::Permissions
@@ -190,13 +237,17 @@ impl SlashCommand {
             | SlashCommand::Experimental
             | SlashCommand::Memories
             | SlashCommand::Review
+            | SlashCommand::Retitle
+            | SlashCommand::Emoji
             | SlashCommand::Plan
             | SlashCommand::Clear
             | SlashCommand::Logout
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate => false,
             SlashCommand::Diff
+            | SlashCommand::Id
             | SlashCommand::Copy
+            | SlashCommand::CopyLastRequest
             | SlashCommand::Rename
             | SlashCommand::Mention
             | SlashCommand::Skills
@@ -216,6 +267,7 @@ impl SlashCommand {
             | SlashCommand::Ide
             | SlashCommand::Quit
             | SlashCommand::Exit
+            | SlashCommand::Delete
             | SlashCommand::Side => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
@@ -230,7 +282,7 @@ impl SlashCommand {
     fn is_visible(self) -> bool {
         match self {
             SlashCommand::SandboxReadRoot => cfg!(target_os = "windows"),
-            SlashCommand::Copy => !cfg!(target_os = "android"),
+            SlashCommand::Copy | SlashCommand::CopyLastRequest => !cfg!(target_os = "android"),
             SlashCommand::Rollout | SlashCommand::TestApproval => cfg!(debug_assertions),
             _ => true,
         }
@@ -260,6 +312,60 @@ mod tests {
     #[test]
     fn clean_alias_parses_to_stop_command() {
         assert_eq!(SlashCommand::from_str("clean"), Ok(SlashCommand::Stop));
+    }
+
+    #[test]
+    fn r_alias_parses_to_reload_command() {
+        assert_eq!(SlashCommand::Reload.command(), "reload");
+        assert_eq!(SlashCommand::from_str("r"), Ok(SlashCommand::Reload));
+    }
+
+    #[test]
+    fn m_alias_parses_to_model_command() {
+        assert_eq!(SlashCommand::Model.command(), "model");
+        assert_eq!(SlashCommand::from_str("m"), Ok(SlashCommand::Model));
+    }
+
+    #[test]
+    fn e_alias_parses_to_effort_command() {
+        assert_eq!(SlashCommand::Effort.command(), "effort");
+        assert_eq!(SlashCommand::from_str("e"), Ok(SlashCommand::Effort));
+    }
+
+    #[test]
+    fn c_alias_parses_to_compact_command() {
+        assert_eq!(SlashCommand::Compact.command(), "compact");
+        assert_eq!(SlashCommand::from_str("c"), Ok(SlashCommand::Compact));
+    }
+
+    #[test]
+    fn i_alias_parses_to_id_command() {
+        assert_eq!(SlashCommand::Id.command(), "id");
+        assert_eq!(SlashCommand::from_str("i"), Ok(SlashCommand::Id));
+    }
+
+    #[test]
+    fn rev_alias_parses_to_review_command() {
+        assert_eq!(SlashCommand::Review.command(), "review");
+        assert_eq!(SlashCommand::from_str("rev"), Ok(SlashCommand::Review));
+    }
+
+    #[test]
+    fn t_alias_parses_to_title_command() {
+        assert_eq!(SlashCommand::Title.command(), "title");
+        assert_eq!(SlashCommand::from_str("t"), Ok(SlashCommand::Title));
+    }
+
+    #[test]
+    fn rt_alias_parses_to_retitle_command() {
+        assert_eq!(SlashCommand::Retitle.command(), "retitle");
+        assert_eq!(SlashCommand::from_str("rt"), Ok(SlashCommand::Retitle));
+    }
+
+    #[test]
+    fn em_alias_parses_to_emoji_command() {
+        assert_eq!(SlashCommand::Emoji.command(), "emoji");
+        assert_eq!(SlashCommand::from_str("em"), Ok(SlashCommand::Emoji));
     }
 
     #[test]

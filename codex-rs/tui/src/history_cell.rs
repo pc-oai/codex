@@ -1259,19 +1259,7 @@ pub(crate) fn new_session_info(
     auth_plan: Option<PlanType>,
     show_fast_status: bool,
 ) -> SessionInfoCell {
-    // Header box rendered as history (so it appears at the very top)
-    let header = SessionHeaderHistoryCell::new(
-        session.model.clone(),
-        session.reasoning_effort,
-        show_fast_status,
-        config.cwd.to_path_buf(),
-        CODEX_CLI_VERSION,
-    )
-    .with_yolo_mode(has_yolo_permissions(
-        session.approval_policy,
-        &session.permission_profile,
-    ));
-    let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
+    let mut parts: Vec<Box<dyn HistoryCell>> = Vec::new();
 
     if is_first_event {
         // Help lines below the header (new copy and list)
@@ -1384,6 +1372,7 @@ pub(crate) struct SessionHeaderHistoryCell {
     show_fast_status: bool,
     directory: PathBuf,
     yolo_mode: bool,
+    compact_layout: bool,
 }
 
 impl SessionHeaderHistoryCell {
@@ -1420,11 +1409,17 @@ impl SessionHeaderHistoryCell {
             show_fast_status,
             directory,
             yolo_mode: false,
+            compact_layout: false,
         }
     }
 
     pub(crate) fn with_yolo_mode(mut self, yolo_mode: bool) -> Self {
         self.yolo_mode = yolo_mode;
+        self
+    }
+
+    pub(crate) fn with_compact_layout(mut self, compact_layout: bool) -> Self {
+        self.compact_layout = compact_layout;
         self
     }
 
@@ -1524,6 +1519,37 @@ impl HistoryCell for SessionHeaderHistoryCell {
         let dir_max_width = inner_width.saturating_sub(dir_prefix_width);
         let dir = self.format_directory(Some(dir_max_width));
         let dir_spans = vec![Span::from(dir_prefix).dim(), Span::from(dir)];
+
+        if self.compact_layout {
+            let mut compact = title_spans;
+            compact.push(" · ".dim());
+            compact.push(Span::styled(self.model.clone(), self.model_style));
+            if let Some(reasoning) = reasoning_label {
+                compact.push(" ".into());
+                compact.push(reasoning.into());
+            }
+            if self.show_fast_status {
+                compact.push(" · ".dim());
+                compact.push(Span::styled("fast", self.model_style.magenta()));
+            }
+            compact.push(" · ".dim());
+            compact.push(Span::from(
+                self.format_directory(Some(
+                    inner_width.saturating_sub(UnicodeWidthStr::width(
+                        compact
+                            .iter()
+                            .map(|span| span.content.as_ref())
+                            .collect::<String>()
+                            .as_str(),
+                    )),
+                )),
+            ));
+            if self.yolo_mode {
+                compact.push(" · ".dim());
+                compact.push("YOLO mode".magenta().bold());
+            }
+            return with_border(vec![make_row(compact)]);
+        }
 
         let mut lines = vec![
             make_row(title_spans),
@@ -3091,7 +3117,7 @@ fn format_duration_ms(duration_ms: u64) -> String {
     }
 }
 
-fn compact_runtime_metrics_label(
+pub(crate) fn compact_runtime_metrics_label(
     summary: RuntimeMetricsSummary,
     config: &TuiTiming,
 ) -> Option<String> {
@@ -3111,6 +3137,7 @@ fn compact_runtime_metrics_label(
             TuiTimingMetric::Ttft => preferred_timing_metric(
                 summary.responses_api_engine_service_ttft_ms,
                 summary.responses_api_engine_iapi_ttft_ms,
+                summary.turn_ttft_ms,
             )
             .map(|duration| {
                 format!(
@@ -3122,6 +3149,7 @@ fn compact_runtime_metrics_label(
             TuiTimingMetric::Tbt => preferred_timing_metric(
                 summary.responses_api_engine_service_tbt_ms,
                 summary.responses_api_engine_iapi_tbt_ms,
+                summary.turn_ttfm_ms,
             )
             .map(|duration| {
                 format!(
@@ -3153,11 +3181,17 @@ fn compact_runtime_metrics_label(
     (!parts.is_empty()).then(|| parts.join("  "))
 }
 
-fn preferred_timing_metric(primary_ms: u64, fallback_ms: u64) -> Option<u64> {
+fn preferred_timing_metric(
+    primary_ms: u64,
+    fallback_ms: u64,
+    turn_fallback_ms: u64,
+) -> Option<u64> {
     if primary_ms > 0 {
         Some(primary_ms)
     } else if fallback_ms > 0 {
         Some(fallback_ms)
+    } else if turn_fallback_ms > 0 {
+        Some(turn_fallback_ms)
     } else {
         None
     }
@@ -3165,7 +3199,7 @@ fn preferred_timing_metric(primary_ms: u64, fallback_ms: u64) -> Option<u64> {
 
 fn metric_symbol(symbols: Option<&TuiTimingSymbols>, metric: TuiTimingMetric) -> &str {
     match metric {
-        TuiTimingMetric::Ttft => symbols.and_then(|s| s.ttft.as_deref()).unwrap_or("⚡"),
+        TuiTimingMetric::Ttft => symbols.and_then(|s| s.ttft.as_deref()).unwrap_or(""),
         TuiTimingMetric::Tbt => symbols.and_then(|s| s.tbt.as_deref()).unwrap_or("≋"),
         TuiTimingMetric::Model => symbols.and_then(|s| s.model.as_deref()).unwrap_or("◉"),
         TuiTimingMetric::Overhead => symbols.and_then(|s| s.overhead.as_deref()).unwrap_or("+"),
@@ -3228,10 +3262,12 @@ pub(crate) fn compact_timing_line(
             TuiTimingMetric::Ttft => preferred_timing_metric(
                 summary.responses_api_engine_service_ttft_ms,
                 summary.responses_api_engine_iapi_ttft_ms,
+                summary.turn_ttft_ms,
             ),
             TuiTimingMetric::Tbt => preferred_timing_metric(
                 summary.responses_api_engine_service_tbt_ms,
                 summary.responses_api_engine_iapi_tbt_ms,
+                summary.turn_ttfm_ms,
             ),
             TuiTimingMetric::Model => (summary.responses_api_inference_time_ms > 0)
                 .then_some(summary.responses_api_inference_time_ms),
@@ -3611,7 +3647,7 @@ mod tests {
 
         assert_eq!(
             runtime_metrics_label(summary, Some(&config)).as_deref(),
-            Some("⚡800ms  ≋3ms")
+            Some("800ms  ≋3ms")
         );
     }
 
@@ -4590,6 +4626,26 @@ mod tests {
 
         assert!(model_line.contains("gpt-4o high"));
         assert!(!model_line.contains("fast"));
+    }
+
+    #[test]
+    fn session_header_compacts_to_single_content_line_when_enabled() {
+        let cell = SessionHeaderHistoryCell::new(
+            "gpt-4o".to_string(),
+            Some(ReasoningEffortConfig::High),
+            /*show_fast_status*/ true,
+            test_path_buf("/tmp/project").abs().to_path_buf(),
+            "test",
+        )
+        .with_compact_layout(true)
+        .with_yolo_mode(true);
+
+        let lines = render_lines(&cell.display_lines(/*width*/ 120));
+        assert_eq!(lines.len(), 3);
+        assert!(lines[1].contains(">_ OpenAI Codex (vtest)"));
+        assert!(lines[1].contains("gpt-4o high"));
+        assert!(lines[1].contains("fast"));
+        assert!(lines[1].contains("YOLO mode"));
     }
 
     #[test]

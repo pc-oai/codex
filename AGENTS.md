@@ -4,6 +4,9 @@ In the codex-rs folder where the rust code lives:
 
 - Crate names are prefixed with `codex-`. For example, the `core` folder's crate is named `codex-core`
 - When using format! and you can inline variables into {}, always do that.
+- For local source builds, bump `LOCAL_BUILD_NUMBER` in `codex-rs/tui/src/version.rs`
+  once per local change set so the footer version marker advances and running sessions
+  that need reload are obvious at a glance.
 - Install any commands the repo relies on (for example `just`, `rg`, or `cargo-insta`) if they aren't already available before running instructions here.
 - Never add or modify any code related to `CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR` or `CODEX_SANDBOX_ENV_VAR`.
   - You operate in a sandbox where `CODEX_SANDBOX_NETWORK_DISABLED=1` will be set whenever you use the `shell` tool. Any existing code that uses `CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR` was authored with this fact in mind. It is often used to early exit out of tests that the author knew you would not be able to run given your sandbox limitations.

@@ -52,6 +52,7 @@ use codex_realtime_webrtc::RealtimeWebrtcEvent;
 use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
 
 use crate::history_cell::HistoryCell;
+use crate::thread_name_suggestion::ThreadNameSuggestionKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RealtimeAudioDeviceKind {
@@ -139,6 +140,20 @@ pub(crate) enum AppEvent {
         user_message: Option<UserMessage>,
     },
 
+    /// Ask an ephemeral fork to generate thread-title metadata off the main transcript.
+    GenerateThreadNameSuggestion {
+        parent_thread_id: ThreadId,
+        kind: ThreadNameSuggestionKind,
+        prompt: String,
+        current_name: Option<String>,
+    },
+
+    /// Finish an out-of-band thread-title metadata request after its ephemeral turn completes.
+    ThreadNameSuggestionFinished {
+        child_thread_id: ThreadId,
+        result: Result<String, String>,
+    },
+
     /// Submit an op to the specified thread, regardless of current focus.
     SubmitThreadOp {
         thread_id: ThreadId,
@@ -175,6 +190,12 @@ pub(crate) enum AppEvent {
     /// Fork the current session into a new thread.
     ForkCurrentSession,
 
+    /// Request to restart the current session in a fresh Codex process.
+    ReloadCurrentSession,
+
+    /// Copy the most recent user request in the visible transcript.
+    CopyLastRequest,
+
     /// Request to exit the application.
     ///
     /// Use `ShutdownFirst` for user-initiated quits so core cleanup runs and the
@@ -182,6 +203,9 @@ pub(crate) enum AppEvent {
     /// escape hatch that skips shutdown and may drop in-flight work (e.g.,
     /// background tasks, rollout flush, or child process cleanup).
     Exit(ExitMode),
+
+    /// Delete the current thread and exit the application.
+    DeleteCurrentSessionAndExit,
 
     /// Request app-server account logout, then exit after it succeeds.
     Logout,
@@ -376,6 +400,11 @@ pub(crate) enum AppEvent {
     /// Result of the initial background thread start during startup.
     InitialThreadStarted {
         result: Result<AppServerStartedThread, String>,
+    },
+
+    /// Result of the deferred full model catalog refresh during local startup.
+    ModelsLoaded {
+        result: Result<Vec<ModelPreset>, String>,
     },
 
     /// Replace the plugins popup with a plugin-detail loading state.

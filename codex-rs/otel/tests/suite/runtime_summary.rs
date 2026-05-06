@@ -1,5 +1,8 @@
 use codex_otel::MetricsClient;
 use codex_otel::MetricsConfig;
+use codex_otel::OtelExporter;
+use codex_otel::OtelProvider;
+use codex_otel::OtelSettings;
 use codex_otel::Result;
 use codex_otel::RuntimeMetricTotals;
 use codex_otel::RuntimeMetricsSummary;
@@ -138,6 +141,58 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
         turn_ttfm_ms: 180,
     };
     assert_eq!(summary, expected);
+
+    Ok(())
+}
+
+#[test]
+fn runtime_metrics_summary_works_without_metrics_exporter() -> Result<()> {
+    let _provider = OtelProvider::from(&OtelSettings {
+        environment: "test".to_string(),
+        service_name: "codex-cli".to_string(),
+        service_version: env!("CARGO_PKG_VERSION").to_string(),
+        codex_home: std::env::temp_dir(),
+        exporter: OtelExporter::None,
+        trace_exporter: OtelExporter::None,
+        metrics_exporter: OtelExporter::None,
+        runtime_metrics: true,
+    })
+    .expect("provider construction should succeed")
+    .expect("runtime metrics should create a local provider");
+
+    let manager = SessionTelemetry::new(
+        ThreadId::new(),
+        "gpt-5.1",
+        "gpt-5.1",
+        Some("account-id".to_string()),
+        /*account_email*/ None,
+        Some(TelemetryAuthMode::ApiKey),
+        "test_originator".to_string(),
+        /*log_user_prompts*/ true,
+        "tty".to_string(),
+        SessionSource::Cli,
+    );
+
+    manager.reset_runtime_metrics();
+
+    let ws_timing_response: std::result::Result<
+        Option<std::result::Result<Message, tokio_tungstenite::tungstenite::Error>>,
+        codex_api::ApiError,
+    > = Ok(Some(Ok(Message::Text(
+        r#"{"type":"responsesapi.websocket_timing","timing_metrics":{"responses_duration_excl_engine_and_client_tool_time_ms":124,"engine_service_total_ms":457,"engine_iapi_ttft_total_ms":211,"engine_service_ttft_total_ms":233,"engine_iapi_tbt_across_engine_calls_ms":377,"engine_service_tbt_across_engine_calls_ms":399}}"#
+            .into(),
+    ))));
+    manager.record_websocket_event(&ws_timing_response, Duration::from_millis(20));
+
+    let summary = manager
+        .runtime_metrics_summary()
+        .expect("runtime metrics summary should be available without exporter");
+    assert_eq!(summary.responses_api_overhead_ms, 124);
+    assert_eq!(summary.responses_api_inference_time_ms, 457);
+    assert_eq!(summary.responses_api_engine_iapi_ttft_ms, 211);
+    assert_eq!(summary.responses_api_engine_service_ttft_ms, 233);
+    assert_eq!(summary.responses_api_engine_iapi_tbt_ms, 377);
+    assert_eq!(summary.responses_api_engine_service_tbt_ms, 399);
 
     Ok(())
 }

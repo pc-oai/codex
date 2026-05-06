@@ -3,6 +3,8 @@ use codex_protocol::account::PlanType;
 use lazy_static::lazy_static;
 use rand::Rng;
 
+use crate::version::CODEX_CLI_VERSION;
+
 const ANNOUNCEMENT_TIP_URL: &str =
     "https://raw.githubusercontent.com/openai/codex/main/announcement_tip.toml";
 
@@ -53,7 +55,13 @@ pub(crate) fn get_tooltip(plan: Option<PlanType>, fast_mode_enabled: bool) -> Op
     let mut rng = rand::rng();
 
     if let Some(announcement) = announcement::fetch_announcement_tip(plan) {
-        return Some(announcement);
+        // Source builds are not package-manager installations, so the remote
+        // upgrade warning is misleading there. Keep other remote announcements.
+        let is_source_build_upgrade_warning =
+            CODEX_CLI_VERSION == "0.0.0" && announcement.starts_with("Update Required - ");
+        if !is_source_build_upgrade_warning {
+            return Some(announcement);
+        }
     }
 
     // Leave small chance for a random tooltip to be shown.

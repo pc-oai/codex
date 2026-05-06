@@ -1,5 +1,6 @@
 mod archive_thread;
 mod create_thread;
+mod delete_thread;
 mod helpers;
 mod list_threads;
 mod live_writer;
@@ -23,6 +24,7 @@ use tokio::sync::Mutex;
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
 use crate::CreateThreadParams;
+use crate::DeleteThreadParams;
 use crate::ListThreadsParams;
 use crate::LoadThreadHistoryParams;
 use crate::ReadThreadByRolloutPathParams;
@@ -258,6 +260,10 @@ impl ThreadStore for LocalThreadStore {
 
     async fn archive_thread(&self, params: ArchiveThreadParams) -> ThreadStoreResult<()> {
         archive_thread::archive_thread(self, params).await
+    }
+
+    async fn delete_thread(&self, params: DeleteThreadParams) -> ThreadStoreResult<()> {
+        delete_thread::delete_thread(self, params).await
     }
 
     async fn unarchive_thread(

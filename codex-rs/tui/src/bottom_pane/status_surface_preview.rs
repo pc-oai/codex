@@ -21,6 +21,7 @@ pub(crate) enum StatusSurfacePreviewItem {
     FiveHourLimit,
     WeeklyLimit,
     CodexVersion,
+    Server,
     ContextWindowSize,
     UsedTokens,
     TotalInputTokens,
@@ -30,6 +31,7 @@ pub(crate) enum StatusSurfacePreviewItem {
     Model,
     ModelWithReasoning,
     TaskProgress,
+    Timing,
 }
 
 impl StatusSurfacePreviewItem {
@@ -45,10 +47,11 @@ impl StatusSurfacePreviewItem {
             StatusSurfacePreviewItem::PullRequestNumber => "PR #123",
             StatusSurfacePreviewItem::BranchChanges => "+12 -3",
             StatusSurfacePreviewItem::ContextRemaining => "Context 0% left",
-            StatusSurfacePreviewItem::ContextUsed => "Context 0% used",
+            StatusSurfacePreviewItem::ContextUsed => "0% used",
             StatusSurfacePreviewItem::FiveHourLimit => "5h 0%",
             StatusSurfacePreviewItem::WeeklyLimit => "weekly 0%",
             StatusSurfacePreviewItem::CodexVersion => "0.0.0",
+            StatusSurfacePreviewItem::Server => "openai",
             StatusSurfacePreviewItem::ContextWindowSize => "0 window",
             StatusSurfacePreviewItem::UsedTokens => "0 used",
             StatusSurfacePreviewItem::TotalInputTokens => "0 in",
@@ -58,6 +61,7 @@ impl StatusSurfacePreviewItem {
             StatusSurfacePreviewItem::Model => "gpt-5.2-codex",
             StatusSurfacePreviewItem::ModelWithReasoning => "gpt-5.2-codex medium",
             StatusSurfacePreviewItem::TaskProgress => "Tasks 0/0",
+            StatusSurfacePreviewItem::Timing => "800ms  ≋3ms",
         }
     }
 
@@ -77,6 +81,7 @@ impl StatusSurfacePreviewItem {
             Self::FiveHourLimit,
             Self::WeeklyLimit,
             Self::CodexVersion,
+            Self::Server,
             Self::ContextWindowSize,
             Self::UsedTokens,
             Self::TotalInputTokens,
@@ -86,6 +91,7 @@ impl StatusSurfacePreviewItem {
             Self::Model,
             Self::ModelWithReasoning,
             Self::TaskProgress,
+            Self::Timing,
         ]
         .into_iter()
     }

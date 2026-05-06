@@ -309,6 +309,7 @@ fn config_toml_source_path(layer: &ConfigLayerEntry) -> AbsolutePathBuf {
     match &layer.name {
         ConfigLayerSource::System { file }
         | ConfigLayerSource::User { file }
+        | ConfigLayerSource::SessionConfigFile { file }
         | ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => file.clone(),
         ConfigLayerSource::Project { dot_codex_folder } => dot_codex_folder.join(CONFIG_TOML_FILE),
         ConfigLayerSource::Mdm { domain, key } => {
@@ -468,6 +469,7 @@ fn hook_source_for_config_layer_source(source: &ConfigLayerSource) -> HookSource
     match source {
         ConfigLayerSource::System { .. } => HookSource::System,
         ConfigLayerSource::User { .. } => HookSource::User,
+        ConfigLayerSource::SessionConfigFile { .. } => HookSource::SessionFlags,
         ConfigLayerSource::Project { .. } => HookSource::Project,
         ConfigLayerSource::Mdm { .. } => HookSource::Mdm,
         ConfigLayerSource::SessionFlags => HookSource::SessionFlags,

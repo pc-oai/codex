@@ -2864,6 +2864,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
                 agent_role: Some("explorer".to_string()),
                 git_info: None,
                 name: Some("agent thread".to_string()),
+                user_message_count: 0,
                 turns: Vec::new(),
             },
         }),
@@ -2945,6 +2946,7 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
                 agent_role: Some("explorer".to_string()),
                 git_info: None,
                 name: Some("agent thread".to_string()),
+                user_message_count: 0,
                 turns: Vec::new(),
             },
         }),
@@ -2999,6 +3001,7 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
         agent_role: None,
         git_info: None,
         name: Some("read thread".to_string()),
+        user_message_count: 0,
         turns: Vec::new(),
     };
 
@@ -3806,6 +3809,7 @@ async fn make_test_app() -> App {
         thread_event_listener_tasks: HashMap::new(),
         agent_navigation: AgentNavigationState::default(),
         side_threads: HashMap::new(),
+        thread_name_suggestion_jobs: HashMap::new(),
         active_thread_id: None,
         active_thread_rx: None,
         primary_thread_id: None,
@@ -3869,6 +3873,7 @@ async fn make_test_app_with_channels() -> (
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
             side_threads: HashMap::new(),
+            thread_name_suggestion_jobs: HashMap::new(),
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
@@ -4578,6 +4583,318 @@ async fn backtrack_remote_image_only_selection_clears_existing_composer_draft() 
 }
 
 #[tokio::test]
+async fn edit_last_message_stages_preview_without_rolling_back() {
+    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    app.chat_widget.handle_thread_session(test_thread_session(
+        ThreadId::new(),
+        test_path_buf("/home/user/project"),
+    ));
+    while op_rx.try_recv().is_ok() {}
+    app.transcript_cells = vec![
+        Arc::new(UserHistoryCell {
+            message: "original".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>,
+        Arc::new(AgentMessageCell::new(
+            vec![Line::from("assistant reply")],
+            /*is_first_line*/ true,
+        )) as Arc<dyn HistoryCell>,
+    ];
+
+    assert!(app.edit_last_message_from_command());
+
+    assert!(app.backtrack_edit_preview_active());
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "original");
+    assert_eq!(app.transcript_cells.len(), 2);
+    assert!(op_rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn latest_user_request_text_returns_last_visible_user_message() {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    app.transcript_cells = vec![
+        Arc::new(UserHistoryCell {
+            message: "first request".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>,
+        Arc::new(UserHistoryCell {
+            message: "last request".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>,
+    ];
+
+    assert_eq!(
+        app.latest_user_request_text().as_deref(),
+        Some("last request")
+    );
+}
+
+#[tokio::test]
+async fn recent_user_request_texts_returns_newest_visible_messages_first() {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    app.transcript_cells = vec![
+        Arc::new(UserHistoryCell {
+            message: "first".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>,
+        Arc::new(UserHistoryCell {
+            message: String::new(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>,
+        Arc::new(UserHistoryCell {
+            message: "second".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>,
+        Arc::new(UserHistoryCell {
+            message: "third".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>,
+    ];
+
+    assert_eq!(
+        app.recent_user_request_texts(2),
+        vec!["third".to_string(), "second".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn edit_last_message_preview_steps_to_older_messages() {
+    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    app.chat_widget.handle_thread_session(test_thread_session(
+        ThreadId::new(),
+        test_path_buf("/home/user/project"),
+    ));
+    while op_rx.try_recv().is_ok() {}
+    app.transcript_cells = vec![
+        Arc::new(UserHistoryCell {
+            message: "first".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>,
+        Arc::new(AgentMessageCell::new(
+            vec![Line::from("assistant one")],
+            /*is_first_line*/ true,
+        )) as Arc<dyn HistoryCell>,
+        Arc::new(UserHistoryCell {
+            message: "second".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>,
+        Arc::new(AgentMessageCell::new(
+            vec![Line::from("assistant two")],
+            /*is_first_line*/ true,
+        )) as Arc<dyn HistoryCell>,
+        Arc::new(UserHistoryCell {
+            message: "third".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>,
+        Arc::new(AgentMessageCell::new(
+            vec![Line::from("assistant three")],
+            /*is_first_line*/ true,
+        )) as Arc<dyn HistoryCell>,
+    ];
+
+    assert!(app.edit_last_message_from_command());
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "third");
+
+    assert!(app.step_backtrack_edit_preview_older());
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "second");
+
+    assert!(app.step_backtrack_edit_preview_older());
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "first");
+
+    assert!(app.step_backtrack_edit_preview_older());
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "first");
+    assert_eq!(app.transcript_cells.len(), 6);
+    assert!(op_rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn commit_older_edit_last_message_preview_rolls_back_selected_depth() {
+    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    app.chat_widget.handle_thread_session(test_thread_session(
+        ThreadId::new(),
+        test_path_buf("/home/user/project"),
+    ));
+    while op_rx.try_recv().is_ok() {}
+    app.transcript_cells = vec![
+        Arc::new(UserHistoryCell {
+            message: "first".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>,
+        Arc::new(AgentMessageCell::new(
+            vec![Line::from("assistant one")],
+            /*is_first_line*/ true,
+        )) as Arc<dyn HistoryCell>,
+        Arc::new(UserHistoryCell {
+            message: "second".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>,
+        Arc::new(AgentMessageCell::new(
+            vec![Line::from("assistant two")],
+            /*is_first_line*/ true,
+        )) as Arc<dyn HistoryCell>,
+        Arc::new(UserHistoryCell {
+            message: "third".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>,
+        Arc::new(AgentMessageCell::new(
+            vec![Line::from("assistant three")],
+            /*is_first_line*/ true,
+        )) as Arc<dyn HistoryCell>,
+    ];
+
+    assert!(app.edit_last_message_from_command());
+    assert!(app.step_backtrack_edit_preview_older());
+    app.chat_widget
+        .set_composer_text("edited second".to_string(), Vec::new(), Vec::new());
+
+    assert!(app.commit_backtrack_edit_preview());
+    assert_eq!(op_rx.try_recv(), Ok(Op::ThreadRollback { num_turns: 2 }));
+    assert!(op_rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn cancel_edit_last_message_preview_preserves_transcript() {
+    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    app.chat_widget.handle_thread_session(test_thread_session(
+        ThreadId::new(),
+        test_path_buf("/home/user/project"),
+    ));
+    while op_rx.try_recv().is_ok() {}
+    app.transcript_cells = vec![
+        Arc::new(UserHistoryCell {
+            message: "original".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>,
+        Arc::new(AgentMessageCell::new(
+            vec![Line::from("assistant reply")],
+            /*is_first_line*/ true,
+        )) as Arc<dyn HistoryCell>,
+    ];
+
+    assert!(app.edit_last_message_from_command());
+    app.chat_widget
+        .set_composer_text("edited".to_string(), Vec::new(), Vec::new());
+
+    assert!(app.cancel_backtrack_edit_preview());
+
+    assert!(!app.backtrack_edit_preview_active());
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "");
+    assert_eq!(app.transcript_cells.len(), 2);
+    assert!(op_rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn commit_edit_last_message_preview_rolls_back_then_submits_edit() {
+    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    app.chat_widget.handle_thread_session(test_thread_session(
+        ThreadId::new(),
+        test_path_buf("/home/user/project"),
+    ));
+    while op_rx.try_recv().is_ok() {}
+    app.transcript_cells = vec![
+        Arc::new(UserHistoryCell {
+            message: "original".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>,
+        Arc::new(AgentMessageCell::new(
+            vec![Line::from("assistant reply")],
+            /*is_first_line*/ true,
+        )) as Arc<dyn HistoryCell>,
+    ];
+
+    assert!(app.edit_last_message_from_command());
+    app.chat_widget
+        .set_composer_text("edited".to_string(), Vec::new(), Vec::new());
+
+    assert!(app.commit_backtrack_edit_preview());
+
+    assert!(app.backtrack_edit_preview_active());
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "");
+    assert_eq!(op_rx.try_recv(), Ok(Op::ThreadRollback { num_turns: 1 }));
+    assert!(op_rx.try_recv().is_err());
+
+    app.handle_backtrack_rollback_succeeded(/*num_turns*/ 1);
+
+    assert!(!app.backtrack_edit_preview_active());
+    assert!(app.transcript_cells.is_empty());
+    match op_rx.try_recv() {
+        Ok(Op::UserTurn { items, .. }) => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "edited".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected edited user turn submission, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn failed_edit_last_message_preview_rollback_restores_edited_draft() {
+    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    app.chat_widget.handle_thread_session(test_thread_session(
+        ThreadId::new(),
+        test_path_buf("/home/user/project"),
+    ));
+    while op_rx.try_recv().is_ok() {}
+    app.transcript_cells = vec![
+        Arc::new(UserHistoryCell {
+            message: "original".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>,
+        Arc::new(AgentMessageCell::new(
+            vec![Line::from("assistant reply")],
+            /*is_first_line*/ true,
+        )) as Arc<dyn HistoryCell>,
+    ];
+
+    assert!(app.edit_last_message_from_command());
+    app.chat_widget
+        .set_composer_text("edited".to_string(), Vec::new(), Vec::new());
+    assert!(app.commit_backtrack_edit_preview());
+    assert_eq!(op_rx.try_recv(), Ok(Op::ThreadRollback { num_turns: 1 }));
+
+    app.handle_backtrack_rollback_failed();
+
+    assert!(app.backtrack_edit_preview_active());
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "edited");
+    assert_eq!(app.transcript_cells.len(), 2);
+    assert!(op_rx.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn backtrack_resubmit_preserves_data_image_urls_in_user_turn() {
     let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
 
@@ -4959,6 +5276,7 @@ async fn thread_rollback_response_discards_queued_active_thread_events() {
                 agent_role: None,
                 git_info: None,
                 name: None,
+                user_message_count: 0,
                 turns: Vec::new(),
             },
         },

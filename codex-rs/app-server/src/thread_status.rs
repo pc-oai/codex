@@ -904,6 +904,7 @@ mod tests {
             source,
             git_info: None,
             name: None,
+            user_message_count: 0,
             turns: Vec::new(),
         }
     }

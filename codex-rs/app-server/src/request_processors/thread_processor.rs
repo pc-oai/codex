@@ -372,6 +372,15 @@ impl ThreadRequestProcessor {
         }
     }
 
+    pub(crate) async fn thread_delete(
+        &self,
+        params: ThreadDeleteParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_delete_response_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn thread_increment_elicitation(
         &self,
         params: ThreadIncrementElicitationParams,
@@ -1271,6 +1280,36 @@ impl ThreadRequestProcessor {
         }
 
         Ok((ThreadArchiveResponse {}, archived_thread_ids))
+    }
+
+    async fn thread_delete_response_inner(
+        &self,
+        params: ThreadDeleteParams,
+    ) -> Result<ThreadDeleteResponse, JSONRPCErrorError> {
+        let thread_id = ThreadId::from_string(&params.thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
+
+        let thread_is_loaded = self.thread_manager.get_thread(thread_id).await.is_ok();
+        if !thread_is_loaded
+            && let Err(err) = self
+                .thread_store
+                .read_thread(StoreReadThreadParams {
+                    thread_id,
+                    include_archived: true,
+                    include_history: false,
+                })
+                .await
+        {
+            return Err(thread_store_archive_error("delete", err));
+        }
+
+        self.prepare_thread_for_archive(thread_id).await;
+        self.thread_store
+            .delete_thread(StoreDeleteThreadParams { thread_id })
+            .await
+            .map_err(|err| thread_store_archive_error("delete", err))?;
+
+        Ok(ThreadDeleteResponse {})
     }
 
     async fn thread_increment_elicitation_inner(
@@ -2906,7 +2945,10 @@ impl ThreadRequestProcessor {
         } = self
             .thread_manager
             .fork_thread_from_history(
-                ForkSnapshot::Interrupted,
+                // Interactive forks should branch from the last settled conversation boundary.
+                // If the source is mid-turn, dropping that unfinished suffix keeps the new agent
+                // from inheriting a half-spoken user turn plus synthetic interruption context.
+                ForkSnapshot::TruncateBeforeNthUserMessage(usize::MAX),
                 config,
                 InitialHistory::Resumed(ResumedHistory {
                     conversation_id: source_thread_id,
@@ -3633,6 +3675,7 @@ fn thread_from_stored_thread(
         source: source.into(),
         git_info,
         name: thread.name,
+        user_message_count: thread.user_message_count,
         turns: Vec::new(),
     };
     (thread, history)
@@ -3828,6 +3871,7 @@ fn build_thread_from_snapshot(
         source: config_snapshot.session_source.clone().into(),
         git_info: None,
         name: None,
+        user_message_count: 0,
         turns: Vec::new(),
     }
 }

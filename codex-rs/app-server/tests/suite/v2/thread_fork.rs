@@ -120,7 +120,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
 
     assert_ne!(thread.id, conversation_id);
     assert_eq!(thread.forked_from_id, Some(conversation_id.clone()));
-    assert_eq!(thread.preview, preview);
+    assert_eq!(thread.preview, "");
     assert_eq!(thread.model_provider, "mock_provider");
     assert_eq!(thread.status, ThreadStatus::Idle);
     let thread_path = thread.path.clone().expect("thread path");
@@ -130,26 +130,10 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     assert_eq!(thread.source, SessionSource::VsCode);
     assert_eq!(thread.name, None);
 
-    assert_eq!(
-        thread.turns.len(),
-        1,
-        "expected forked thread to include one turn"
+    assert!(
+        thread.turns.is_empty(),
+        "mid-turn forks should start from the last completed turn"
     );
-    let turn = &thread.turns[0];
-    assert_eq!(turn.status, TurnStatus::Interrupted);
-    assert_eq!(turn.items.len(), 1, "expected user message item");
-    match &turn.items[0] {
-        ThreadItem::UserMessage { content, .. } => {
-            assert_eq!(
-                content,
-                &vec![UserInput::Text {
-                    text: preview.to_string(),
-                    text_elements: Vec::new(),
-                }]
-            );
-        }
-        other => panic!("expected user message item, got {other:?}"),
-    }
 
     // A corresponding thread/started notification should arrive.
     let deadline = tokio::time::Instant::now() + DEFAULT_READ_TIMEOUT;

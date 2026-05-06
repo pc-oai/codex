@@ -87,6 +87,10 @@ const fn default_hide_agent_reasoning() -> Option<bool> {
     Some(false)
 }
 
+const fn default_true() -> Option<bool> {
+    Some(true)
+}
+
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -200,6 +204,10 @@ pub struct ConfigToml {
     // Uses the raw MCP input shape (custom deserialization) rather than `McpServerConfig`.
     #[schemars(schema_with = "crate::schema::mcp_servers_schema")]
     pub mcp_servers: HashMap<String, McpServerConfig>,
+
+    /// Whether configured MCP servers should be loaded for this process.
+    #[serde(default = "default_true")]
+    pub mcp_servers_enabled: Option<bool>,
 
     /// Preferred backend for storing MCP OAuth credentials.
     /// keyring: Use an OS-specific keyring service.

@@ -119,6 +119,8 @@ pub struct TuiChatKeymap {
     pub increase_reasoning_effort: Option<KeybindingsSpec>,
     /// Edit the most recently queued message.
     pub edit_queued_message: Option<KeybindingsSpec>,
+    /// Promote the most recently queued message into an immediate steer.
+    pub steer_queued_message: Option<KeybindingsSpec>,
 }
 
 /// Composer context keybindings. These override corresponding `global` actions.

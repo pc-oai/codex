@@ -99,6 +99,9 @@ pub(crate) enum StatusLineItem {
     /// Codex application version.
     CodexVersion,
 
+    /// Current model provider / server.
+    Server,
+
     /// Total context window size in tokens.
     ContextWindowSize,
 
@@ -122,6 +125,9 @@ pub(crate) enum StatusLineItem {
 
     /// Latest checklist task progress from `update_plan` (if available).
     TaskProgress,
+
+    /// Compact timing summary for the current turn.
+    Timing,
 }
 
 impl StatusLineItem {
@@ -153,6 +159,7 @@ impl StatusLineItem {
                 "Remaining usage on weekly usage limit (omitted when unavailable)"
             }
             StatusLineItem::CodexVersion => "Codex application version",
+            StatusLineItem::Server => "Current model provider / server",
             StatusLineItem::ContextWindowSize => {
                 "Total context window size in tokens (omitted when unknown)"
             }
@@ -166,6 +173,9 @@ impl StatusLineItem {
             StatusLineItem::ThreadTitle => "Current thread title (omitted when unavailable)",
             StatusLineItem::TaskProgress => {
                 "Latest task progress from update_plan (omitted until available)"
+            }
+            StatusLineItem::Timing => {
+                "Compact timing summary for the current turn (omitted when unavailable)"
             }
         }
     }
@@ -185,6 +195,7 @@ impl StatusLineItem {
             StatusLineItem::FiveHourLimit => StatusSurfacePreviewItem::FiveHourLimit,
             StatusLineItem::WeeklyLimit => StatusSurfacePreviewItem::WeeklyLimit,
             StatusLineItem::CodexVersion => StatusSurfacePreviewItem::CodexVersion,
+            StatusLineItem::Server => StatusSurfacePreviewItem::Server,
             StatusLineItem::ContextWindowSize => StatusSurfacePreviewItem::ContextWindowSize,
             StatusLineItem::UsedTokens => StatusSurfacePreviewItem::UsedTokens,
             StatusLineItem::TotalInputTokens => StatusSurfacePreviewItem::TotalInputTokens,
@@ -193,6 +204,7 @@ impl StatusLineItem {
             StatusLineItem::FastMode => StatusSurfacePreviewItem::FastMode,
             StatusLineItem::ThreadTitle => StatusSurfacePreviewItem::ThreadTitle,
             StatusLineItem::TaskProgress => StatusSurfacePreviewItem::TaskProgress,
+            StatusLineItem::Timing => StatusSurfacePreviewItem::Timing,
         }
     }
 }

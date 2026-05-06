@@ -25,7 +25,10 @@ const COMMAND_COLUMN_WIDTH: ColumnWidthConfig = ColumnWidthConfig::new(
 /// A selectable item in the popup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CommandItem {
-    Builtin(SlashCommand),
+    Builtin {
+        name: &'static str,
+        command: SlashCommand,
+    },
 }
 
 pub(crate) struct CommandPopup {
@@ -69,7 +72,7 @@ impl CommandPopup {
     pub(crate) fn new(flags: CommandPopupFlags) -> Self {
         // Keep built-in availability in sync with the composer.
         let builtins: Vec<(&'static str, SlashCommand)> =
-            slash_commands::builtins_for_input(flags.into())
+            slash_commands::builtins_for_completion(flags.into())
                 .into_iter()
                 .filter(|(name, _)| !name.starts_with("debug"))
                 .filter(|(_, cmd)| *cmd != SlashCommand::Apps)
@@ -133,11 +136,20 @@ impl CommandPopup {
         let filter = self.command_filter.trim();
         let mut out: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
         if filter.is_empty() {
-            for (_, cmd) in self.builtins.iter() {
+            for (name, cmd) in self.builtins.iter() {
+                if *name != cmd.command() {
+                    continue;
+                }
                 if ALIAS_COMMANDS.contains(cmd) {
                     continue;
                 }
-                out.push((CommandItem::Builtin(*cmd), None));
+                out.push((
+                    CommandItem::Builtin {
+                        name,
+                        command: *cmd,
+                    },
+                    None,
+                ));
             }
             return out;
         }
@@ -169,8 +181,16 @@ impl CommandPopup {
                 }
             };
 
-        for (_, cmd) in self.builtins.iter() {
-            push_match(CommandItem::Builtin(*cmd), cmd.command(), None, 0);
+        for (name, cmd) in self.builtins.iter() {
+            push_match(
+                CommandItem::Builtin {
+                    name,
+                    command: *cmd,
+                },
+                name,
+                Some(cmd.command()),
+                0,
+            );
         }
 
         out.extend(exact);
@@ -189,9 +209,9 @@ impl CommandPopup {
         matches
             .into_iter()
             .map(|(item, indices)| {
-                let CommandItem::Builtin(cmd) = item;
-                let name = format!("/{}", cmd.command());
-                let description = cmd.description().to_string();
+                let CommandItem::Builtin { name, command } = item;
+                let name = format!("/{name}");
+                let description = command.description().to_string();
                 GenericDisplayRow {
                     name,
                     name_prefix_spans: Vec::new(),
@@ -264,7 +284,7 @@ mod tests {
         // one of the matches is the new "init" command.
         let matches = popup.filtered_items();
         let has_init = matches.iter().any(|item| match item {
-            CommandItem::Builtin(cmd) => cmd.command() == "init",
+            CommandItem::Builtin { command, .. } => command.command() == "init",
         });
         assert!(
             has_init,
@@ -281,7 +301,7 @@ mod tests {
         // command by default.
         let selected = popup.selected_item();
         match selected {
-            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "init"),
+            Some(CommandItem::Builtin { command, .. }) => assert_eq!(command.command(), "init"),
             None => panic!("expected a selected command for exact match"),
         }
     }
@@ -292,7 +312,7 @@ mod tests {
         popup.on_composer_text_change("/mo".to_string());
         let matches = popup.filtered_items();
         match matches.first() {
-            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "model"),
+            Some(CommandItem::Builtin { command, .. }) => assert_eq!(command.command(), "model"),
             None => panic!("expected at least one match for '/mo'"),
         }
     }
@@ -302,14 +322,28 @@ mod tests {
         let mut popup = CommandPopup::new(CommandPopupFlags::default());
         popup.on_composer_text_change("/m".to_string());
 
-        let cmds: Vec<&str> = popup
+        let names: Vec<&str> = popup
             .filtered_items()
             .into_iter()
             .map(|item| match item {
-                CommandItem::Builtin(cmd) => cmd.command(),
+                CommandItem::Builtin { name, .. } => name,
             })
             .collect();
-        assert_eq!(cmds, vec!["model", "memories", "mention", "mcp"]);
+        assert_eq!(names, vec!["m", "model", "memories", "mention", "mcp"]);
+    }
+
+    #[test]
+    fn short_alias_is_selected_before_longer_prefixes() {
+        let mut popup = CommandPopup::new(CommandPopupFlags::default());
+        popup.on_composer_text_change("/m".to_string());
+
+        match popup.selected_item() {
+            Some(CommandItem::Builtin { name, command }) => {
+                assert_eq!(name, "m");
+                assert_eq!(command, SlashCommand::Model);
+            }
+            other => panic!("expected /m alias to be selected, got {other:?}"),
+        }
     }
 
     #[test]
@@ -321,7 +355,7 @@ mod tests {
             .filtered_items()
             .into_iter()
             .map(|item| match item {
-                CommandItem::Builtin(cmd) => cmd.command(),
+                CommandItem::Builtin { command, .. } => command.command(),
             })
             .collect();
         assert!(
@@ -335,11 +369,17 @@ mod tests {
         let mut popup = CommandPopup::new(CommandPopupFlags::default());
         popup.on_composer_text_change("/".to_string());
         let items = popup.filtered_items();
-        assert!(!items.contains(&CommandItem::Builtin(SlashCommand::Quit)));
+        assert!(!items.contains(&CommandItem::Builtin {
+            name: "quit",
+            command: SlashCommand::Quit,
+        }));
 
         popup.on_composer_text_change("/qu".to_string());
         let items = popup.filtered_items();
-        assert!(items.contains(&CommandItem::Builtin(SlashCommand::Quit)));
+        assert!(items.contains(&CommandItem::Builtin {
+            name: "quit",
+            command: SlashCommand::Quit,
+        }));
     }
 
     #[test]
@@ -351,7 +391,7 @@ mod tests {
             .filtered_items()
             .into_iter()
             .map(|item| match item {
-                CommandItem::Builtin(cmd) => cmd.command(),
+                CommandItem::Builtin { command, .. } => command.command(),
             })
             .collect();
         assert!(
@@ -381,7 +421,7 @@ mod tests {
         popup.on_composer_text_change("/collab".to_string());
 
         match popup.selected_item() {
-            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "collab"),
+            Some(CommandItem::Builtin { command, .. }) => assert_eq!(command.command(), "collab"),
             other => panic!("expected collab to be selected for exact match, got {other:?}"),
         }
     }
@@ -403,7 +443,7 @@ mod tests {
         popup.on_composer_text_change("/plan".to_string());
 
         match popup.selected_item() {
-            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "plan"),
+            Some(CommandItem::Builtin { command, .. }) => assert_eq!(command.command(), "plan"),
             other => panic!("expected plan to be selected for exact match, got {other:?}"),
         }
     }
@@ -428,7 +468,7 @@ mod tests {
             .filtered_items()
             .into_iter()
             .map(|item| match item {
-                CommandItem::Builtin(cmd) => cmd.command(),
+                CommandItem::Builtin { command, .. } => command.command(),
             })
             .collect();
         assert!(
@@ -454,7 +494,9 @@ mod tests {
         popup.on_composer_text_change("/personality".to_string());
 
         match popup.selected_item() {
-            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "personality"),
+            Some(CommandItem::Builtin { command, .. }) => {
+                assert_eq!(command.command(), "personality")
+            }
             other => panic!("expected personality to be selected for exact match, got {other:?}"),
         }
     }
@@ -479,7 +521,7 @@ mod tests {
             .filtered_items()
             .into_iter()
             .map(|item| match item {
-                CommandItem::Builtin(cmd) => cmd.command(),
+                CommandItem::Builtin { command, .. } => command.command(),
             })
             .collect();
 
@@ -496,7 +538,7 @@ mod tests {
             .filtered_items()
             .into_iter()
             .map(|item| match item {
-                CommandItem::Builtin(cmd) => cmd.command(),
+                CommandItem::Builtin { command, .. } => command.command(),
             })
             .collect();
 

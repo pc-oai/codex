@@ -69,6 +69,10 @@ pub struct Cli {
     #[arg(long = "no-alt-screen", default_value_t = false)]
     pub no_alt_screen: bool,
 
+    /// Run a private session without saving it to session history.
+    #[arg(long = "private", short = 'P', default_value_t = false)]
+    pub private: bool,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }

@@ -150,6 +150,8 @@ SELECT
     threads.approval_mode,
     threads.tokens_used,
     threads.first_user_message,
+    threads.user_message_count,
+    threads.user_message_count_known,
     threads.archived_at,
     threads.git_sha,
     threads.git_branch,

@@ -61,6 +61,8 @@ pub(super) fn test_thread_metadata(
         approval_mode: crate::extract::enum_to_string(&AskForApproval::OnRequest),
         tokens_used: 0,
         first_user_message: Some("hello".to_string()),
+        user_message_count: 1,
+        user_message_count_known: true,
         archived_at: None,
         git_sha: None,
         git_branch: None,

@@ -308,6 +308,7 @@ async fn stored_thread_from_sqlite_metadata(
         ),
         token_usage: None,
         first_user_message: metadata.first_user_message,
+        user_message_count: metadata.user_message_count,
         history: None,
     }
 }
@@ -366,6 +367,7 @@ fn stored_thread_from_meta_line(
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         token_usage: None,
         first_user_message: None,
+        user_message_count: 0,
         history: None,
     }
 }

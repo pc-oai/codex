@@ -94,6 +94,10 @@ pub struct ThreadMetadata {
     pub tokens_used: i64,
     /// First user message observed for this thread, if any.
     pub first_user_message: Option<String>,
+    /// Number of user messages observed in the thread.
+    pub user_message_count: i64,
+    /// Whether `user_message_count` reflects the full thread history.
+    pub user_message_count_known: bool,
     /// The archive timestamp, if the thread is archived.
     pub archived_at: Option<DateTime<Utc>>,
     /// The git commit SHA, if known.
@@ -207,6 +211,8 @@ impl ThreadMetadataBuilder {
             approval_mode,
             tokens_used: 0,
             first_user_message: None,
+            user_message_count: 0,
+            user_message_count_known: true,
             archived_at: self.archived_at.map(canonicalize_datetime),
             git_sha: self.git_sha.clone(),
             git_branch: self.git_branch.clone(),
@@ -286,6 +292,12 @@ impl ThreadMetadata {
         if self.first_user_message != other.first_user_message {
             diffs.push("first_user_message");
         }
+        if self.user_message_count != other.user_message_count {
+            diffs.push("user_message_count");
+        }
+        if self.user_message_count_known != other.user_message_count_known {
+            diffs.push("user_message_count_known");
+        }
         if self.archived_at != other.archived_at {
             diffs.push("archived_at");
         }
@@ -326,6 +338,8 @@ pub(crate) struct ThreadRow {
     approval_mode: String,
     tokens_used: i64,
     first_user_message: String,
+    user_message_count: i64,
+    user_message_count_known: bool,
     archived_at: Option<i64>,
     git_sha: Option<String>,
     git_branch: Option<String>,
@@ -353,6 +367,8 @@ impl ThreadRow {
             approval_mode: row.try_get("approval_mode")?,
             tokens_used: row.try_get("tokens_used")?,
             first_user_message: row.try_get("first_user_message")?,
+            user_message_count: row.try_get("user_message_count")?,
+            user_message_count_known: row.try_get("user_message_count_known")?,
             archived_at: row.try_get("archived_at")?,
             git_sha: row.try_get("git_sha")?,
             git_branch: row.try_get("git_branch")?,
@@ -384,6 +400,8 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             approval_mode,
             tokens_used,
             first_user_message,
+            user_message_count,
+            user_message_count_known,
             archived_at,
             git_sha,
             git_branch,
@@ -409,6 +427,8 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             approval_mode,
             tokens_used,
             first_user_message: (!first_user_message.is_empty()).then_some(first_user_message),
+            user_message_count,
+            user_message_count_known,
             archived_at: archived_at.map(epoch_seconds_to_datetime).transpose()?,
             git_sha,
             git_branch,
@@ -493,6 +513,8 @@ mod tests {
             approval_mode: "on-request".to_string(),
             tokens_used: 1,
             first_user_message: String::new(),
+            user_message_count: 0,
+            user_message_count_known: true,
             archived_at: None,
             git_sha: None,
             git_branch: None,
@@ -521,6 +543,8 @@ mod tests {
             approval_mode: "on-request".to_string(),
             tokens_used: 1,
             first_user_message: None,
+            user_message_count: 0,
+            user_message_count_known: true,
             archived_at: None,
             git_sha: None,
             git_branch: None,

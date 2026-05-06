@@ -178,8 +178,6 @@ use rand::Rng;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
-use ratatui::style::Modifier;
-use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
@@ -972,6 +970,9 @@ pub(crate) struct ChatWidget {
     plan_item_active: bool,
     // Runtime metrics accumulated across delta snapshots for the active turn.
     turn_runtime_metrics: RuntimeMetricsSummary,
+    // Last completed turn's metrics, retained as a dim reference until the next turn reports its
+    // own timings.
+    last_turn_runtime_metrics: Option<RuntimeMetricsSummary>,
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Feedback sink for /feedback
     feedback: codex_feedback::CodexFeedback,
@@ -1696,13 +1697,12 @@ impl ChatWidget {
         self.realtime_conversation_enabled()
     }
 
-    /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
+    /// Synchronize the bottom-pane "task running" indicator with the agent lifecycle.
     ///
-    /// The bottom pane only has one running flag, but this module treats it as a derived state of
-    /// both the agent turn lifecycle and MCP startup lifecycle.
+    /// MCP startup has its own compact footer progress affordance; it should not make the main
+    /// conversation surface look like Codex is actively working on the user's behalf.
     fn update_task_running_state(&mut self) {
-        self.bottom_pane
-            .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
+        self.bottom_pane.set_task_running(self.agent_turn_running);
         self.refresh_plan_mode_nudge();
         self.refresh_status_surfaces();
     }
@@ -1848,6 +1848,10 @@ impl ChatWidget {
         self.bottom_pane.set_status_line(status_line);
     }
 
+    pub(crate) fn set_status_line_right(&mut self, status_line: Option<Line<'static>>) {
+        self.bottom_pane.set_status_line_right(status_line);
+    }
+
     /// Sets the terminal hyperlink target for the currently rendered footer status line.
     pub(crate) fn set_status_line_hyperlink(&mut self, url: Option<String>) {
         self.bottom_pane.set_status_line_hyperlink(url);
@@ -1974,26 +1978,31 @@ impl ChatWidget {
     }
 
     fn apply_runtime_metrics_delta(&mut self, delta: RuntimeMetricsSummary) {
-        let should_log_timing = has_websocket_timing_metrics(delta);
+        let should_log_timing = has_timing_metrics(delta);
         self.turn_runtime_metrics.merge(delta);
+        self.refresh_status_line();
         if should_log_timing {
             self.log_websocket_timing_totals(delta);
         }
     }
 
     fn log_websocket_timing_totals(&mut self, delta: RuntimeMetricsSummary) {
-        if let Some(line) = history_cell::compact_timing_line(
-            delta.responses_api_summary(),
-            self.config.tui_timing.as_ref(),
-        ) {
-            self.add_plain_history_lines(vec![line]);
-        } else if let Some(label) = history_cell::runtime_metrics_label(
-            delta.responses_api_summary(),
-            self.config.tui_timing.as_ref(),
-        ) {
-            self.add_plain_history_lines(vec![
-                vec!["• ".dim(), format!("Timing: {label}").dark_gray()].into(),
-            ]);
+        if !self
+            .configured_status_line_items()
+            .iter()
+            .any(|item| item == "timing")
+        {
+            if let Some(line) =
+                history_cell::compact_timing_line(delta, self.config.tui_timing.as_ref())
+            {
+                self.add_plain_history_lines(vec![line]);
+            } else if let Some(label) =
+                history_cell::runtime_metrics_label(delta, self.config.tui_timing.as_ref())
+            {
+                self.add_plain_history_lines(vec![
+                    vec!["• ".dim(), format!("Timing: {label}").dark_gray()].into(),
+                ]);
+            }
         }
     }
 
@@ -2519,6 +2528,9 @@ impl ChatWidget {
         self.flush_unified_exec_wait_streak();
         if !from_replay {
             self.collect_runtime_metrics_delta();
+            if !self.turn_runtime_metrics.is_empty() {
+                self.last_turn_runtime_metrics = Some(self.turn_runtime_metrics);
+            }
             let runtime_metrics =
                 (!self.turn_runtime_metrics.is_empty()).then_some(self.turn_runtime_metrics);
             let show_work_separator = self.had_work_activity
@@ -2542,7 +2554,6 @@ impl ChatWidget {
                     self.config.tui_timing.clone(),
                 ));
             }
-            self.turn_runtime_metrics = RuntimeMetricsSummary::default();
             self.needs_final_message_separator = false;
             self.had_work_activity = false;
             self.request_status_line_branch_refresh();
@@ -3271,6 +3282,25 @@ impl ChatWidget {
             local_image_paths,
             mention_bindings,
         );
+    }
+
+    /// Drain the current composer payload as a user message and clear the visible draft.
+    pub(crate) fn take_composer_user_message(&mut self) -> Option<UserMessage> {
+        let user_message = UserMessage {
+            text: self.bottom_pane.composer_text(),
+            text_elements: self.bottom_pane.composer_text_elements(),
+            local_images: self.bottom_pane.composer_local_images(),
+            remote_image_urls: self.bottom_pane.remote_image_urls(),
+            mention_bindings: self.bottom_pane.composer_mention_bindings(),
+        };
+        if user_message.text.is_empty()
+            && user_message.local_images.is_empty()
+            && user_message.remote_image_urls.is_empty()
+        {
+            return None;
+        }
+        self.bottom_pane.clear_composer();
+        Some(user_message)
     }
 
     pub(crate) fn capture_thread_input_state(&self) -> Option<ThreadInputState> {
@@ -4865,7 +4895,7 @@ impl ChatWidget {
             settings: fallback_default,
         };
 
-        let active_cell = Some(Self::placeholder_session_header_cell(&config));
+        let active_cell = None;
 
         let current_cwd = Some(config.cwd.to_path_buf());
         let effective_service_tier = config.service_tier;
@@ -5008,6 +5038,7 @@ impl ChatWidget {
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             turn_runtime_metrics: RuntimeMetricsSummary::default(),
+            last_turn_runtime_metrics: None,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
@@ -5197,6 +5228,20 @@ impl ChatWidget {
         {
             if let Some(user_message) = self.pop_latest_queued_user_message() {
                 self.restore_user_message_to_composer(user_message);
+                self.refresh_pending_input_preview();
+                self.request_redraw();
+            }
+            return;
+        }
+
+        if key_event.kind == KeyEventKind::Press
+            && self.chat_keymap.steer_queued_message.is_pressed(key_event)
+            && self.has_queued_follow_up_messages()
+            && self.agent_turn_running
+            && self.bottom_pane.no_modal_or_popup_active()
+        {
+            if let Some(user_message) = self.pop_latest_queued_user_message() {
+                self.submit_user_message(user_message);
                 self.refresh_pending_input_preview();
                 self.request_redraw();
             }
@@ -5393,6 +5438,27 @@ impl ChatWidget {
         self.copy_last_agent_markdown_with(crate::clipboard_copy::copy_to_clipboard);
     }
 
+    /// Copy the current thread ID to the system clipboard.
+    pub(crate) fn copy_thread_id(&mut self) {
+        self.copy_thread_id_with(crate::clipboard_copy::copy_to_clipboard);
+    }
+
+    /// Copy the most recent user request text to the system clipboard.
+    pub(crate) fn copy_last_user_request_text(&mut self, request: Option<String>) {
+        self.copy_last_user_request_text_with(request, crate::clipboard_copy::copy_to_clipboard);
+    }
+
+    /// Return recent copyable agent responses, newest first.
+    pub(crate) fn recent_agent_markdowns(&self, limit: usize) -> Vec<String> {
+        self.agent_turn_markdowns
+            .iter()
+            .rev()
+            .map(|entry| entry.markdown.clone())
+            .filter(|markdown| !markdown.is_empty())
+            .take(limit)
+            .collect()
+    }
+
     pub(crate) fn truncate_agent_copy_history_to_user_turn_count(
         &mut self,
         user_turn_count: usize,
@@ -5435,6 +5501,63 @@ impl ChatWidget {
             }
             _ => self.add_to_history(history_cell::new_error_event(
                 "No agent response to copy".into(),
+            )),
+        }
+        self.request_redraw();
+    }
+
+    /// Inner implementation with an injectable clipboard backend for testing.
+    fn copy_thread_id_with(
+        &mut self,
+        copy_fn: impl FnOnce(&str) -> Result<Option<crate::clipboard_copy::ClipboardLease>, String>,
+    ) {
+        match self.thread_id {
+            Some(thread_id) => {
+                let thread_id = thread_id.to_string();
+                match copy_fn(&thread_id) {
+                    Ok(lease) => {
+                        self.clipboard_lease = lease;
+                        self.add_to_history(history_cell::new_info_event(
+                            format!("Copied thread ID to clipboard ({thread_id})"),
+                            /*hint*/ None,
+                        ));
+                    }
+                    Err(error) => self.add_to_history(history_cell::new_error_event(format!(
+                        "Copy failed: {error}"
+                    ))),
+                }
+            }
+            None => self.add_to_history(history_cell::new_error_event(
+                "Thread ID is unavailable before the session starts.".into(),
+            )),
+        }
+        self.request_redraw();
+    }
+
+    /// Inner implementation with an injectable clipboard backend for testing.
+    fn copy_last_user_request_text_with(
+        &mut self,
+        request: Option<String>,
+        copy_fn: impl FnOnce(&str) -> Result<Option<crate::clipboard_copy::ClipboardLease>, String>,
+    ) {
+        match request {
+            Some(request) if !request.is_empty() => match copy_fn(&request) {
+                Ok(lease) => {
+                    self.clipboard_lease = lease;
+                    self.add_to_history(history_cell::new_info_event(
+                        "Copied last request to clipboard".into(),
+                        /*hint*/ None,
+                    ));
+                }
+                Err(error) => self.add_to_history(history_cell::new_error_event(format!(
+                    "Copy failed: {error}"
+                ))),
+            },
+            Some(_) => self.add_to_history(history_cell::new_error_event(
+                "Last request has no text to copy".into(),
+            )),
+            None => self.add_to_history(history_cell::new_error_event(
+                "No user request to copy".into(),
             )),
         }
         self.request_redraw();
@@ -5603,6 +5726,10 @@ impl ChatWidget {
             user_message,
             UserMessageHistoryRecord::UserMessageText,
         );
+    }
+
+    pub(crate) fn submit_user_message_from_backtrack_edit(&mut self, user_message: UserMessage) {
+        self.submit_user_message(user_message);
     }
 
     fn submit_user_message_with_history_record(
@@ -7413,6 +7540,41 @@ impl ChatWidget {
             }
         };
         self.open_model_popup_with_presets(presets);
+    }
+
+    /// Open the reasoning picker directly for the active model, skipping model selection.
+    pub(crate) fn open_current_model_reasoning_popup(&mut self) {
+        if !self.is_session_configured() {
+            self.add_info_message(
+                "Reasoning selection is disabled until startup completes.".to_string(),
+                /*hint*/ None,
+            );
+            return;
+        }
+
+        let current_model = self.current_model().to_string();
+        let presets: Vec<ModelPreset> = match self.model_catalog.try_list_models() {
+            Ok(models) => models,
+            Err(_) => {
+                self.add_info_message(
+                    "Models are being updated; please try /effort again in a moment.".to_string(),
+                    /*hint*/ None,
+                );
+                return;
+            }
+        };
+        let Some(preset) = presets
+            .into_iter()
+            .find(|preset| preset.model.as_str() == current_model)
+        else {
+            self.add_info_message(
+                format!("Reasoning selection is unavailable for {current_model}."),
+                /*hint*/ None,
+            );
+            return;
+        };
+
+        self.open_reasoning_popup(preset);
     }
 
     pub(crate) fn open_personality_popup(&mut self) {
@@ -9629,7 +9791,7 @@ impl ChatWidget {
     /// Consolidating both refreshes here prevents the bug where callers update the
     /// header/title (`refresh_model_display`) but forget the footer status line
     /// (`refresh_status_line`).
-    fn refresh_model_dependent_surfaces(&mut self) {
+    pub(crate) fn refresh_model_dependent_surfaces(&mut self) {
         self.refresh_model_display();
         self.refresh_status_line();
     }
@@ -9825,48 +9987,10 @@ impl ChatWidget {
         self.bottom_pane.plugins().map(Vec::as_slice)
     }
 
-    /// Build a placeholder header cell while the session is configuring.
-    fn placeholder_session_header_cell(config: &Config) -> Box<dyn HistoryCell> {
-        let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
-        Box::new(
-            history_cell::SessionHeaderHistoryCell::new_with_style(
-                DEFAULT_MODEL_DISPLAY_NAME.to_string(),
-                placeholder_style,
-                /*reasoning_effort*/ None,
-                /*show_fast_status*/ false,
-                config.cwd.to_path_buf(),
-                CODEX_CLI_VERSION,
-            )
-            .with_yolo_mode(history_cell::is_yolo_mode(config)),
-        )
-    }
-
-    /// Merge the real session info cell with any placeholder header to avoid double boxes.
+    /// Apply real session info once configuration arrives.
     fn apply_session_info_cell(&mut self, cell: history_cell::SessionInfoCell) {
-        let mut session_info_cell = Some(Box::new(cell) as Box<dyn HistoryCell>);
-        let merged_header = if let Some(active) = self.active_cell.take() {
-            if active
-                .as_any()
-                .is::<history_cell::SessionHeaderHistoryCell>()
-            {
-                // Reuse the existing placeholder header to avoid rendering two boxes.
-                if let Some(cell) = session_info_cell.take() {
-                    self.active_cell = Some(cell);
-                }
-                true
-            } else {
-                self.active_cell = Some(active);
-                false
-            }
-        } else {
-            false
-        };
-
         self.flush_active_cell();
-
-        if !merged_header && let Some(cell) = session_info_cell {
-            self.add_boxed_history(cell);
-        }
+        self.add_boxed_history(Box::new(cell));
     }
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
@@ -10413,6 +10537,11 @@ impl ChatWidget {
         self.refresh_plan_mode_nudge();
     }
 
+    pub(crate) fn clear_composer_draft(&mut self) {
+        self.bottom_pane.clear_composer();
+        self.refresh_plan_mode_nudge();
+    }
+
     pub(crate) fn set_remote_image_urls(&mut self, remote_image_urls: Vec<String>) {
         self.bottom_pane.set_remote_image_urls(remote_image_urls);
     }
@@ -10459,6 +10588,18 @@ impl ChatWidget {
 
     pub(crate) fn clear_esc_backtrack_hint(&mut self) {
         self.bottom_pane.clear_esc_backtrack_hint();
+    }
+
+    pub(crate) fn show_edit_last_message_hint(&mut self) {
+        self.bottom_pane.set_footer_hint_override(Some(vec![
+            ("Editing".to_string(), "previous message".to_string()),
+            ("Enter".to_string(), "submit".to_string()),
+            ("Esc".to_string(), "cancel".to_string()),
+        ]));
+    }
+
+    pub(crate) fn clear_edit_last_message_hint(&mut self) {
+        self.bottom_pane.set_footer_hint_override(/*items*/ None);
     }
 
     fn refresh_skills_for_current_cwd(&mut self, force_reload: bool) {
@@ -10860,6 +11001,11 @@ impl ChatWidget {
         self.bottom_pane.status_line_text()
     }
 
+    #[cfg(test)]
+    pub(crate) fn status_line_right_text(&self) -> Option<String> {
+        self.bottom_pane.status_line_right_text()
+    }
+
     pub(crate) fn clear_token_usage(&mut self) {
         self.token_info = None;
     }
@@ -10933,13 +11079,15 @@ impl ChatWidget {
     }
 }
 
-fn has_websocket_timing_metrics(summary: RuntimeMetricsSummary) -> bool {
+fn has_timing_metrics(summary: RuntimeMetricsSummary) -> bool {
     summary.responses_api_overhead_ms > 0
         || summary.responses_api_inference_time_ms > 0
         || summary.responses_api_engine_iapi_ttft_ms > 0
         || summary.responses_api_engine_service_ttft_ms > 0
         || summary.responses_api_engine_iapi_tbt_ms > 0
         || summary.responses_api_engine_service_tbt_ms > 0
+        || summary.turn_ttft_ms > 0
+        || summary.turn_ttfm_ms > 0
 }
 
 impl Drop for ChatWidget {

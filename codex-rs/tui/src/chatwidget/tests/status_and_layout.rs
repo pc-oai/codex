@@ -1526,7 +1526,14 @@ async fn status_line_model_with_reasoning_includes_fast_for_fast_capable_models(
 
     assert_eq!(
         status_line_text(&chat),
-        Some(format!("gpt-5.4 xhigh fast · Context 0% used · {test_cwd}"))
+        Some(format!("gpt-5.4 xhigh fast · {test_cwd}"))
+    );
+    assert_eq!(
+        status_line_right_text(&chat),
+        Some(format!(
+            "{} · 0% used",
+            crate::version::local_build_label().expect("source build label"),
+        ))
     );
 
     chat.set_model("gpt-5.3-codex");
@@ -1534,9 +1541,26 @@ async fn status_line_model_with_reasoning_includes_fast_for_fast_capable_models(
 
     assert_eq!(
         status_line_text(&chat),
+        Some(format!("gpt-5.3-codex xhigh · {test_cwd}"))
+    );
+    assert_eq!(
+        status_line_right_text(&chat),
         Some(format!(
-            "gpt-5.3-codex xhigh · Context 0% used · {test_cwd}"
+            "{} · 0% used",
+            crate::version::local_build_label().expect("source build label"),
         ))
+    );
+}
+
+#[tokio::test]
+async fn source_build_footer_shows_local_build_number_on_right() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.config.tui_status_line = Some(vec!["model-with-reasoning".to_string()]);
+    chat.refresh_status_line();
+
+    assert_eq!(
+        status_line_right_text(&chat),
+        crate::version::local_build_label()
     );
 }
 
@@ -2031,6 +2055,98 @@ async fn runtime_metrics_websocket_timing_logs_and_final_separator_sums_totals()
     let final_separator = final_separator.expect("expected final separator with runtime metrics");
     assert!(final_separator.contains("TTFT: 80ms (iapi)"));
     assert!(final_separator.contains("TBT: 50ms (service)"));
+}
+
+#[tokio::test]
+async fn status_line_timing_persists_as_muted_reference_until_next_turn_reports_timing() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.config.tui_status_line = Some(vec!["timing".to_string()]);
+    chat.config.tui_timing = Some(Default::default());
+
+    chat.on_task_started();
+    chat.apply_runtime_metrics_delta(RuntimeMetricsSummary {
+        turn_ttft_ms: 800,
+        responses_api_engine_iapi_tbt_ms: 3,
+        ..RuntimeMetricsSummary::default()
+    });
+    chat.refresh_status_line();
+    assert_eq!(
+        chat.status_line_value_for_item(StatusLineItem::Timing),
+        Some("800ms  ≋3ms".to_string())
+    );
+
+    chat.on_task_complete(
+        /*last_agent_message*/ None, /*duration_ms*/ None, /*from_replay*/ false,
+    );
+    chat.refresh_status_line();
+    assert_eq!(
+        chat.status_line_value_for_item(StatusLineItem::Timing),
+        Some("800ms  ≋3ms".to_string())
+    );
+
+    chat.on_task_started();
+    chat.refresh_status_line();
+    assert_eq!(
+        chat.status_line_value_for_item(StatusLineItem::Timing),
+        None
+    );
+    assert_eq!(
+        status_line_right_text(&chat),
+        Some(format!(
+            "{} · 800ms  ≋3ms",
+            crate::version::local_build_label().expect("source build label"),
+        ))
+    );
+
+    chat.apply_runtime_metrics_delta(RuntimeMetricsSummary {
+        turn_ttft_ms: 400,
+        responses_api_engine_iapi_tbt_ms: 2,
+        ..RuntimeMetricsSummary::default()
+    });
+    chat.refresh_status_line();
+    assert_eq!(
+        status_line_right_text(&chat),
+        Some(format!(
+            "{} · 400ms  ≋2ms",
+            crate::version::local_build_label().expect("source build label"),
+        ))
+    );
+}
+
+#[tokio::test]
+async fn status_line_previous_timing_footer_snapshot() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    chat.thread_id = Some(ThreadId::new());
+    chat.config.tui_status_line = Some(vec!["timing".to_string()]);
+    chat.config.tui_timing = Some(Default::default());
+
+    chat.on_task_started();
+    chat.apply_runtime_metrics_delta(RuntimeMetricsSummary {
+        turn_ttft_ms: 800,
+        responses_api_engine_iapi_tbt_ms: 3,
+        ..RuntimeMetricsSummary::default()
+    });
+    chat.on_task_complete(
+        /*last_agent_message*/ None, /*duration_ms*/ None, /*from_replay*/ false,
+    );
+    chat.on_task_started();
+    chat.refresh_status_line();
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw stale timing footer");
+    assert_chatwidget_snapshot!(
+        "status_line_previous_timing_footer",
+        normalized_backend_snapshot(terminal.backend())
+    );
 }
 
 #[tokio::test]

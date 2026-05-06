@@ -599,6 +599,13 @@ pub enum ConfigLayerSource {
         file: AbsolutePathBuf,
     },
 
+    /// Extra config file supplied explicitly by the current process.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    SessionConfigFile {
+        file: AbsolutePathBuf,
+    },
+
     /// Path to a .codex/ folder within a project. There could be multiple of
     /// these between `cwd` and the project/repo root.
     #[serde(rename_all = "camelCase")]
@@ -631,6 +638,7 @@ impl ConfigLayerSource {
             ConfigLayerSource::Mdm { .. } => 0,
             ConfigLayerSource::System { .. } => 10,
             ConfigLayerSource::User { .. } => 20,
+            ConfigLayerSource::SessionConfigFile { .. } => 24,
             ConfigLayerSource::Project { .. } => 25,
             ConfigLayerSource::SessionFlags => 30,
             ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => 40,
@@ -4123,6 +4131,18 @@ pub struct ThreadArchiveResponse {}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadDeleteParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadDeleteResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadUnsubscribeParams {
     pub thread_id: String,
 }
@@ -5335,6 +5355,9 @@ pub struct Thread {
     pub git_info: Option<GitInfo>,
     /// Optional user-facing thread title.
     pub name: Option<String>,
+    /// Number of user messages observed in this thread.
+    #[serde(default)]
+    pub user_message_count: i64,
     /// Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read`
     /// (when `includeTurns` is true) responses.
     /// For all other responses and notifications returning a Thread,

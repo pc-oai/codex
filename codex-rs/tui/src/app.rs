@@ -27,7 +27,6 @@ use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
 use crate::chatwidget::ReplayKind;
 use crate::chatwidget::ThreadInputState;
-use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::split_command_string;
 use crate::exec_command::strip_bash_lc_and_escape;
@@ -124,6 +123,7 @@ use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::UserInput;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::ModelAvailabilityNuxConfig;
@@ -179,6 +179,7 @@ use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::JoinHandle;
+use tokio::time::interval;
 use toml::Value as TomlValue;
 use uuid::Uuid;
 mod agent_navigation;
@@ -200,6 +201,7 @@ mod side;
 mod startup_prompts;
 mod thread_events;
 mod thread_goal_actions;
+mod thread_name_suggestion;
 mod thread_routing;
 mod thread_session_state;
 
@@ -214,6 +216,7 @@ use self::side::SideParentStatusChange;
 use self::side::SideThreadState;
 use self::startup_prompts::*;
 use self::thread_events::*;
+use self::thread_name_suggestion::ThreadNameSuggestionJob;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
@@ -360,6 +363,7 @@ pub(crate) enum AppRunControl {
 #[derive(Debug, Clone)]
 pub enum ExitReason {
     UserRequested,
+    ReloadRequested,
     Fatal(String),
 }
 
@@ -496,6 +500,7 @@ pub(crate) struct App {
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
     agent_navigation: AgentNavigationState,
     side_threads: HashMap<ThreadId, SideThreadState>,
+    thread_name_suggestion_jobs: HashMap<ThreadId, ThreadNameSuggestionJob>,
     active_thread_id: Option<ThreadId>,
     active_thread_rx: Option<mpsc::Receiver<ThreadBufferedEvent>>,
     primary_thread_id: Option<ThreadId>,
@@ -567,6 +572,209 @@ fn active_turn_steer_race(error: &TypedRequestError) -> Option<ActiveTurnSteerRa
 }
 
 impl App {
+    const TALON_RECENT_MESSAGE_LIMIT: usize = 8;
+
+    fn select_model_from_command(
+        &mut self,
+        model: String,
+        requested_effort: Option<ReasoningEffortConfig>,
+    ) -> bool {
+        let models = self.model_catalog.try_list_models().unwrap_or_default();
+        let Some(preset) = models
+            .into_iter()
+            .find(|preset| preset.show_in_picker && preset.model == model)
+        else {
+            return false;
+        };
+
+        let selected_effort = requested_effort
+            .filter(|effort| {
+                preset
+                    .supported_reasoning_efforts
+                    .iter()
+                    .any(|option| option.effort == *effort)
+            })
+            .or(Some(preset.default_reasoning_effort));
+
+        self.chat_widget.set_model(&model);
+        self.on_update_reasoning_effort(selected_effort);
+        self.app_event_tx.send(AppEvent::PersistModelSelection {
+            model,
+            effort: selected_effort,
+        });
+        true
+    }
+
+    fn talon_ambient_state(&self) -> crate::talon::TalonAmbientState {
+        let models = self
+            .model_catalog
+            .try_list_models()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|preset| crate::talon::TalonModelState {
+                model: preset.model,
+                display_name: preset.display_name,
+                default_reasoning_effort: preset.default_reasoning_effort,
+                supported_reasoning_efforts: preset
+                    .supported_reasoning_efforts
+                    .into_iter()
+                    .map(|option| option.effort)
+                    .collect(),
+                show_in_picker: preset.show_in_picker,
+            })
+            .collect();
+
+        crate::talon::TalonAmbientState {
+            version: 1,
+            session_id: self.chat_widget.thread_id().map(|id| id.to_string()),
+            is_task_running: self.chat_widget.is_task_running(),
+            last_user_request: self.latest_user_request_text(),
+            recent_user_requests: self.recent_user_request_texts(Self::TALON_RECENT_MESSAGE_LIMIT),
+            recent_agent_responses: self
+                .chat_widget
+                .recent_agent_markdowns(Self::TALON_RECENT_MESSAGE_LIMIT),
+            current_model: self.chat_widget.current_model().to_string(),
+            current_reasoning_effort: self.chat_widget.current_reasoning_effort(),
+            models,
+            timestamp_ms: crate::talon::now_timestamp_ms(),
+        }
+    }
+
+    fn write_talon_ambient_state(&self, paths: &crate::talon::TalonPaths) {
+        let _ = crate::talon::write_state(paths, &self.talon_ambient_state());
+    }
+
+    fn handle_talon_file_rpc(&mut self, tui: &mut tui::Tui, paths: &crate::talon::TalonPaths) {
+        let Ok(Some(req)) = crate::talon::read_request(paths) else {
+            return;
+        };
+
+        let mut applied: Vec<String> = Vec::new();
+
+        for cmd in req.commands {
+            use crate::talon::TalonCommand::*;
+            match cmd {
+                SetBuffer { text, cursor } => {
+                    self.chat_widget
+                        .set_composer_text(text, Vec::new(), Vec::new());
+                    if let Some(pos) = cursor {
+                        self.chat_widget.set_composer_cursor(pos);
+                    }
+                    applied.push("set_buffer".to_string());
+                }
+                SetCursor { cursor } => {
+                    self.chat_widget.set_composer_cursor(cursor);
+                    applied.push("set_cursor".to_string());
+                }
+                GetState => {
+                    applied.push("get_state".to_string());
+                }
+                Notify { message } => {
+                    let _ = tui.notify(message);
+                    applied.push("notify".to_string());
+                }
+                EditPreviousMessage { steps_back } => {
+                    if self.chat_widget.history_edit_previous(steps_back) {
+                        applied.push("edit_previous_message".to_string());
+                    }
+                }
+                EditLastMessage => {
+                    let edited = self.edit_last_message_from_command();
+                    tui.frame_requester().schedule_frame();
+                    if edited {
+                        applied.push("edit_last_message".to_string());
+                    }
+                }
+                CopyLastRequest => {
+                    let request = self.latest_user_request_text();
+                    self.chat_widget.copy_last_user_request_text(request);
+                    applied.push("copy_last_request".to_string());
+                }
+                CopyLastResponse => {
+                    self.chat_widget.copy_last_agent_markdown();
+                    applied.push("copy_last_response".to_string());
+                }
+                RetitleCurrentSession => {
+                    self.chat_widget.request_retitle_suggestion();
+                    applied.push("retitle_current_session".to_string());
+                }
+                EmojiCurrentSession => {
+                    self.chat_widget.request_emoji_suggestion();
+                    applied.push("emoji_current_session".to_string());
+                }
+                InterruptCurrentTurn => {
+                    if self.chat_widget.is_task_running() {
+                        self.app_event_tx
+                            .send(AppEvent::CodexOp(AppCommand::Interrupt));
+                        applied.push("interrupt_current_turn".to_string());
+                    } else {
+                        applied.push("interrupt_current_turn_skipped_idle".to_string());
+                    }
+                }
+                ExitCurrentSession => {
+                    self.app_event_tx
+                        .send(AppEvent::Exit(ExitMode::ShutdownFirst));
+                    applied.push("exit_current_session".to_string());
+                }
+                SetModel { model, effort } => {
+                    if self.select_model_from_command(model, effort) {
+                        applied.push("set_model".to_string());
+                    }
+                }
+                ReloadCurrentSessionIfIdle => {
+                    if self.chat_widget.is_task_running() {
+                        applied.push("reload_current_session_if_idle_skipped_busy".to_string());
+                    } else {
+                        self.app_event_tx.send(AppEvent::ReloadCurrentSession);
+                        applied.push("reload_current_session_if_idle".to_string());
+                    }
+                }
+                ReloadCurrentSession => {
+                    self.app_event_tx.send(AppEvent::ReloadCurrentSession);
+                    applied.push("reload_current_session".to_string());
+                }
+                HistoryPrevious => {
+                    if self.chat_widget.history_previous() {
+                        applied.push("history_previous".to_string());
+                    }
+                }
+                HistoryNext => {
+                    if self.chat_widget.history_next() {
+                        applied.push("history_next".to_string());
+                    }
+                }
+            }
+        }
+
+        let state = crate::talon::TalonEditorState {
+            buffer: self.chat_widget.composer_text(),
+            cursor: self.chat_widget.composer_cursor(),
+            is_task_running: self.chat_widget.is_task_running(),
+            task_summary: crate::talon::status_summary(),
+            session_id: self.chat_widget.thread_id().map(|id| id.to_string()),
+            cwd: Some(self.config.cwd.display().to_string()),
+            last_user_request: self.latest_user_request_text(),
+            recent_user_requests: self.recent_user_request_texts(Self::TALON_RECENT_MESSAGE_LIMIT),
+            recent_agent_responses: self
+                .chat_widget
+                .recent_agent_markdowns(Self::TALON_RECENT_MESSAGE_LIMIT),
+            model: self.chat_widget.current_model().to_string(),
+            reasoning_effort: self.chat_widget.current_reasoning_effort(),
+        };
+
+        let resp = crate::talon::TalonResponse {
+            version: 1,
+            status: crate::talon::TalonResponseStatus::Ok,
+            state,
+            applied,
+            error: None,
+            timestamp_ms: crate::talon::now_timestamp_ms(),
+        };
+
+        let _ = crate::talon::write_response(paths, &resp);
+        let _ = crate::talon::remove_request(paths);
+    }
+
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
         tui: &mut tui::Tui,
@@ -900,6 +1108,7 @@ See the Codex keymap documentation for supported actions and examples."
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
             side_threads: HashMap::new(),
+            thread_name_suggestion_jobs: HashMap::new(),
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
@@ -910,6 +1119,16 @@ See the Codex keymap documentation for supported actions and examples."
             pending_plugin_enabled_writes: HashMap::new(),
             pending_hook_enabled_writes: HashMap::new(),
         };
+        if !app_server.is_remote() {
+            let request_handle = app_server.request_handle();
+            let app_event_tx = app.app_event_tx.clone();
+            tokio::spawn(async move {
+                let result = AppServerSession::models_list_with_request_handle(request_handle)
+                    .await
+                    .map_err(|err| err.to_string());
+                app_event_tx.send(AppEvent::ModelsLoaded { result });
+            });
+        }
         if let Some(started) = initial_started_thread {
             let thread_id = started.session.thread_id;
             app.enqueue_primary_thread_session(started.session, started.turns)
@@ -927,7 +1146,9 @@ See the Codex keymap documentation for supported actions and examples."
             } else {
                 crate::app_server_session::ThreadParamsMode::Embedded
             };
-            let remote_cwd_override = app_server.remote_cwd_override().map(|p| p.to_path_buf());
+            let remote_cwd_override = app_server
+                .remote_cwd_override()
+                .map(std::path::Path::to_path_buf);
             let app_event_tx = app.app_event_tx.clone();
             tokio::spawn(async move {
                 let result = AppServerSession::start_thread_with_request_handle(
@@ -973,6 +1194,9 @@ See the Codex keymap documentation for supported actions and examples."
 
         let tui_events = tui.event_stream();
         tokio::pin!(tui_events);
+
+        let talon_paths = crate::talon::resolve_paths().ok();
+        let mut talon_tick = interval(Duration::from_millis(200));
 
         tui.frame_requester().schedule_frame();
         app.refresh_startup_skills(&app_server);
@@ -1055,6 +1279,19 @@ See the Codex keymap documentation for supported actions and examples."
                                 listen_for_app_server_events = false;
                                 tracing::warn!("app-server event stream closed");
                             }
+                        }
+                        AppRunControl::Continue
+                    }
+                    _ = talon_tick.tick() => {
+                        if let Some(paths) = &talon_paths {
+                            app.handle_talon_file_rpc(tui, paths);
+                        }
+                        if let Some(thread_id) = app.chat_widget.thread_id()
+                            && let Ok(paths) =
+                                crate::talon::resolve_session_paths(&thread_id.to_string())
+                        {
+                            app.handle_talon_file_rpc(tui, &paths);
+                            app.write_talon_ambient_state(&paths);
                         }
                         AppRunControl::Continue
                     }

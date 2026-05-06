@@ -53,6 +53,8 @@ use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
+use codex_app_server_protocol::ThreadDeleteParams;
+use codex_app_server_protocol::ThreadDeleteResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadGoalClearParams;
@@ -642,6 +644,21 @@ impl AppServerSession {
         Ok(())
     }
 
+    pub(crate) async fn thread_delete(&mut self, thread_id: ThreadId) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadDeleteResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadDelete {
+                request_id,
+                params: ThreadDeleteParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/delete failed in TUI")?;
+        Ok(())
+    }
+
     pub(crate) async fn thread_memory_mode_set(
         &mut self,
         thread_id: ThreadId,
@@ -1005,6 +1022,27 @@ impl AppServerSession {
             })
             .await
             .wrap_err("skills/list failed in TUI")
+    }
+
+    pub(crate) async fn models_list_with_request_handle(
+        request_handle: AppServerRequestHandle,
+    ) -> Result<Vec<ModelPreset>> {
+        let models: ModelListResponse = request_handle
+            .request_typed(ClientRequest::ModelList {
+                request_id: next_background_request_id(),
+                params: ModelListParams {
+                    cursor: None,
+                    limit: None,
+                    include_hidden: Some(true),
+                },
+            })
+            .await
+            .wrap_err("model/list failed in TUI")?;
+        Ok(models
+            .data
+            .into_iter()
+            .map(model_preset_from_api_model)
+            .collect())
     }
 
     fn next_request_id(&mut self) -> RequestId {
@@ -1881,6 +1919,7 @@ mod tests {
                 agent_role: None,
                 git_info: None,
                 name: None,
+                user_message_count: 0,
                 turns: vec![Turn {
                     id: "turn-1".to_string(),
                     items: vec![

@@ -1,18 +1,14 @@
 //! Resolve saved-session state needed before resuming or forking a thread.
 //!
-//! The app-server API owns normal thread lifecycle data. This module coordinates
-//! the TUI-specific cwd prompt and falls back to local rollout metadata only
-//! before the app server has resumed the selected thread.
+//! The app-server API owns normal thread lifecycle data. This module resolves
+//! the persisted cwd that the TUI should reuse before the app server has resumed
+//! or forked the selected thread, falling back to local rollout metadata when
+//! needed.
 
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::cwd_prompt;
-use crate::cwd_prompt::CwdPromptAction;
-use crate::cwd_prompt::CwdPromptOutcome;
-use crate::cwd_prompt::CwdSelection;
-use crate::tui::Tui;
 use codex_protocol::ThreadId;
 use codex_state::StateRuntime;
 use codex_utils_path as path_utils;
@@ -48,7 +44,6 @@ struct RawRecord {
 
 pub(crate) enum ResolveCwdOutcome {
     Continue(Option<PathBuf>),
-    Exit,
 }
 
 pub(crate) async fn resolve_session_thread_id(
@@ -84,31 +79,35 @@ pub(crate) async fn read_session_model(
 }
 
 pub(crate) async fn resolve_cwd_for_resume_or_fork(
-    tui: &mut Tui,
     state_db_ctx: Option<&StateRuntime>,
     current_cwd: &Path,
     thread_id: ThreadId,
     path: Option<&Path>,
-    action: CwdPromptAction,
-    allow_prompt: bool,
 ) -> color_eyre::Result<ResolveCwdOutcome> {
     let Some(history_cwd) = read_session_cwd(state_db_ctx, thread_id, path).await else {
         return Ok(ResolveCwdOutcome::Continue(None));
     };
-    if allow_prompt && cwds_differ(current_cwd, &history_cwd) {
-        let selection_outcome =
-            cwd_prompt::run_cwd_selection_prompt(tui, action, current_cwd, &history_cwd).await?;
-        return Ok(match selection_outcome {
-            CwdPromptOutcome::Selection(CwdSelection::Current) => {
-                ResolveCwdOutcome::Continue(Some(current_cwd.to_path_buf()))
-            }
-            CwdPromptOutcome::Selection(CwdSelection::Session) => {
-                ResolveCwdOutcome::Continue(Some(history_cwd))
-            }
-            CwdPromptOutcome::Exit => ResolveCwdOutcome::Exit,
-        });
+    Ok(ResolveCwdOutcome::Continue(Some(resume_cwd_or_current(
+        current_cwd,
+        &history_cwd,
+    ))))
+}
+
+pub(crate) fn resume_cwd_or_current(current_cwd: &Path, session_cwd: &Path) -> PathBuf {
+    if session_cwd.is_dir() {
+        session_cwd.to_path_buf()
+    } else {
+        tracing::info!(
+            session_cwd = %session_cwd.display(),
+            current_cwd = %current_cwd.display(),
+            "saved session cwd no longer exists; resuming from current cwd"
+        );
+        current_cwd.to_path_buf()
     }
-    Ok(ResolveCwdOutcome::Continue(Some(history_cwd)))
+}
+
+pub(crate) fn cwds_differ(current_cwd: &Path, session_cwd: &Path) -> bool {
+    !path_utils::paths_match_after_normalization(current_cwd, session_cwd)
 }
 
 async fn read_session_cwd(
@@ -135,10 +134,6 @@ async fn read_session_cwd(
             None
         }
     }
-}
-
-pub(crate) fn cwds_differ(current_cwd: &Path, session_cwd: &Path) -> bool {
-    !path_utils::paths_match_after_normalization(current_cwd, session_cwd)
 }
 
 async fn read_rollout_resume_state(path: &Path) -> io::Result<RolloutResumeState> {
@@ -308,6 +303,36 @@ mod tests {
 
         assert_eq!(state.thread_id, Some(thread_id));
         assert_eq!(state.cwd, Some(cwd));
+        Ok(())
+    }
+
+    #[test]
+    fn resume_or_fork_prefers_existing_session_cwd() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let current_cwd = temp_dir.path().join("current");
+        let session_cwd = temp_dir.path().join("session");
+        std::fs::create_dir_all(&current_cwd)?;
+        std::fs::create_dir_all(&session_cwd)?;
+
+        assert_eq!(
+            resume_cwd_or_current(&current_cwd, &session_cwd),
+            session_cwd
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn resume_or_fork_falls_back_to_current_cwd_when_session_cwd_is_missing() -> std::io::Result<()>
+    {
+        let temp_dir = TempDir::new()?;
+        let current_cwd = temp_dir.path().join("current");
+        let missing_session_cwd = temp_dir.path().join("missing-session");
+        std::fs::create_dir_all(&current_cwd)?;
+
+        assert_eq!(
+            resume_cwd_or_current(&current_cwd, &missing_session_cwd),
+            current_cwd
+        );
         Ok(())
     }
 }

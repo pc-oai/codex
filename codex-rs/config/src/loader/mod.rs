@@ -212,6 +212,22 @@ pub async fn load_config_layers_state(
     };
     layers.push(user_layer);
 
+    for session_config_file in &overrides.session_config_files {
+        let session_config_file =
+            AbsolutePathBuf::relative_to_current_dir(session_config_file.as_path())?;
+        let session_config_layer =
+            load_config_toml_for_required_layer(fs, &session_config_file, |config_toml| {
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::SessionConfigFile {
+                        file: session_config_file.clone(),
+                    },
+                    config_toml,
+                )
+            })
+            .await?;
+        layers.push(session_config_layer);
+    }
+
     let mut startup_warnings = None;
     if let Some(cwd) = cwd {
         let mut merged_so_far = TomlValue::Table(toml::map::Map::new());

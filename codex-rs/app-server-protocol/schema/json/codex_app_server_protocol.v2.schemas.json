@@ -1071,6 +1071,30 @@
             },
             "method": {
               "enum": [
+                "thread/delete"
+              ],
+              "title": "Thread/deleteRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadDeleteParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/deleteRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/unsubscribe"
               ],
               "title": "Thread/unsubscribeRequestMethod",
@@ -3830,6 +3854,27 @@
             "type"
           ],
           "title": "UserConfigLayerSource",
+          "type": "object"
+        },
+        {
+          "description": "Extra config file supplied explicitly by the current process.",
+          "properties": {
+            "file": {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            "type": {
+              "enum": [
+                "sessionConfigFile"
+              ],
+              "title": "SessionConfigFileConfigLayerSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "file",
+            "type"
+          ],
+          "title": "SessionConfigFileConfigLayerSource",
           "type": "object"
         },
         {
@@ -13055,6 +13100,12 @@
           "description": "Unix timestamp (in seconds) when the thread was last updated.",
           "format": "int64",
           "type": "integer"
+        },
+        "userMessageCount": {
+          "default": 0,
+          "description": "Number of user messages observed in this thread.",
+          "format": "int64",
+          "type": "integer"
         }
       },
       "required": [
@@ -13161,6 +13212,24 @@
     "ThreadCompactStartResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "ThreadCompactStartResponse",
+      "type": "object"
+    },
+    "ThreadDeleteParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadDeleteParams",
+      "type": "object"
+    },
+    "ThreadDeleteResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ThreadDeleteResponse",
       "type": "object"
     },
     "ThreadForkParams": {

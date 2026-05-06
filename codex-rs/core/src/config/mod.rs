@@ -52,6 +52,7 @@ use codex_config::types::OtelExporterKind;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverable;
+use codex_config::types::TuiContextUsedStyle;
 use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
 use codex_config::types::TuiTiming;
@@ -512,6 +513,9 @@ pub struct Config {
     /// Show startup tooltips in the TUI welcome screen.
     pub show_tooltips: bool,
 
+    /// Render the startup session header as a compact single-line card.
+    pub compact_session_header: bool,
+
     /// Persisted startup availability NUX state for model tooltips.
     pub model_availability_nux: ModelAvailabilityNuxConfig,
 
@@ -534,6 +538,9 @@ pub struct Config {
 
     /// Whether to color status line items with colors from the active syntax theme.
     pub tui_status_line_use_colors: bool,
+
+    /// How to render the `context-used` status-line item.
+    pub tui_context_used_style: TuiContextUsedStyle,
 
     /// Ordered list of terminal title item identifiers for the TUI.
     ///
@@ -2892,7 +2899,12 @@ impl Config {
             &mut startup_warnings,
         )?;
 
-        let mcp_servers = constrain_mcp_servers(cfg.mcp_servers.clone(), mcp_servers.as_ref())
+        let configured_mcp_servers = if cfg.mcp_servers_enabled.unwrap_or(true) {
+            cfg.mcp_servers.clone()
+        } else {
+            HashMap::new()
+        };
+        let mcp_servers = constrain_mcp_servers(configured_mcp_servers, mcp_servers.as_ref())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
 
         let (network_requirements, network_requirements_source) = match network_requirements {
@@ -3141,6 +3153,11 @@ impl Config {
                 .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
+            compact_session_header: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.compact_session_header)
+                .unwrap_or(false),
             model_availability_nux: cfg
                 .tui
                 .as_ref()
@@ -3162,6 +3179,11 @@ impl Config {
                 .as_ref()
                 .map(|t| t.status_line_use_colors)
                 .unwrap_or(true),
+            tui_context_used_style: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.context_used_style)
+                .unwrap_or_default(),
             tui_terminal_title: cfg.tui.as_ref().and_then(|t| t.terminal_title.clone()),
             tui_theme: cfg.tui.as_ref().and_then(|t| t.theme.clone()),
             terminal_resize_reflow,

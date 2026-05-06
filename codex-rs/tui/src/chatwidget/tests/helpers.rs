@@ -298,6 +298,7 @@ pub(super) async fn make_chatwidget_manual(
         plan_delta_buffer: String::new(),
         plan_item_active: false,
         turn_runtime_metrics: RuntimeMetricsSummary::default(),
+        last_turn_runtime_metrics: None,
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
         current_rollout_path: None,
@@ -480,6 +481,10 @@ pub(super) fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> 
 
 pub(super) fn status_line_text(chat: &ChatWidget) -> Option<String> {
     chat.status_line_text()
+}
+
+pub(super) fn status_line_right_text(chat: &ChatWidget) -> Option<String> {
+    chat.status_line_right_text()
 }
 
 pub(super) fn make_token_info(total_tokens: i64, context_window: i64) -> TokenUsageInfo {

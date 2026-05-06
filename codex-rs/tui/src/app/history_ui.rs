@@ -22,18 +22,8 @@ impl App {
         width: u16,
         version: &'static str,
     ) -> Vec<Line<'static>> {
-        history_cell::SessionHeaderHistoryCell::new(
-            self.chat_widget.current_model().to_string(),
-            self.chat_widget.current_reasoning_effort(),
-            self.chat_widget.should_show_fast_status(
-                self.chat_widget.current_model(),
-                self.chat_widget.current_service_tier(),
-            ),
-            self.config.cwd.to_path_buf(),
-            version,
-        )
-        .with_yolo_mode(history_cell::is_yolo_mode(&self.config))
-        .display_lines(width)
+        let _ = (width, version);
+        vec![Line::from("")]
     }
 
     pub(super) fn clear_ui_header_lines(&self, width: u16) -> Vec<Line<'static>> {
@@ -69,8 +59,7 @@ impl App {
 
         let mut area = tui.terminal.viewport_area;
         if area.y > 0 {
-            // After a full clear, anchor the inline viewport at the top and redraw a fresh header
-            // box. `insert_history_lines()` will shift the viewport down by the rendered height.
+            // After a full clear, anchor the inline viewport at the top.
             area.y = 0;
             tui.terminal.set_viewport_area(area);
         }
@@ -94,6 +83,7 @@ impl App {
         self.transcript_reflow.clear();
         self.initial_history_replay_buffer = None;
         self.backtrack = BacktrackState::default();
+        self.chat_widget.clear_edit_last_message_hint();
         self.backtrack_render_pending = false;
     }
 }

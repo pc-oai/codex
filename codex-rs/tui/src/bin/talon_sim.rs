@@ -51,6 +51,20 @@ enum TalonCommand {
         #[serde(default)]
         steps_back: usize,
     },
+    EditLastMessage,
+    CopyLastRequest,
+    CopyLastResponse,
+    RetitleCurrentSession,
+    EmojiCurrentSession,
+    InterruptCurrentTurn,
+    ExitCurrentSession,
+    SetModel {
+        model: String,
+        #[serde(default)]
+        effort: Option<String>,
+    },
+    ReloadCurrentSessionIfIdle,
+    ReloadCurrentSession,
     HistoryPrevious,
     HistoryNext,
 }
@@ -77,6 +91,16 @@ struct TalonEditorState {
     session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_user_request: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    recent_user_requests: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    recent_agent_responses: Vec<String>,
+    #[serde(default)]
+    model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -143,6 +167,45 @@ fn main() -> Result<()> {
                 TalonCommand::EditPreviousMessage { steps_back } => {
                     let _ = steps_back;
                     applied.push("edit_previous_message".to_string());
+                }
+                TalonCommand::EditLastMessage => {
+                    applied.push("edit_last_message".to_string());
+                }
+                TalonCommand::CopyLastRequest => {
+                    applied.push("copy_last_request".to_string());
+                }
+                TalonCommand::CopyLastResponse => {
+                    applied.push("copy_last_response".to_string());
+                }
+                TalonCommand::RetitleCurrentSession => {
+                    applied.push("retitle_current_session".to_string());
+                }
+                TalonCommand::EmojiCurrentSession => {
+                    applied.push("emoji_current_session".to_string());
+                }
+                TalonCommand::InterruptCurrentTurn => {
+                    if state.is_task_running {
+                        applied.push("interrupt_current_turn".to_string());
+                    } else {
+                        applied.push("interrupt_current_turn_skipped_idle".to_string());
+                    }
+                }
+                TalonCommand::ExitCurrentSession => {
+                    applied.push("exit_current_session".to_string());
+                }
+                TalonCommand::SetModel { model, effort } => {
+                    let _ = (model, effort);
+                    applied.push("set_model".to_string());
+                }
+                TalonCommand::ReloadCurrentSessionIfIdle => {
+                    if state.is_task_running {
+                        applied.push("reload_current_session_if_idle_skipped_busy".to_string());
+                    } else {
+                        applied.push("reload_current_session_if_idle".to_string());
+                    }
+                }
+                TalonCommand::ReloadCurrentSession => {
+                    applied.push("reload_current_session".to_string());
                 }
                 TalonCommand::HistoryPrevious => {
                     applied.push("history_previous".to_string());

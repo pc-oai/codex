@@ -1,0 +1,14 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+assertion_line: 4866
+expression: terminal.backend()
+---
+"                                                                                                    "
+"› original                                                                                          "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"   Editing previous message    Enter submit    Esc cancel                        100% context left  "

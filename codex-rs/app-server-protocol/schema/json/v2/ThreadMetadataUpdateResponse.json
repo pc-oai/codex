@@ -880,6 +880,12 @@
           "description": "Unix timestamp (in seconds) when the thread was last updated.",
           "format": "int64",
           "type": "integer"
+        },
+        "userMessageCount": {
+          "default": 0,
+          "description": "Number of user messages observed in this thread.",
+          "format": "int64",
+          "type": "integer"
         }
       },
       "required": [

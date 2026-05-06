@@ -991,6 +991,61 @@ async fn alt_up_edits_most_recent_queued_message() {
 }
 
 #[tokio::test]
+async fn ctrl_e_edits_most_recent_queued_message() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.chat_keymap.edit_queued_message = vec![crate::key_hint::ctrl(KeyCode::Char('e'))];
+    chat.queued_message_edit_hint_binding = Some(crate::key_hint::ctrl(KeyCode::Char('e')));
+    chat.bottom_pane
+        .set_queued_message_edit_binding(chat.queued_message_edit_hint_binding);
+
+    chat.bottom_pane.set_task_running(/*running*/ true);
+    chat.queued_user_messages
+        .push_back(UserMessage::from("first queued".to_string()).into());
+    chat.queued_user_messages
+        .push_back(UserMessage::from("second queued".to_string()).into());
+    chat.refresh_pending_input_preview();
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
+
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        "second queued".to_string()
+    );
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.queued_user_messages.front().unwrap().text,
+        "first queued"
+    );
+}
+
+#[tokio::test]
+async fn alt_down_steers_most_recent_queued_message() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.chat_keymap.steer_queued_message = vec![crate::key_hint::alt(KeyCode::Down)];
+    chat.thread_id = Some(ThreadId::new());
+    chat.agent_turn_running = true;
+    chat.bottom_pane.set_task_running(/*running*/ true);
+    chat.queued_user_messages
+        .push_back(UserMessage::from("first queued".to_string()).into());
+    chat.queued_user_messages
+        .push_back(UserMessage::from("second queued".to_string()).into());
+    chat.refresh_pending_input_preview();
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
+
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.queued_user_messages.front().unwrap().text,
+        "first queued"
+    );
+    assert_eq!(chat.pending_steers.len(), 1);
+    assert_eq!(
+        chat.pending_steers.front().unwrap().user_message.text,
+        "second queued"
+    );
+}
+
+#[tokio::test]
 async fn unbound_queued_message_edit_does_not_fall_back_to_alt_up() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.chat_keymap.edit_queued_message = Vec::new();

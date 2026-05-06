@@ -31,6 +31,7 @@ use tracing::warn;
 const ROLLOUT_PREFIX: &str = "rollout-";
 const ROLLOUT_SUFFIX: &str = ".jsonl";
 const BACKFILL_BATCH_SIZE: usize = 200;
+const USER_MESSAGE_COUNT_BACKFILL_BATCH_SIZE: usize = 25;
 #[cfg(not(test))]
 const BACKFILL_LEASE_SECONDS: i64 = 900;
 #[cfg(test)]
@@ -144,6 +145,52 @@ pub(crate) async fn backfill_sessions(
         BACKFILL_LEASE_SECONDS,
     )
     .await;
+}
+
+pub(crate) async fn backfill_user_message_counts(
+    runtime: codex_state::StateRuntime,
+    default_provider: String,
+) {
+    loop {
+        let paths = match runtime
+            .list_threads_needing_user_message_count_backfill(
+                USER_MESSAGE_COUNT_BACKFILL_BATCH_SIZE,
+            )
+            .await
+        {
+            Ok(paths) => paths,
+            Err(err) => {
+                warn!("failed to load user-message count backfill batch: {err}");
+                return;
+            }
+        };
+        if paths.is_empty() {
+            return;
+        }
+
+        for path in paths {
+            match extract_metadata_from_rollout(path.as_path(), default_provider.as_str()).await {
+                Ok(outcome) => {
+                    let mut metadata = outcome.metadata;
+                    metadata.cwd = normalize_cwd_for_state_db(&metadata.cwd);
+                    if let Err(err) = runtime.upsert_thread(&metadata).await {
+                        warn!(
+                            "failed to backfill user-message count for {}: {err}",
+                            path.display()
+                        );
+                    }
+                }
+                Err(err) => {
+                    warn!(
+                        "failed to extract user-message count for {}: {err}",
+                        path.display()
+                    );
+                }
+            }
+        }
+
+        tokio::task::yield_now().await;
+    }
 }
 
 pub(crate) async fn backfill_sessions_with_lease(

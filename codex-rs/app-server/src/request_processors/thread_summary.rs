@@ -288,6 +288,7 @@ pub(crate) fn summary_to_thread(
         source: source.into(),
         git_info,
         name: None,
+        user_message_count: 0,
         turns: Vec::new(),
     }
 }

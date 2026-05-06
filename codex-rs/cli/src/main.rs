@@ -90,6 +90,9 @@ struct MultitoolCli {
     pub feature_toggles: FeatureToggles,
 
     #[clap(flatten)]
+    pub runtime_toggles: RuntimeToggles,
+
+    #[clap(flatten)]
     remote: InteractiveRemoteOptions,
 
     #[clap(flatten)]
@@ -551,11 +554,40 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
 }
 
 /// Handle the app exit and print the results. Optionally run the update action.
+#[cfg(unix)]
+fn reload_current_session(thread_id: Option<codex_protocol::ThreadId>) -> anyhow::Result<()> {
+    use std::os::unix::process::CommandExt;
+
+    let thread_id = thread_id
+        .ok_or_else(|| anyhow::anyhow!("cannot reload before a resumable thread exists"))?;
+    let mut command = if let Some(helper) = std::env::var_os("CODEX_RELOAD_HELPER") {
+        let mut command = std::process::Command::new(helper);
+        command.arg(thread_id.to_string());
+        command
+    } else {
+        let mut command = std::process::Command::new(std::env::current_exe()?);
+        command.arg("resume").arg(thread_id.to_string());
+        command
+    };
+    let err = command.exec();
+    Err(anyhow::anyhow!(
+        "failed to exec Codex reload command: {err}"
+    ))
+}
+
+#[cfg(not(unix))]
+fn reload_current_session(_thread_id: Option<codex_protocol::ThreadId>) -> anyhow::Result<()> {
+    anyhow::bail!("reload is only supported on Unix platforms")
+}
+
 fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
     match exit_info.exit_reason {
         ExitReason::Fatal(message) => {
             eprintln!("ERROR: {message}");
             std::process::exit(1);
+        }
+        ExitReason::ReloadRequested => {
+            return reload_current_session(exit_info.thread_id);
         }
         ExitReason::UserRequested => { /* normal exit */ }
     }
@@ -659,6 +691,21 @@ struct FeatureToggles {
 }
 
 #[derive(Debug, Default, Parser, Clone)]
+struct RuntimeToggles {
+    /// Do not load configured MCP servers for this process.
+    #[arg(long = "no-mcp-servers", global = true)]
+    no_mcp_servers: bool,
+
+    /// Do not load project docs such as AGENTS.md for this process.
+    #[arg(long = "no-project-docs", global = true)]
+    no_project_docs: bool,
+
+    /// Load an extra config file for this process, after user config and before project config.
+    #[arg(long = "config-file", value_name = "PATH", action = clap::ArgAction::Append, global = true)]
+    config_files: Vec<PathBuf>,
+}
+
+#[derive(Debug, Default, Parser, Clone)]
 struct InteractiveRemoteOptions {
     /// Connect the TUI to a remote app server websocket endpoint.
     ///
@@ -691,6 +738,26 @@ impl FeatureToggles {
             Ok(())
         } else {
             anyhow::bail!("Unknown feature flag: {feature}")
+        }
+    }
+}
+
+impl RuntimeToggles {
+    fn to_overrides(&self) -> Vec<String> {
+        let mut overrides = Vec::new();
+        if self.no_mcp_servers {
+            overrides.push("mcp_servers_enabled=false".to_string());
+        }
+        if self.no_project_docs {
+            overrides.push("project_doc_max_bytes=0".to_string());
+        }
+        overrides
+    }
+
+    fn to_loader_overrides(&self) -> codex_config::LoaderOverrides {
+        codex_config::LoaderOverrides {
+            session_config_files: self.config_files.clone(),
+            ..Default::default()
         }
     }
 }
@@ -738,6 +805,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
         feature_toggles,
+        runtime_toggles,
         remote,
         mut interactive,
         subcommand,
@@ -746,6 +814,10 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
     let toggle_overrides = feature_toggles.to_overrides()?;
     root_config_overrides.raw_overrides.extend(toggle_overrides);
+    root_config_overrides
+        .raw_overrides
+        .extend(runtime_toggles.to_overrides());
+    let root_loader_overrides = runtime_toggles.to_loader_overrides();
     let root_remote = remote.remote;
     let root_remote_auth_token_env = remote.remote_auth_token_env;
 
@@ -760,6 +832,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 root_remote.clone(),
                 root_remote_auth_token_env.clone(),
                 arg0_paths.clone(),
+                root_loader_overrides.clone(),
             )
             .await?;
             handle_app_exit(exit_info)?;
@@ -921,6 +994,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     .remote_auth_token_env
                     .or(root_remote_auth_token_env.clone()),
                 arg0_paths.clone(),
+                root_loader_overrides.clone(),
             )
             .await?;
             handle_app_exit(exit_info)?;
@@ -947,6 +1021,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     .remote_auth_token_env
                     .or(root_remote_auth_token_env.clone()),
                 arg0_paths.clone(),
+                root_loader_overrides.clone(),
             )
             .await?;
             handle_app_exit(exit_info)?;
@@ -1529,6 +1604,7 @@ async fn run_interactive_tui(
     remote: Option<String>,
     remote_auth_token_env: Option<String>,
     arg0_paths: Arg0DispatchPaths,
+    loader_overrides: codex_config::LoaderOverrides,
 ) -> std::io::Result<AppExitInfo> {
     if let Some(prompt) = interactive.prompt.take() {
         // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.
@@ -1571,7 +1647,7 @@ async fn run_interactive_tui(
     codex_tui::run_main(
         interactive,
         arg0_paths,
-        codex_config::LoaderOverrides::default(),
+        loader_overrides,
         normalized_remote,
         remote_auth_token,
     )
@@ -1649,6 +1725,7 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
         shared,
         approval_policy,
         web_search,
+        private,
         prompt,
         config_overrides,
         ..
@@ -1661,6 +1738,9 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     }
     if web_search {
         interactive.web_search = true;
+    }
+    if private {
+        interactive.private = true;
     }
     if let Some(prompt) = prompt {
         // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.
@@ -1694,6 +1774,7 @@ mod tests {
             config_overrides: root_overrides,
             subcommand,
             feature_toggles: _,
+            runtime_toggles: _,
             remote: _,
         } = cli;
 
@@ -1727,6 +1808,7 @@ mod tests {
             config_overrides: root_overrides,
             subcommand,
             feature_toggles: _,
+            runtime_toggles: _,
             remote: _,
         } = cli;
 
@@ -1801,6 +1883,24 @@ mod tests {
         .expect_err("conflicting permission flags should be rejected");
 
         assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn private_flag_parses_on_interactive_cli() {
+        let cli = MultitoolCli::try_parse_from(["codex", "--private"]).expect("parse");
+        assert!(cli.interactive.private);
+    }
+
+    #[test]
+    fn private_short_flag_parses_on_interactive_cli() {
+        let cli = MultitoolCli::try_parse_from(["codex", "-P"]).expect("parse");
+        assert!(cli.interactive.private);
+    }
+
+    #[test]
+    fn finalize_resume_preserves_private_flag() {
+        let interactive = finalize_resume_from_args(&["codex", "--private", "resume", "--last"]);
+        assert!(interactive.private);
     }
 
     fn app_server_from_args(args: &[&str]) -> AppServerCommand {
@@ -2603,5 +2703,21 @@ mod tests {
             .to_overrides()
             .expect_err("feature should be rejected");
         assert_eq!(err.to_string(), "Unknown feature flag: does_not_exist");
+    }
+
+    #[test]
+    fn runtime_toggles_generate_overrides() {
+        let toggles = RuntimeToggles {
+            no_mcp_servers: true,
+            no_project_docs: true,
+            config_files: Vec::new(),
+        };
+        assert_eq!(
+            toggles.to_overrides(),
+            vec![
+                "mcp_servers_enabled=false".to_string(),
+                "project_doc_max_bytes=0".to_string(),
+            ]
+        );
     }
 }

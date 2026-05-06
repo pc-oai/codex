@@ -641,6 +641,20 @@ impl Default for TuiTiming {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum TuiContextUsedStyle {
+    /// Render as `14% used`.
+    #[default]
+    Percent,
+    /// Render as `▰▱▱▱▱ 14% used`.
+    Blocks,
+    /// Render as `█░░░░ 14% used`.
+    SolidBlocks,
+    /// Render as `[=....] 14% used`.
+    Ascii,
+}
+
 /// Collection of settings that are specific to the TUI.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -657,6 +671,10 @@ pub struct Tui {
     /// Defaults to `true`.
     #[serde(default = "default_true")]
     pub show_tooltips: bool,
+
+    /// Render the startup session header as a compact single-line card.
+    #[serde(default)]
+    pub compact_session_header: bool,
 
     /// Start the composer in Vim mode (`Normal`) by default.
     /// Defaults to `false`.
@@ -685,6 +703,10 @@ pub struct Tui {
     /// Defaults to `true`.
     #[serde(default = "default_true")]
     pub status_line_use_colors: bool,
+
+    /// How to render the `context-used` status-line item.
+    #[serde(default)]
+    pub context_used_style: TuiContextUsedStyle,
 
     /// Ordered list of terminal title item identifiers.
     ///

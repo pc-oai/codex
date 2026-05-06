@@ -26,6 +26,8 @@ SELECT
     threads.approval_mode,
     threads.tokens_used,
     threads.first_user_message,
+    threads.user_message_count,
+    threads.user_message_count_known,
     threads.archived_at,
     threads.git_sha,
     threads.git_branch,
@@ -499,13 +501,15 @@ INSERT INTO threads (
     approval_mode,
     tokens_used,
     first_user_message,
+    user_message_count,
+    user_message_count_known,
     archived,
     archived_at,
     git_sha,
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
             "#,
         )
@@ -534,6 +538,8 @@ ON CONFLICT(id) DO NOTHING
         .bind(metadata.approval_mode.as_str())
         .bind(metadata.tokens_used)
         .bind(metadata.first_user_message.as_deref().unwrap_or_default())
+        .bind(metadata.user_message_count)
+        .bind(metadata.user_message_count_known)
         .bind(metadata.archived_at.is_some())
         .bind(metadata.archived_at.map(datetime_to_epoch_seconds))
         .bind(metadata.git_sha.as_deref())
@@ -696,13 +702,15 @@ INSERT INTO threads (
     approval_mode,
     tokens_used,
     first_user_message,
+    user_message_count,
+    user_message_count_known,
     archived,
     archived_at,
     git_sha,
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -723,6 +731,8 @@ ON CONFLICT(id) DO UPDATE SET
     approval_mode = excluded.approval_mode,
     tokens_used = excluded.tokens_used,
     first_user_message = excluded.first_user_message,
+    user_message_count = excluded.user_message_count,
+    user_message_count_known = excluded.user_message_count_known,
     archived = excluded.archived,
     archived_at = excluded.archived_at,
     git_sha = COALESCE(threads.git_sha, excluded.git_sha),
@@ -755,6 +765,8 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.approval_mode.as_str())
         .bind(metadata.tokens_used)
         .bind(metadata.first_user_message.as_deref().unwrap_or_default())
+        .bind(metadata.user_message_count)
+        .bind(metadata.user_message_count_known)
         .bind(metadata.archived_at.is_some())
         .bind(metadata.archived_at.map(datetime_to_epoch_seconds))
         .bind(metadata.git_sha.as_deref())
@@ -927,6 +939,30 @@ ON CONFLICT(thread_id, position) DO NOTHING
             .await?;
         Ok(result.rows_affected())
     }
+
+    /// Return rollout paths whose persisted user-message count is not known to
+    /// cover the full thread history yet.
+    pub async fn list_threads_needing_user_message_count_backfill(
+        &self,
+        limit: usize,
+    ) -> anyhow::Result<Vec<PathBuf>> {
+        let rows = sqlx::query(
+            r#"
+SELECT rollout_path
+FROM threads
+WHERE user_message_count_known = 0
+ORDER BY updated_at_ms DESC, id DESC
+LIMIT ?
+            "#,
+        )
+        .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .fetch_all(self.pool.as_ref())
+        .await?;
+        rows.into_iter()
+            .map(|row| row.try_get::<String, _>("rollout_path").map(PathBuf::from))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
 }
 
 fn one_thread_id_from_rows(
@@ -971,6 +1007,8 @@ SELECT
     threads.approval_mode,
     threads.tokens_used,
     threads.first_user_message,
+    threads.user_message_count,
+    threads.user_message_count_known,
     threads.archived_at,
     threads.git_sha,
     threads.git_branch,

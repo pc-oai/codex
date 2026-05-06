@@ -7,6 +7,7 @@ use codex_protocol::ThreadId;
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
 use crate::CreateThreadParams;
+use crate::DeleteThreadParams;
 use crate::ListThreadsParams;
 use crate::LoadThreadHistoryParams;
 use crate::ReadThreadByRolloutPathParams;
@@ -240,6 +241,12 @@ impl ThreadStore for RemoteThreadStore {
             .await
             .map_err(|status| helpers::remote_status_to_thread_error(status, thread_id))?;
         Ok(())
+    }
+
+    async fn delete_thread(&self, _params: DeleteThreadParams) -> ThreadStoreResult<()> {
+        Err(ThreadStoreError::Internal {
+            message: "remote thread store does not support delete_thread".to_string(),
+        })
     }
 
     async fn unarchive_thread(
