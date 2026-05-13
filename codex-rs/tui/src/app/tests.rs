@@ -670,6 +670,25 @@ async fn replay_thread_snapshot_restores_draft_and_queued_input() {
 }
 
 #[tokio::test]
+async fn reload_draft_round_trip_preserves_visible_composer() {
+    let mut app = make_test_app().await;
+    app.chat_widget
+        .apply_external_edit("draft prompt".to_string());
+    app.chat_widget.set_composer_cursor("draft".len());
+
+    let draft = app
+        .chat_widget
+        .capture_reload_draft()
+        .expect("expected visible draft");
+
+    let (mut chat_widget, _app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+    chat_widget.restore_reload_draft(draft);
+
+    assert_eq!(chat_widget.composer_text(), "draft prompt");
+    assert_eq!(chat_widget.composer_cursor(), "draft".len());
+}
+
+#[tokio::test]
 async fn active_turn_id_for_thread_uses_snapshot_turns() {
     let mut app = make_test_app().await;
     let thread_id = ThreadId::new();
@@ -4602,6 +4621,8 @@ async fn edit_last_message_stages_preview_without_rolling_back() {
             /*is_first_line*/ true,
         )) as Arc<dyn HistoryCell>,
     ];
+    app.chat_widget
+        .set_composer_text("stale draft".to_string(), Vec::new(), Vec::new());
 
     assert!(app.edit_last_message_from_command());
 
@@ -4798,6 +4819,8 @@ async fn cancel_edit_last_message_preview_preserves_transcript() {
             /*is_first_line*/ true,
         )) as Arc<dyn HistoryCell>,
     ];
+    app.chat_widget
+        .set_composer_text("keep this draft".to_string(), Vec::new(), Vec::new());
 
     assert!(app.edit_last_message_from_command());
     app.chat_widget
@@ -4806,7 +4829,10 @@ async fn cancel_edit_last_message_preview_preserves_transcript() {
     assert!(app.cancel_backtrack_edit_preview());
 
     assert!(!app.backtrack_edit_preview_active());
-    assert_eq!(app.chat_widget.composer_text_with_pending(), "");
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "keep this draft"
+    );
     assert_eq!(app.transcript_cells.len(), 2);
     assert!(op_rx.try_recv().is_err());
 }
@@ -4892,6 +4918,45 @@ async fn failed_edit_last_message_preview_rollback_restores_edited_draft() {
     assert_eq!(app.chat_widget.composer_text_with_pending(), "edited");
     assert_eq!(app.transcript_cells.len(), 2);
     assert!(op_rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn ctrl_e_during_running_turn_interrupts_then_enters_edit_preview() {
+    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    app.chat_widget.handle_thread_session(test_thread_session(
+        thread_id,
+        test_path_buf("/home/user/project"),
+    ));
+    while op_rx.try_recv().is_ok() {}
+    app.transcript_cells = vec![
+        Arc::new(UserHistoryCell {
+            message: "original".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>,
+        Arc::new(AgentMessageCell::new(
+            vec![Line::from("assistant reply")],
+            /*is_first_line*/ true,
+        )) as Arc<dyn HistoryCell>,
+    ];
+    app.chat_widget.handle_server_notification(
+        turn_started_notification(thread_id, "turn-1"),
+        /*replay_kind*/ None,
+    );
+    app.chat_widget
+        .set_composer_text("stale draft".to_string(), Vec::new(), Vec::new());
+
+    assert!(app.interrupt_turn_then_edit_last_message());
+    assert_matches!(op_rx.try_recv(), Ok(Op::Interrupt));
+
+    app.handle_thread_event_now(ThreadBufferedEvent::Notification(
+        turn_completed_notification(thread_id, "turn-1", TurnStatus::Interrupted),
+    ));
+
+    assert!(app.backtrack_edit_preview_active());
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "original");
 }
 
 #[tokio::test]
@@ -5355,6 +5420,38 @@ async fn shutdown_first_exit_returns_immediate_exit_when_shutdown_submit_fails()
         control,
         AppRunControl::Exit(ExitReason::UserRequested)
     ));
+}
+
+#[tokio::test]
+async fn shutdown_first_exit_persists_visible_draft_for_later_resume() {
+    let mut app = make_test_app().await;
+    let codex_home = tempdir().expect("codex home tempdir");
+    app.config.codex_home = codex_home.path().to_path_buf().abs();
+    let thread_id = ThreadId::new();
+    app.chat_widget.handle_thread_session(test_thread_session(
+        thread_id,
+        test_path_buf("/home/user/project"),
+    ));
+    app.chat_widget
+        .set_composer_text("draft to resume".to_string(), Vec::new(), Vec::new());
+    app.chat_widget.set_composer_cursor("draft".len());
+
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await
+    .expect("embedded app server");
+    let control = Box::pin(app.handle_exit_mode(&mut app_server, ExitMode::ShutdownFirst)).await;
+
+    assert!(matches!(
+        control,
+        AppRunControl::Exit(ExitReason::UserRequested)
+    ));
+    let draft = crate::reload_handoff::take_for_resume(codex_home.path(), thread_id)
+        .expect("load saved resume draft")
+        .expect("resume draft should exist");
+    assert_eq!(draft.text, "draft to resume");
+    assert_eq!(draft.cursor, "draft".len());
 }
 
 #[tokio::test]

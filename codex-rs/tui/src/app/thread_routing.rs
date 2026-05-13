@@ -12,6 +12,7 @@ impl App {
         if let Some(thread_id) = self.chat_widget.thread_id() {
             // Clear any in-flight rollback guard when switching threads.
             self.backtrack.pending_rollback = None;
+            self.backtrack.edit_after_interrupt_thread_id = None;
             if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
                 tracing::warn!("failed to unsubscribe thread {thread_id}: {err}");
             }
@@ -1363,6 +1364,10 @@ impl App {
             ThreadBufferedEvent::Notification(ServerNotification::TurnStarted(_))
                 | ThreadBufferedEvent::Notification(ServerNotification::ThreadTokenUsageUpdated(_))
         );
+        let turn_completed = matches!(
+            &event,
+            ThreadBufferedEvent::Notification(ServerNotification::TurnCompleted(_))
+        );
         match event {
             ThreadBufferedEvent::Notification(notification) => {
                 self.chat_widget
@@ -1383,6 +1388,9 @@ impl App {
             ThreadBufferedEvent::FeedbackSubmission(event) => {
                 self.handle_feedback_thread_event(event);
             }
+        }
+        if turn_completed {
+            self.maybe_edit_last_message_after_interrupt();
         }
         if needs_refresh {
             self.refresh_status_line();

@@ -143,6 +143,12 @@ impl App {
             return;
         }
 
+        if self.should_interrupt_turn_for_edit_last_message_shortcut(key_event) {
+            self.interrupt_turn_then_edit_last_message();
+            tui.frame_requester().schedule_frame();
+            return;
+        }
+
         if self.should_handle_edit_last_message_shortcut(key_event) {
             self.edit_last_message_from_command();
             tui.frame_requester().schedule_frame();
@@ -259,13 +265,29 @@ impl App {
     ///
     /// When a task is running, ChatWidget still owns this binding so it can pull a queued follow-up
     /// back into the composer. Once idle, the same gesture jumps straight to editing the last sent
-    /// message instead of forcing the older Esc-Esc-Enter sequence.
+    /// message instead of forcing the older Esc-Esc-Enter sequence. That edit intentionally
+    /// replaces any visible draft already in the composer.
     pub(super) fn should_handle_edit_last_message_shortcut(&self, key_event: KeyEvent) -> bool {
         key_event.kind == KeyEventKind::Press
             && self.app_keymap_shortcuts_available()
             && self.keymap.chat.edit_queued_message.is_pressed(key_event)
             && self.chat_widget.is_normal_backtrack_mode()
-            && self.chat_widget.composer_is_empty()
+    }
+
+    /// During a live turn, Ctrl-E should stop the turn so the sent request can be edited next.
+    ///
+    /// Queued follow-ups keep their existing priority: when one exists, ChatWidget still owns
+    /// Ctrl-E so it can pull that queued draft back into the composer instead. Otherwise, the
+    /// eventual edit preview replaces any visible composer draft.
+    pub(super) fn should_interrupt_turn_for_edit_last_message_shortcut(
+        &self,
+        key_event: KeyEvent,
+    ) -> bool {
+        key_event.kind == KeyEventKind::Press
+            && self.app_keymap_shortcuts_available()
+            && self.keymap.chat.edit_queued_message.is_pressed(key_event)
+            && self.chat_widget.is_task_running()
+            && !self.chat_widget.has_queued_follow_up_messages()
     }
 
     fn should_step_edit_last_message_preview_older(&self, key_event: KeyEvent) -> bool {
@@ -329,12 +351,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn edit_last_message_shortcut_requires_empty_idle_composer() {
+    async fn edit_last_message_shortcut_replaces_nonempty_idle_composer() {
         let mut app = make_test_app().await;
         let alt_up = KeyEvent::new(KeyCode::Up, KeyModifiers::ALT);
 
         app.chat_widget
             .set_composer_text("draft".to_string(), Vec::new(), Vec::new());
-        assert!(!app.should_handle_edit_last_message_shortcut(alt_up));
+        assert!(app.should_handle_edit_last_message_shortcut(alt_up));
     }
 }

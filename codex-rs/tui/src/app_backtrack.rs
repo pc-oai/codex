@@ -37,6 +37,7 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::SessionInfoCell;
 use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::Overlay;
+use crate::reload_handoff::ReloadDraft;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_protocol::ThreadId;
@@ -74,6 +75,8 @@ pub(crate) struct BacktrackState {
     /// While this is present, the selected prior user message is only copied into the composer;
     /// the thread itself is untouched until Enter commits the edit.
     pub(crate) edit_preview: Option<BacktrackEditPreview>,
+    /// Thread that should enter direct-edit mode after Ctrl-E interrupts its live turn.
+    pub(crate) edit_after_interrupt_thread_id: Option<ThreadId>,
 }
 
 /// A user-visible backtrack choice that can be confirmed into a rollback request.
@@ -113,6 +116,10 @@ pub(crate) struct PendingBacktrackRollback {
 pub(crate) struct BacktrackEditPreview {
     pub(crate) selection: BacktrackSelection,
     pub(crate) thread_id: Option<ThreadId>,
+    /// Composer draft displaced when direct-edit mode first opened.
+    ///
+    /// If the user cancels edit mode, this draft is restored exactly as it was.
+    pub(crate) replaced_draft: Option<ReloadDraft>,
 }
 
 impl App {
@@ -488,10 +495,6 @@ impl App {
     /// This is the direct, non-visual equivalent of selecting the latest backtrack target, but it
     /// intentionally does not mutate the thread until the edited draft is submitted.
     pub(crate) fn edit_last_message_from_command(&mut self) -> bool {
-        if !self.chat_widget.composer_is_empty() {
-            return false;
-        }
-
         if !has_backtrack_target(&self.transcript_cells) {
             self.chat_widget
                 .add_info_message(NO_PREVIOUS_MESSAGE_TO_EDIT.to_string(), /*hint*/ None);
@@ -505,6 +508,33 @@ impl App {
         };
         self.begin_backtrack_edit_preview(selection);
         true
+    }
+
+    /// Stop the current turn so Ctrl-E can become "edit the last request" once the UI is idle.
+    pub(crate) fn interrupt_turn_then_edit_last_message(&mut self) -> bool {
+        if !self.chat_widget.is_task_running() || self.chat_widget.has_queued_follow_up_messages() {
+            return false;
+        }
+
+        let thread_id = self.chat_widget.thread_id();
+        if self.chat_widget.submit_op(AppCommand::interrupt()) {
+            self.backtrack.edit_after_interrupt_thread_id = thread_id;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Enter direct-edit mode after a Ctrl-E-triggered interrupt completes.
+    pub(crate) fn maybe_edit_last_message_after_interrupt(&mut self) -> bool {
+        let Some(thread_id) = self.backtrack.edit_after_interrupt_thread_id.take() else {
+            return false;
+        };
+        if self.chat_widget.thread_id() != Some(thread_id) || self.chat_widget.is_task_running() {
+            return false;
+        }
+
+        self.edit_last_message_from_command()
     }
 
     /// Return recent visible user request text from the transcript, newest first.
@@ -529,6 +559,11 @@ impl App {
 
     /// Start direct-edit preview without mutating thread history.
     pub(crate) fn begin_backtrack_edit_preview(&mut self, selection: BacktrackSelection) {
+        let replaced_draft = if let Some(preview) = self.backtrack.edit_preview.as_ref() {
+            preview.replaced_draft.clone()
+        } else {
+            self.chat_widget.capture_reload_draft()
+        };
         self.chat_widget
             .set_remote_image_urls(selection.remote_image_urls.clone());
         self.chat_widget.set_composer_text(
@@ -540,6 +575,7 @@ impl App {
         self.backtrack.edit_preview = Some(BacktrackEditPreview {
             selection,
             thread_id: self.chat_widget.thread_id(),
+            replaced_draft,
         });
     }
 
@@ -574,10 +610,14 @@ impl App {
 
     /// Leave direct-edit preview mode without touching thread history.
     pub(crate) fn cancel_backtrack_edit_preview(&mut self) -> bool {
-        if self.backtrack.edit_preview.take().is_none() {
+        let Some(preview) = self.backtrack.edit_preview.take() else {
             return false;
+        };
+        if let Some(draft) = preview.replaced_draft {
+            self.chat_widget.restore_reload_draft(draft);
+        } else {
+            self.chat_widget.clear_composer_draft();
         }
-        self.chat_widget.clear_composer_draft();
         self.chat_widget.clear_edit_last_message_hint();
         true
     }

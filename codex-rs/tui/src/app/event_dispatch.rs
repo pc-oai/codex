@@ -299,6 +299,20 @@ impl App {
                 self.chat_widget.on_commit_tick();
             }
             AppEvent::ReloadCurrentSession => {
+                if let Some(thread_id) = self.chat_widget.thread_id()
+                    && let Some(draft) = self.chat_widget.capture_reload_draft()
+                    && let Err(err) = crate::reload_handoff::save(
+                        self.chat_widget.config_ref().codex_home.as_path(),
+                        thread_id,
+                        &draft,
+                    )
+                {
+                    tracing::warn!(
+                        error = %err,
+                        %thread_id,
+                        "failed to preserve composer draft before reload"
+                    );
+                }
                 match std::env::current_dir() {
                     Ok(current_cwd) => {
                         let reload_cwd = crate::session_resume::resume_cwd_or_current(
@@ -2146,6 +2160,21 @@ impl App {
         app_server: &mut AppServerSession,
         mode: ExitMode,
     ) -> AppRunControl {
+        if let Some(thread_id) = self.chat_widget.thread_id() {
+            let draft = self.chat_widget.capture_reload_draft();
+            if let Err(err) = crate::reload_handoff::replace_resume(
+                self.config.codex_home.as_path(),
+                thread_id,
+                draft.as_ref(),
+            ) {
+                tracing::warn!(
+                    error = %err,
+                    %thread_id,
+                    "failed to preserve composer draft before exit"
+                );
+            }
+        }
+
         match mode {
             ExitMode::ShutdownFirst => {
                 // Mark the thread we are explicitly shutting down for exit so
@@ -2188,6 +2217,15 @@ impl App {
 
         match app_server.thread_delete(thread_id).await {
             Ok(()) => {
+                if let Err(err) =
+                    crate::reload_handoff::clear_resume(self.config.codex_home.as_path(), thread_id)
+                {
+                    tracing::warn!(
+                        error = %err,
+                        %thread_id,
+                        "failed to clear saved composer draft for deleted thread"
+                    );
+                }
                 self.abort_thread_event_listener(thread_id);
                 AppRunControl::Exit(ExitReason::UserRequested)
             }

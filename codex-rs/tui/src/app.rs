@@ -942,6 +942,25 @@ impl App {
         let startup_tooltip_override =
             prepare_startup_tooltip_override(&mut config, &available_models, is_first_run).await;
         let mut spawn_initial_thread = false;
+        let resumed_draft = match &session_selection {
+            SessionSelection::Resume(target_session) => {
+                match crate::reload_handoff::take_for_resume(
+                    config.codex_home.as_path(),
+                    target_session.thread_id,
+                ) {
+                    Ok(draft) => draft,
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            thread_id = %target_session.thread_id,
+                            "failed to restore composer draft for resumed session"
+                        );
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
         let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
                 spawn_initial_thread = true;
@@ -1137,6 +1156,9 @@ See the Codex keymap documentation for supported actions and examples."
                 app.maybe_prompt_resume_paused_goal_after_resume(&mut app_server, thread_id)
                     .await;
             }
+        }
+        if let Some(draft) = resumed_draft {
+            app.chat_widget.restore_reload_draft(draft);
         }
         if spawn_initial_thread {
             let request_handle = app_server.request_handle();

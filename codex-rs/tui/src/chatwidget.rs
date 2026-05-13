@@ -301,6 +301,8 @@ use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::ChatKeymap;
 use crate::keymap::RuntimeKeymap;
+use crate::reload_handoff::ReloadDraft;
+use crate::reload_handoff::ReloadMentionBinding;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::FlexRenderable;
@@ -2674,7 +2676,7 @@ impl ChatWidget {
         None
     }
 
-    fn has_queued_follow_up_messages(&self) -> bool {
+    pub(crate) fn has_queued_follow_up_messages(&self) -> bool {
         !self.rejected_steers_queue.is_empty() || !self.queued_user_messages.is_empty()
     }
 
@@ -3339,6 +3341,54 @@ impl ChatWidget {
             task_running: self.bottom_pane.is_task_running(),
             agent_turn_running: self.agent_turn_running,
         })
+    }
+
+    pub(crate) fn capture_reload_draft(&self) -> Option<ReloadDraft> {
+        let draft = ReloadDraft {
+            text: self.bottom_pane.composer_text(),
+            text_elements: self.bottom_pane.composer_text_elements(),
+            local_image_paths: self
+                .bottom_pane
+                .composer_local_images()
+                .into_iter()
+                .map(|image| image.path)
+                .collect(),
+            remote_image_urls: self.bottom_pane.remote_image_urls(),
+            mention_bindings: self
+                .bottom_pane
+                .composer_mention_bindings()
+                .into_iter()
+                .map(|binding| ReloadMentionBinding {
+                    mention: binding.mention,
+                    path: binding.path,
+                })
+                .collect(),
+            pending_pastes: self.bottom_pane.composer_pending_pastes(),
+            cursor: self.bottom_pane.composer_cursor(),
+        };
+        draft.has_content().then_some(draft)
+    }
+
+    pub(crate) fn restore_reload_draft(&mut self, draft: ReloadDraft) {
+        let mention_bindings = draft
+            .mention_bindings
+            .into_iter()
+            .map(|binding| MentionBinding {
+                mention: binding.mention,
+                path: binding.path,
+            })
+            .collect();
+        self.set_remote_image_urls(draft.remote_image_urls);
+        self.bottom_pane.set_composer_text_with_mention_bindings(
+            draft.text,
+            draft.text_elements,
+            draft.local_image_paths,
+            mention_bindings,
+        );
+        self.bottom_pane
+            .set_composer_pending_pastes(draft.pending_pastes);
+        self.bottom_pane.set_composer_cursor(draft.cursor);
+        self.refresh_plan_mode_nudge();
     }
 
     pub(crate) fn restore_thread_input_state(&mut self, input_state: Option<ThreadInputState>) {
