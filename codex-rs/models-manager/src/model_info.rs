@@ -27,13 +27,15 @@ pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig)
         model.supports_reasoning_summaries = true;
     }
     if let Some(context_window) = config.model_context_window {
-        model.context_window = Some(
+        model.context_window = Some(if config.model_context_window_allow_unsafe_override {
+            context_window
+        } else {
             model
                 .max_context_window
                 .map_or(context_window, |max_context_window| {
                     context_window.min(max_context_window)
-                }),
-        );
+                })
+        });
     }
     if let Some(auto_compact_token_limit) = config.model_auto_compact_token_limit {
         model.auto_compact_token_limit = Some(auto_compact_token_limit);

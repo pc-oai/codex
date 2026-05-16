@@ -117,8 +117,14 @@ pub struct TuiChatKeymap {
     pub decrease_reasoning_effort: Option<KeybindingsSpec>,
     /// Increase the active reasoning effort.
     pub increase_reasoning_effort: Option<KeybindingsSpec>,
+    /// Open the manual rename prompt for the current session.
+    pub rename_current_session: Option<KeybindingsSpec>,
+    /// Generate a fresh title suggestion for the current session.
+    pub retitle_current_session: Option<KeybindingsSpec>,
     /// Edit the most recently queued message.
     pub edit_queued_message: Option<KeybindingsSpec>,
+    /// Discard the most recently queued message.
+    pub discard_queued_message: Option<KeybindingsSpec>,
     /// Promote the most recently queued message into an immediate steer.
     pub steer_queued_message: Option<KeybindingsSpec>,
 }

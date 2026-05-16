@@ -1331,10 +1331,39 @@ async fn status_line_context_used_renders_labeled_percent() {
 
     chat.refresh_status_line();
 
-    assert_eq!(status_line_text(&chat), Some("Context 0% used".to_string()));
+    assert_eq!(
+        status_line_right_text(&chat),
+        Some(format!(
+            "{} · 0%",
+            crate::version::local_build_label().expect("source build label"),
+        ))
+    );
     assert!(
         drain_insert_history(&mut rx).is_empty(),
         "context-used should remain a valid status line item"
+    );
+}
+
+#[tokio::test]
+async fn status_line_context_used_includes_compact_context_tokens_when_known() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.config.tui_status_line = Some(vec!["context-used".to_string()]);
+
+    handle_token_count(
+        &mut chat,
+        Some(make_token_info(
+            /*total_tokens*/ 250_000, /*context_window*/ 1_000_000,
+        )),
+    );
+    chat.refresh_status_line();
+
+    assert_eq!(
+        status_line_right_text(&chat),
+        Some(format!(
+            "{} · 24% (250K)",
+            crate::version::local_build_label().expect("source build label"),
+        ))
     );
 }
 
@@ -1364,7 +1393,13 @@ async fn status_line_legacy_context_usage_renders_context_used_percent() {
 
     chat.refresh_status_line();
 
-    assert_eq!(status_line_text(&chat), Some("Context 0% used".to_string()));
+    assert_eq!(
+        status_line_right_text(&chat),
+        Some(format!(
+            "{} · 0%",
+            crate::version::local_build_label().expect("source build label"),
+        ))
+    );
     assert!(
         drain_insert_history(&mut rx).is_empty(),
         "legacy context-usage should remain a valid status line item"
@@ -1531,7 +1566,7 @@ async fn status_line_model_with_reasoning_includes_fast_for_fast_capable_models(
     assert_eq!(
         status_line_right_text(&chat),
         Some(format!(
-            "{} · 0% used",
+            "{} · 0%",
             crate::version::local_build_label().expect("source build label"),
         ))
     );
@@ -1546,7 +1581,7 @@ async fn status_line_model_with_reasoning_includes_fast_for_fast_capable_models(
     assert_eq!(
         status_line_right_text(&chat),
         Some(format!(
-            "{} · 0% used",
+            "{} · 0%",
             crate::version::local_build_label().expect("source build label"),
         ))
     );

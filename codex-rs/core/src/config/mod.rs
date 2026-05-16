@@ -411,6 +411,10 @@ pub struct Config {
     /// Size of the context window for the model, in tokens.
     pub model_context_window: Option<i64>,
 
+    /// Allow a configured context window to exceed the model catalog max.
+    /// This is an explicit escape hatch for local experiments only.
+    pub model_context_window_allow_unsafe_override: bool,
+
     /// Token usage threshold triggering auto-compaction of conversation history.
     pub model_auto_compact_token_limit: Option<i64>,
 
@@ -1066,6 +1070,8 @@ impl Config {
     pub fn to_models_manager_config(&self) -> ModelsManagerConfig {
         ModelsManagerConfig {
             model_context_window: self.model_context_window,
+            model_context_window_allow_unsafe_override: self
+                .model_context_window_allow_unsafe_override,
             model_auto_compact_token_limit: self.model_auto_compact_token_limit,
             tool_output_token_limit: self.tool_output_token_limit,
             base_instructions: self.base_instructions.clone(),
@@ -2971,6 +2977,9 @@ impl Config {
             service_tier,
             review_model,
             model_context_window: cfg.model_context_window,
+            model_context_window_allow_unsafe_override: cfg
+                .model_context_window_allow_unsafe_override
+                .unwrap_or(false),
             model_auto_compact_token_limit: cfg.model_auto_compact_token_limit,
             model_provider_id,
             model_provider,

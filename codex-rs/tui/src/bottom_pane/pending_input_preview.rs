@@ -16,10 +16,11 @@ use crate::wrapping::adaptive_wrap_lines;
 /// resubmitted at end of turn, then ordinary queued user messages. Pending
 /// steers explain that they will be submitted after the next tool/result
 /// boundary unless the user presses Esc to interrupt and send them
-/// immediately. The edit hint at the bottom only appears when there are actual
-/// queued user inputs to pop back into the composer. Because some terminals
-/// intercept certain modifier-key combinations, the displayed binding is
-/// configurable via [`set_edit_binding`](Self::set_edit_binding).
+/// immediately. The edit/steer hints at the bottom only appear when there are
+/// actual queued user inputs to act on. Because some terminals intercept
+/// certain modifier-key combinations, the displayed edit binding is
+/// configurable via [`set_edit_binding`](Self::set_edit_binding); the steer
+/// binding likewise follows [`set_steer_binding`](Self::set_steer_binding).
 pub(crate) struct PendingInputPreview {
     pub pending_steers: Vec<String>,
     pub rejected_steers: Vec<String>,
@@ -27,6 +28,11 @@ pub(crate) struct PendingInputPreview {
     /// Key combination rendered in the hint line.  Defaults to Alt+Up but may
     /// be overridden for terminals where that chord is unavailable.
     edit_binding: Option<key_hint::KeyBinding>,
+    /// Key combination rendered for discarding the last queued message.
+    discard_binding: Option<key_hint::KeyBinding>,
+    /// Key combination rendered for promoting the last queued message into an
+    /// immediate steer. Defaults to Alt+Down but follows the active keymap.
+    steer_binding: Option<key_hint::KeyBinding>,
 }
 
 const PREVIEW_LINE_LIMIT: usize = 3;
@@ -38,6 +44,8 @@ impl PendingInputPreview {
             rejected_steers: Vec::new(),
             queued_messages: Vec::new(),
             edit_binding: Some(key_hint::alt(KeyCode::Up)),
+            discard_binding: Some(key_hint::ctrl(KeyCode::Char('x'))),
+            steer_binding: Some(key_hint::alt(KeyCode::Down)),
         }
     }
 
@@ -46,6 +54,18 @@ impl PendingInputPreview {
     /// corresponding key event handler.
     pub(crate) fn set_edit_binding(&mut self, binding: Option<key_hint::KeyBinding>) {
         self.edit_binding = binding;
+    }
+
+    /// Replace the keybinding shown for discarding the most recent queued
+    /// message. The caller is responsible for wiring the handler.
+    pub(crate) fn set_discard_binding(&mut self, binding: Option<key_hint::KeyBinding>) {
+        self.discard_binding = binding;
+    }
+
+    /// Replace the keybinding shown for steering the most recent queued
+    /// message immediately. The caller is responsible for wiring the handler.
+    pub(crate) fn set_steer_binding(&mut self, binding: Option<key_hint::KeyBinding>) {
+        self.steer_binding = binding;
     }
 
     fn push_truncated_preview_lines(
@@ -145,17 +165,37 @@ impl PendingInputPreview {
             }
         }
 
-        if !self.queued_messages.is_empty()
-            && let Some(edit_binding) = self.edit_binding
-        {
-            lines.push(
-                Line::from(vec![
-                    "    ".into(),
-                    edit_binding.into(),
-                    " edit last queued message".into(),
-                ])
-                .dim(),
-            );
+        if !self.queued_messages.is_empty() {
+            if let Some(edit_binding) = self.edit_binding {
+                lines.push(
+                    Line::from(vec![
+                        "    ".into(),
+                        edit_binding.into(),
+                        " edit last queued message".into(),
+                    ])
+                    .dim(),
+                );
+            }
+            if let Some(discard_binding) = self.discard_binding {
+                lines.push(
+                    Line::from(vec![
+                        "    ".into(),
+                        discard_binding.into(),
+                        " discard last queued message".into(),
+                    ])
+                    .dim(),
+                );
+            }
+            if let Some(steer_binding) = self.steer_binding {
+                lines.push(
+                    Line::from(vec![
+                        "    ".into(),
+                        steer_binding.into(),
+                        " steer last queued message now".into(),
+                    ])
+                    .dim(),
+                );
+            }
         }
 
         Paragraph::new(lines).into()
@@ -192,7 +232,7 @@ mod tests {
     fn desired_height_one_message() {
         let mut queue = PendingInputPreview::new();
         queue.queued_messages.push("Hello, world!".to_string());
-        assert_eq!(queue.desired_height(/*width*/ 40), 3);
+        assert_eq!(queue.desired_height(/*width*/ 40), 5);
     }
 
     #[test]
@@ -295,8 +335,8 @@ mod tests {
         let width = 36;
         let height = queue.desired_height(width);
         assert_eq!(
-            height, 3,
-            "expected header, one message row, and hint row for URL-like token"
+            height, 5,
+            "expected header, one message row, and three hint rows for URL-like token"
         );
 
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));

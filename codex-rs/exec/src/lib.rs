@@ -220,7 +220,11 @@ fn exec_root_span() -> tracing::Span {
     )
 }
 
-pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
+pub async fn run_main(
+    cli: Cli,
+    arg0_paths: Arg0DispatchPaths,
+    mut loader_overrides: LoaderOverrides,
+) -> anyhow::Result<()> {
     #[allow(clippy::print_stderr)]
     if let Some(message) = cli.removed_full_auto_warning() {
         eprintln!("{message}");
@@ -315,12 +319,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         }
     };
 
-    #[allow(clippy::print_stderr)]
-    let loader_overrides = LoaderOverrides {
-        ignore_user_config,
-        ignore_user_and_project_exec_policy_rules: ignore_rules,
-        ..Default::default()
-    };
+    loader_overrides.ignore_user_config |= ignore_user_config;
+    loader_overrides.ignore_user_and_project_exec_policy_rules |= ignore_rules;
 
     let config_toml = match load_config_as_toml_with_cli_and_loader_overrides(
         &codex_home,

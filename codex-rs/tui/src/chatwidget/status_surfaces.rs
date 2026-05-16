@@ -652,9 +652,13 @@ impl ChatWidget {
             StatusLineItem::ContextRemaining => self
                 .status_line_context_remaining_percent()
                 .map(|remaining| format!("Context {remaining}% left")),
-            StatusLineItem::ContextUsed => self
-                .status_line_context_used_percent()
-                .map(|used| format_context_used(used, self.config.tui_context_used_style)),
+            StatusLineItem::ContextUsed => self.status_line_context_used_percent().map(|used| {
+                format_context_used(
+                    used,
+                    self.status_line_context_used_tokens(),
+                    self.config.tui_context_used_style,
+                )
+            }),
             StatusLineItem::FiveHourLimit => {
                 let window = self
                     .rate_limit_snapshots_by_limit_id
@@ -1033,20 +1037,28 @@ fn is_emoji_like(ch: char) -> bool {
     )
 }
 
-fn format_context_used(used: i64, style: TuiContextUsedStyle) -> String {
+fn format_context_used(used: i64, used_tokens: Option<i64>, style: TuiContextUsedStyle) -> String {
     let used = used.clamp(0, 100);
     let filled = ((used + 19) / 20) as usize;
     let empty = 5usize.saturating_sub(filled);
+    let usage_label = used_tokens.map_or_else(
+        || format!("{used}%"),
+        |tokens| format!("{used}% ({})", format_tokens_compact(tokens)),
+    );
     match style {
-        TuiContextUsedStyle::Percent => format!("{used}% used"),
+        TuiContextUsedStyle::Percent => usage_label,
         TuiContextUsedStyle::Blocks => {
-            format!("{}{} {used}% used", "▰".repeat(filled), "▱".repeat(empty))
+            format!("{}{} {usage_label}", "▰".repeat(filled), "▱".repeat(empty))
         }
         TuiContextUsedStyle::SolidBlocks => {
-            format!("{}{} {used}% used", "█".repeat(filled), "░".repeat(empty))
+            format!("{}{} {usage_label}", "█".repeat(filled), "░".repeat(empty))
         }
         TuiContextUsedStyle::Ascii => {
-            format!("[{}{}] {used}% used", "=".repeat(filled), ".".repeat(empty))
+            format!(
+                "[{}{}] {usage_label}",
+                "=".repeat(filled),
+                ".".repeat(empty)
+            )
         }
     }
 }

@@ -79,8 +79,14 @@ pub(crate) struct ChatKeymap {
     pub(crate) decrease_reasoning_effort: Vec<KeyBinding>,
     /// Increase the active reasoning effort.
     pub(crate) increase_reasoning_effort: Vec<KeyBinding>,
+    /// Open the manual rename prompt for the current session.
+    pub(crate) rename_current_session: Vec<KeyBinding>,
+    /// Generate a fresh title suggestion for the current session.
+    pub(crate) retitle_current_session: Vec<KeyBinding>,
     /// Edit the most recently queued message.
     pub(crate) edit_queued_message: Vec<KeyBinding>,
+    /// Discard the most recently queued message.
+    pub(crate) discard_queued_message: Vec<KeyBinding>,
     /// Promote the most recently queued message into an immediate steer.
     pub(crate) steer_queued_message: Vec<KeyBinding>,
 }
@@ -392,10 +398,25 @@ impl RuntimeKeymap {
                 &defaults.chat.increase_reasoning_effort,
                 "tui.keymap.chat.increase_reasoning_effort",
             )?,
+            rename_current_session: resolve_bindings(
+                keymap.chat.rename_current_session.as_ref(),
+                &defaults.chat.rename_current_session,
+                "tui.keymap.chat.rename_current_session",
+            )?,
+            retitle_current_session: resolve_bindings(
+                keymap.chat.retitle_current_session.as_ref(),
+                &defaults.chat.retitle_current_session,
+                "tui.keymap.chat.retitle_current_session",
+            )?,
             edit_queued_message: resolve_bindings(
                 keymap.chat.edit_queued_message.as_ref(),
                 &defaults.chat.edit_queued_message,
                 "tui.keymap.chat.edit_queued_message",
+            )?,
+            discard_queued_message: resolve_bindings(
+                keymap.chat.discard_queued_message.as_ref(),
+                &defaults.chat.discard_queued_message,
+                "tui.keymap.chat.discard_queued_message",
             )?,
             steer_queued_message: resolve_bindings(
                 keymap.chat.steer_queued_message.as_ref(),
@@ -557,12 +578,22 @@ impl RuntimeKeymap {
             chat: ChatKeymap {
                 decrease_reasoning_effort: default_bindings![alt(KeyCode::Char(','))],
                 increase_reasoning_effort: default_bindings![alt(KeyCode::Char('.'))],
+                rename_current_session: default_bindings![alt(KeyCode::Char('r'))],
+                retitle_current_session: default_bindings![raw(KeyBinding::new(
+                    KeyCode::Char('r'),
+                    KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+                ))],
                 edit_queued_message: default_bindings![
                     alt(KeyCode::Up),
-                    ctrl(KeyCode::Char('e')),
+                    alt(KeyCode::Char('e')),
                     shift(KeyCode::Left)
                 ],
-                steer_queued_message: default_bindings![alt(KeyCode::Down), shift(KeyCode::Right)],
+                discard_queued_message: default_bindings![ctrl(KeyCode::Char('x'))],
+                steer_queued_message: default_bindings![
+                    alt(KeyCode::Enter),
+                    alt(KeyCode::Down),
+                    shift(KeyCode::Right)
+                ],
             },
             composer: ComposerKeymap {
                 submit: default_bindings![plain(KeyCode::Enter)],
@@ -571,7 +602,10 @@ impl RuntimeKeymap {
                     plain(KeyCode::Char('?')),
                     shift(KeyCode::Char('?'))
                 ],
-                history_search_previous: default_bindings![ctrl(KeyCode::Char('r'))],
+                history_search_previous: default_bindings![raw(KeyBinding::new(
+                    KeyCode::Char('r'),
+                    KeyModifiers::ALT | KeyModifiers::SHIFT,
+                ))],
                 history_search_next: default_bindings![ctrl(KeyCode::Char('s'))],
             },
             editor: EditorKeymap {
@@ -775,8 +809,20 @@ impl RuntimeKeymap {
                     self.chat.increase_reasoning_effort.as_slice(),
                 ),
                 (
+                    "chat.rename_current_session",
+                    self.chat.rename_current_session.as_slice(),
+                ),
+                (
+                    "chat.retitle_current_session",
+                    self.chat.retitle_current_session.as_slice(),
+                ),
+                (
                     "chat.edit_queued_message",
                     self.chat.edit_queued_message.as_slice(),
+                ),
+                (
+                    "chat.discard_queued_message",
+                    self.chat.discard_queued_message.as_slice(),
                 ),
                 (
                     "chat.steer_queued_message",
@@ -820,8 +866,20 @@ impl RuntimeKeymap {
                     self.chat.increase_reasoning_effort.as_slice(),
                 ),
                 (
+                    "chat.rename_current_session",
+                    self.chat.rename_current_session.as_slice(),
+                ),
+                (
+                    "chat.retitle_current_session",
+                    self.chat.retitle_current_session.as_slice(),
+                ),
+                (
                     "chat.edit_queued_message",
                     self.chat.edit_queued_message.as_slice(),
+                ),
+                (
+                    "chat.discard_queued_message",
+                    self.chat.discard_queued_message.as_slice(),
                 ),
                 (
                     "chat.steer_queued_message",
@@ -1653,16 +1711,42 @@ mod tests {
             vec![key_hint::alt(KeyCode::Char('.'))]
         );
         assert_eq!(
+            runtime.chat.rename_current_session,
+            vec![key_hint::alt(KeyCode::Char('r'))]
+        );
+        assert_eq!(
+            runtime.chat.retitle_current_session,
+            vec![KeyBinding::new(
+                KeyCode::Char('r'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            )]
+        );
+        assert_eq!(
             runtime.chat.edit_queued_message,
             vec![
                 key_hint::alt(KeyCode::Up),
-                key_hint::ctrl(KeyCode::Char('e')),
+                key_hint::alt(KeyCode::Char('e')),
                 key_hint::shift(KeyCode::Left)
             ]
         );
         assert_eq!(
+            runtime.chat.discard_queued_message,
+            vec![key_hint::ctrl(KeyCode::Char('x'))]
+        );
+        assert_eq!(
+            runtime.chat.steer_queued_message,
+            vec![
+                key_hint::alt(KeyCode::Enter),
+                key_hint::alt(KeyCode::Down),
+                key_hint::shift(KeyCode::Right),
+            ]
+        );
+        assert_eq!(
             runtime.composer.history_search_previous,
-            vec![key_hint::ctrl(KeyCode::Char('r'))]
+            vec![KeyBinding::new(
+                KeyCode::Char('r'),
+                KeyModifiers::ALT | KeyModifiers::SHIFT,
+            )]
         );
         assert_eq!(
             runtime.composer.history_search_next,

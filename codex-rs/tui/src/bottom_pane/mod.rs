@@ -428,6 +428,20 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Update the discard hint shown next to queued messages so it matches the
+    /// binding that `ChatWidget` actually listens for.
+    pub(crate) fn set_queued_message_discard_binding(&mut self, binding: Option<KeyBinding>) {
+        self.pending_input_preview.set_discard_binding(binding);
+        self.request_redraw();
+    }
+
+    /// Update the steer hint shown next to queued messages so it matches the
+    /// binding that `ChatWidget` actually listens for.
+    pub(crate) fn set_queued_message_steer_binding(&mut self, binding: Option<KeyBinding>) {
+        self.pending_input_preview.set_steer_binding(binding);
+        self.request_redraw();
+    }
+
     pub(crate) fn set_vim_enabled(&mut self, enabled: bool) {
         self.composer.set_vim_enabled(enabled);
         self.request_redraw();
@@ -861,6 +875,11 @@ impl BottomPane {
 
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
         self.composer.set_footer_hint_override(items);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_previous_message_edit_mode(&mut self, enabled: bool) {
+        self.composer.set_previous_message_edit_mode(enabled);
         self.request_redraw();
     }
 
@@ -1846,7 +1865,10 @@ mod tests {
         });
         pane.insert_str("draft");
 
-        pane.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        pane.handle_key_event(KeyEvent::new(
+            KeyCode::Char('r'),
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+        ));
         assert!(pane.composer.popup_active());
 
         assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());

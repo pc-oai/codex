@@ -644,14 +644,14 @@ impl Default for TuiTiming {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum TuiContextUsedStyle {
-    /// Render as `14% used`.
+    /// Render as `14%`.
     #[default]
     Percent,
-    /// Render as `▰▱▱▱▱ 14% used`.
+    /// Render as `▰▱▱▱▱ 14%`.
     Blocks,
-    /// Render as `█░░░░ 14% used`.
+    /// Render as `█░░░░ 14%`.
     SolidBlocks,
-    /// Render as `[=....] 14% used`.
+    /// Render as `[=....] 14%`.
     Ascii,
 }
 

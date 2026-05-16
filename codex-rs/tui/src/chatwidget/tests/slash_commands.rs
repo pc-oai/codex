@@ -1033,6 +1033,18 @@ async fn slash_rename_without_existing_thread_name_starts_empty() {
 }
 
 #[tokio::test]
+async fn direct_rename_dispatches_set_thread_name() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    assert!(chat.rename_thread_from_text("  Better title  "));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::CodexOp(Op::SetThreadName { name })) if name == "Better title"
+    );
+}
+
+#[tokio::test]
 async fn slash_retitle_requests_out_of_band_suggestion() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();
@@ -1040,6 +1052,48 @@ async fn slash_retitle_requests_out_of_band_suggestion() {
     chat.thread_name = Some("🧭 🗂️ Old title".to_string());
 
     chat.dispatch_command(SlashCommand::Retitle);
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::GenerateThreadNameSuggestion {
+            parent_thread_id,
+            kind: crate::thread_name_suggestion::ThreadNameSuggestionKind::Retitle,
+            prompt,
+            current_name,
+        }) if parent_thread_id == thread_id
+            && prompt == RETITLE_PROMPT
+            && current_name.as_deref() == Some("🧭 🗂️ Old title")
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn alt_r_opens_manual_rename_prompt() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_name = Some("🧭 🗂️ Old title".to_string());
+    chat.chat_keymap.rename_current_session = vec![crate::key_hint::alt(KeyCode::Char('r'))];
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(popup.contains("Rename thread"));
+}
+
+#[tokio::test]
+async fn ctrl_shift_r_requests_out_of_band_retitle_suggestion() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.thread_name = Some("🧭 🗂️ Old title".to_string());
+    chat.chat_keymap.retitle_current_session = vec![crate::key_hint::KeyBinding::new(
+        KeyCode::Char('r'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    )];
+
+    chat.handle_key_event(KeyEvent::new(
+        KeyCode::Char('r'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    ));
 
     assert_matches!(
         rx.try_recv(),

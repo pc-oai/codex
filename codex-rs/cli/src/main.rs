@@ -850,7 +850,8 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
             );
-            codex_exec::run_main(exec_cli, arg0_paths.clone()).await?;
+            codex_exec::run_main(exec_cli, arg0_paths.clone(), root_loader_overrides.clone())
+                .await?;
         }
         Some(Subcommand::Review(review_args)) => {
             reject_remote_mode_for_subcommand(
@@ -864,7 +865,8 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
             );
-            codex_exec::run_main(exec_cli, arg0_paths.clone()).await?;
+            codex_exec::run_main(exec_cli, arg0_paths.clone(), root_loader_overrides.clone())
+                .await?;
         }
         Some(Subcommand::McpServer) => {
             reject_remote_mode_for_subcommand(

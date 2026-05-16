@@ -47,7 +47,7 @@ impl StatusSurfacePreviewItem {
             StatusSurfacePreviewItem::PullRequestNumber => "PR #123",
             StatusSurfacePreviewItem::BranchChanges => "+12 -3",
             StatusSurfacePreviewItem::ContextRemaining => "Context 0% left",
-            StatusSurfacePreviewItem::ContextUsed => "0% used",
+            StatusSurfacePreviewItem::ContextUsed => "0%",
             StatusSurfacePreviewItem::FiveHourLimit => "5h 0%",
             StatusSurfacePreviewItem::WeeklyLimit => "weekly 0%",
             StatusSurfacePreviewItem::CodexVersion => "0.0.0",

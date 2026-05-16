@@ -249,6 +249,14 @@ fn queued_message_edit_hint_binding(
         .or_else(|| bindings.first().copied())
 }
 
+fn queued_message_steer_hint_binding(bindings: &[KeyBinding]) -> Option<KeyBinding> {
+    bindings.first().copied()
+}
+
+fn queued_message_discard_hint_binding(bindings: &[KeyBinding]) -> Option<KeyBinding> {
+    bindings.first().copied()
+}
+
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event::ExitMode;
@@ -4964,6 +4972,10 @@ impl ChatWidget {
             &chat_keymap.edit_queued_message,
             current_terminal_info,
         );
+        let queued_message_discard_hint_binding =
+            queued_message_discard_hint_binding(&chat_keymap.discard_queued_message);
+        let queued_message_steer_hint_binding =
+            queued_message_steer_hint_binding(&chat_keymap.steer_queued_message);
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -5146,6 +5158,12 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_queued_message_edit_binding(widget.queued_message_edit_hint_binding);
+        widget
+            .bottom_pane
+            .set_queued_message_discard_binding(queued_message_discard_hint_binding);
+        widget
+            .bottom_pane
+            .set_queued_message_steer_binding(queued_message_steer_hint_binding);
         #[cfg(target_os = "windows")]
         widget.bottom_pane.set_windows_degraded_sandbox_active(
             crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
@@ -5218,10 +5236,18 @@ impl ChatWidget {
                 kind: KeyEventKind::Press,
                 ..
             } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'x') => {
-                if !self.bottom_pane.composer_is_empty() {
-                    self.bottom_pane.clear_composer();
+                let discard_queued_message = self
+                    .chat_keymap
+                    .discard_queued_message
+                    .is_pressed(key_event)
+                    && self.has_queued_follow_up_messages()
+                    && self.bottom_pane.no_modal_or_popup_active();
+                if !discard_queued_message {
+                    if !self.bottom_pane.composer_is_empty() {
+                        self.bottom_pane.clear_composer();
+                    }
+                    return;
                 }
-                return;
             }
             KeyEvent {
                 code: KeyCode::Char(c),
@@ -5272,12 +5298,59 @@ impl ChatWidget {
         }
 
         if key_event.kind == KeyEventKind::Press
+            && self
+                .chat_keymap
+                .rename_current_session
+                .is_pressed(key_event)
+            && self.bottom_pane.no_modal_or_popup_active()
+        {
+            self.session_telemetry
+                .counter("codex.thread.rename", /*inc*/ 1, &[]);
+            self.show_rename_prompt();
+            self.request_redraw();
+            return;
+        }
+
+        if key_event.kind == KeyEventKind::Press
+            && self
+                .chat_keymap
+                .retitle_current_session
+                .is_pressed(key_event)
+            && self.bottom_pane.no_modal_or_popup_active()
+        {
+            if self.bottom_pane.is_task_running() {
+                self.add_to_history(history_cell::new_error_event(
+                    "'/retitle' is disabled while a task is in progress.".to_string(),
+                ));
+            } else {
+                self.request_retitle_suggestion();
+            }
+            self.request_redraw();
+            return;
+        }
+
+        if key_event.kind == KeyEventKind::Press
             && self.chat_keymap.edit_queued_message.is_pressed(key_event)
             && self.has_queued_follow_up_messages()
             && self.bottom_pane.no_modal_or_popup_active()
         {
             if let Some(user_message) = self.pop_latest_queued_user_message() {
                 self.restore_user_message_to_composer(user_message);
+                self.refresh_pending_input_preview();
+                self.request_redraw();
+            }
+            return;
+        }
+
+        if key_event.kind == KeyEventKind::Press
+            && self
+                .chat_keymap
+                .discard_queued_message
+                .is_pressed(key_event)
+            && self.has_queued_follow_up_messages()
+            && self.bottom_pane.no_modal_or_popup_active()
+        {
+            if self.pop_latest_queued_user_message().is_some() {
                 self.refresh_pending_input_preview();
                 self.request_redraw();
             }
@@ -5646,6 +5719,18 @@ impl ChatWidget {
         );
 
         self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn rename_thread_from_text(&mut self, name: &str) -> bool {
+        if !self.ensure_thread_rename_allowed() {
+            return false;
+        }
+        let Some(name) = crate::legacy_core::util::normalize_thread_name(name) else {
+            self.add_error_message("Thread name cannot be empty.".to_string());
+            return false;
+        };
+        self.app_event_tx.set_thread_name(name);
+        true
     }
 
     fn ensure_thread_rename_allowed(&mut self) -> bool {
@@ -7216,6 +7301,12 @@ impl ChatWidget {
     fn status_line_context_used_percent(&self) -> Option<i64> {
         let remaining = self.status_line_context_remaining_percent().unwrap_or(100);
         Some((100 - remaining).clamp(0, 100))
+    }
+
+    fn status_line_context_used_tokens(&self) -> Option<i64> {
+        self.token_info
+            .as_ref()
+            .map(|info| info.last_token_usage.tokens_in_context_window())
     }
 
     fn status_line_total_usage(&self) -> TokenUsage {
@@ -10641,6 +10732,8 @@ impl ChatWidget {
     }
 
     pub(crate) fn show_edit_last_message_hint(&mut self) {
+        self.bottom_pane
+            .set_previous_message_edit_mode(/*enabled*/ true);
         self.bottom_pane.set_footer_hint_override(Some(vec![
             ("Editing".to_string(), "previous message".to_string()),
             ("Enter".to_string(), "submit".to_string()),
@@ -10649,6 +10742,8 @@ impl ChatWidget {
     }
 
     pub(crate) fn clear_edit_last_message_hint(&mut self) {
+        self.bottom_pane
+            .set_previous_message_edit_mode(/*enabled*/ false);
         self.bottom_pane.set_footer_hint_override(/*items*/ None);
     }
 

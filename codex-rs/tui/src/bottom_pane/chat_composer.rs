@@ -195,6 +195,7 @@ use crate::render::Insets;
 use crate::render::RectExt;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
+use crate::style::edited_user_message_style;
 use crate::style::user_message_style;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::user_input::ByteRange;
@@ -355,6 +356,7 @@ pub(crate) struct ChatComposer {
     disable_paste_burst: bool,
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
+    previous_message_edit_mode: bool,
     /// Whether the ambient footer row is currently replaced by the Plan-mode nudge.
     ///
     /// Eligibility is decided by `ChatWidget`; the composer only owns presentation so enabling
@@ -549,6 +551,7 @@ impl ChatComposer {
             disable_paste_burst: false,
             footer_mode: FooterMode::ComposerEmpty,
             footer_hint_override: None,
+            previous_message_edit_mode: false,
             plan_mode_nudge_visible: false,
             remote_image_urls: Vec::new(),
             selected_remote_image_index: None,
@@ -1186,6 +1189,10 @@ impl ChatComposer {
     /// `None` restores the default shortcut footer.
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
         self.footer_hint_override = items;
+    }
+
+    pub(crate) fn set_previous_message_edit_mode(&mut self, enabled: bool) {
+        self.previous_message_edit_mode = enabled;
     }
 
     /// Updates whether the Plan-mode nudge replaces the ambient footer row.
@@ -4350,6 +4357,8 @@ impl ChatComposer {
                     let available_width =
                         hint_rect.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
                     let status_line_active = uses_passive_footer_status_layout(&footer_props);
+                    let status_line_right_pinned =
+                        self.status_line_enabled && self.status_line_right_value.is_some();
                     let combined_status_line = if status_line_active {
                         passive_footer_status_line(&footer_props)
                     } else {
@@ -4362,7 +4371,7 @@ impl ChatComposer {
                     } else {
                         None
                     };
-                    let left_mode_indicator = if status_line_active {
+                    let left_mode_indicator = if status_line_active || status_line_right_pinned {
                         None
                     } else {
                         self.collaboration_mode_indicator
@@ -4394,7 +4403,7 @@ impl ChatComposer {
                             Some(side_conversation_context_line(label))
                         } else if let Some(line) = self.shell_mode_footer_line() {
                             Some(line)
-                        } else if status_line_active {
+                        } else if status_line_active || status_line_right_pinned {
                             let full = self.mode_indicator_line(show_cycle_hint);
                             let compact = self.mode_indicator_line(/*show_cycle_hint*/ false);
                             let full_width = full.as_ref().map(|l| l.width() as u16).unwrap_or(0);
@@ -4446,13 +4455,14 @@ impl ChatComposer {
                             | FooterMode::ShortcutOverlay => None,
                         }
                     };
-                    let show_right = if matches!(
+                    let instruction_mode_hides_right = matches!(
                         footer_props.mode,
                         FooterMode::EscHint
                             | FooterMode::HistorySearch
                             | FooterMode::QuitShortcutReminder
                             | FooterMode::ShortcutOverlay
-                    ) {
+                    ) && !status_line_right_pinned;
+                    let show_right = if instruction_mode_hides_right {
                         false
                     } else {
                         single_line_layout
@@ -4551,7 +4561,11 @@ impl ChatComposer {
         mask_char: Option<char>,
     ) {
         let is_zellij = self.is_zellij;
-        let style = user_message_style();
+        let style = if self.previous_message_edit_mode {
+            edited_user_message_style()
+        } else {
+            user_message_style()
+        };
         let textarea_style = style.fg(ratatui::style::Color::Reset);
         Block::default().style(style).render_ref(composer_rect, buf);
         if !remote_images_rect.is_empty() {
@@ -4569,6 +4583,12 @@ impl ChatComposer {
                         Span::from("!").light_red()
                     } else {
                         Span::from("!").light_red().bold()
+                    }
+                } else if self.previous_message_edit_mode {
+                    if is_zellij {
+                        Span::styled("✎", style.fg(ratatui::style::Color::Yellow))
+                    } else {
+                        Span::from("✎").yellow().bold()
                     }
                 } else if is_zellij {
                     Span::styled("›", style.fg(ratatui::style::Color::Cyan))
@@ -5012,8 +5032,10 @@ mod tests {
                 composer
                     .history
                     .record_local_submission(HistoryEntry::new("cargo test".to_string()));
-                let _ = composer
-                    .handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+                let _ = composer.handle_key_event(KeyEvent::new(
+                    KeyCode::Char('r'),
+                    KeyModifiers::ALT | KeyModifiers::SHIFT,
+                ));
                 let _ = composer
                     .handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
             },
@@ -5118,6 +5140,105 @@ mod tests {
         assert_eq!(
             buf[(shell_label_x as u16, footer_y)].style().fg,
             Some(Color::LightRed)
+        );
+    }
+
+    #[test]
+    fn previous_message_edit_mode_uses_distinct_composer_accent() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_previous_message_edit_mode(/*enabled*/ true);
+        composer.set_text_content("revise this".to_string(), Vec::new(), Vec::new());
+
+        let area = Rect::new(0, 0, 100, 9);
+        let mut buf = Buffer::empty(area);
+        composer.render(area, &mut buf);
+
+        assert_eq!(buf[(0, 1)].symbol(), "✎");
+        assert_eq!(buf[(0, 1)].style().fg, Some(Color::Yellow));
+    }
+
+    #[test]
+    fn queue_hint_keeps_configured_right_status_line() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_status_line_enabled(/*enabled*/ true);
+        composer.set_status_line_right(Some(Line::from("23% (241K)")));
+        composer.set_context_window(Some(77), /*used_tokens*/ None);
+        composer.set_task_running(/*running*/ true);
+        composer.set_text_content("follow up".to_string(), Vec::new(), Vec::new());
+
+        let area = Rect::new(0, 0, 100, 9);
+        let mut buf = Buffer::empty(area);
+        composer.render(area, &mut buf);
+        let footer_y = area.height - 1;
+        let footer_text = (0..area.width)
+            .map(|x| buf[(x, footer_y)].symbol().chars().next().unwrap_or(' '))
+            .collect::<String>();
+
+        assert!(
+            footer_text.contains("tab to queue message"),
+            "expected queue guidance on the left, got: {footer_text:?}"
+        );
+        assert!(
+            footer_text.contains("23% (241K)"),
+            "expected configured right status to remain visible, got: {footer_text:?}"
+        );
+        assert!(
+            !footer_text.contains("77% context left"),
+            "expected fallback context text to stay hidden, got: {footer_text:?}"
+        );
+    }
+
+    #[test]
+    fn esc_hint_keeps_configured_right_status_line() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_status_line_enabled(/*enabled*/ true);
+        composer.set_status_line_right(Some(Line::from("23% (241K)")));
+        composer.set_context_window(Some(77), /*used_tokens*/ None);
+        composer.set_esc_backtrack_hint(/*show*/ true);
+
+        let area = Rect::new(0, 0, 100, 9);
+        let mut buf = Buffer::empty(area);
+        composer.render(area, &mut buf);
+        let footer_y = area.height - 1;
+        let footer_text = (0..area.width)
+            .map(|x| buf[(x, footer_y)].symbol().chars().next().unwrap_or(' '))
+            .collect::<String>();
+
+        assert!(
+            footer_text.contains("esc"),
+            "expected Esc guidance on the left, got: {footer_text:?}"
+        );
+        assert!(
+            footer_text.contains("23% (241K)"),
+            "expected configured right status to remain visible, got: {footer_text:?}"
+        );
+        assert!(
+            !footer_text.contains("77% context left"),
+            "expected fallback context text to stay hidden, got: {footer_text:?}"
         );
     }
 
@@ -7967,7 +8088,7 @@ mod tests {
     }
 
     #[test]
-    fn remapped_history_search_does_not_fall_back_to_ctrl_r() {
+    fn remapped_history_search_does_not_fall_back_to_alt_r() {
         use crate::key_hint;
         use crate::keymap::RuntimeKeymap;
         use crossterm::event::KeyCode;
@@ -7987,7 +8108,10 @@ mod tests {
         keymap.composer.history_search_previous = vec![key_hint::plain(KeyCode::F(2))];
         composer.set_keymap_bindings(&keymap);
 
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        let _ = composer.handle_key_event(KeyEvent::new(
+            KeyCode::Char('r'),
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+        ));
         assert!(!composer.history_search_active());
 
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE));

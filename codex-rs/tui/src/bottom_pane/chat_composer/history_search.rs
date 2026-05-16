@@ -517,7 +517,10 @@ mod tests {
             .record_local_submission(HistoryEntry::new("remembered command".to_string()));
         composer.set_text_content(String::new(), Vec::new(), Vec::new());
 
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        let _ = composer.handle_key_event(KeyEvent::new(
+            KeyCode::Char('r'),
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+        ));
 
         assert!(composer.history_search_active());
         assert!(composer.textarea.is_empty());
@@ -556,7 +559,10 @@ mod tests {
             .record_local_submission(HistoryEntry::new("cargo test".to_string()));
         composer.set_text_content("draft".to_string(), Vec::new(), Vec::new());
 
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        let _ = composer.handle_key_event(KeyEvent::new(
+            KeyCode::Char('r'),
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+        ));
         assert!(composer.history_search_active());
         assert_eq!(composer.textarea.text(), "draft");
 
@@ -588,7 +594,10 @@ mod tests {
             .record_local_submission(HistoryEntry::new("git status".to_string()));
         composer.set_vim_enabled(/*enabled*/ true);
 
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        let _ = composer.handle_key_event(KeyEvent::new(
+            KeyCode::Char('r'),
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+        ));
         for ch in ['g', 'i', 't'] {
             let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
         }
@@ -614,15 +623,20 @@ mod tests {
         ));
         composer.set_text_content("draft".to_string(), Vec::new(), Vec::new());
 
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        let _ = composer.handle_key_event(KeyEvent::new(
+            KeyCode::Char('r'),
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+        ));
         for ch in ['b', 'u', 'g'] {
             let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
         }
         assert_eq!(composer.textarea.text(), "Find and fix a bug in @filename");
 
         for _ in 0..3 {
-            let _ =
-                composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+            let _ = composer.handle_key_event(KeyEvent::new(
+                KeyCode::Char('r'),
+                KeyModifiers::ALT | KeyModifiers::SHIFT,
+            ));
         }
         assert_eq!(composer.textarea.text(), "Find and fix a bug in @filename");
         assert!(
@@ -659,7 +673,10 @@ mod tests {
             .history
             .record_local_submission(HistoryEntry::new("cargo test".to_string()));
 
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        let _ = composer.handle_key_event(KeyEvent::new(
+            KeyCode::Char('r'),
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+        ));
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
 
         let line = composer
@@ -723,7 +740,10 @@ mod tests {
             .history
             .record_local_submission(HistoryEntry::new("git status".to_string()));
 
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        let _ = composer.handle_key_event(KeyEvent::new(
+            KeyCode::Char('r'),
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+        ));
         for ch in ['g', 'i', 't'] {
             let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
         }
@@ -778,7 +798,10 @@ mod tests {
         composer.set_text_content("draft".to_string(), Vec::new(), Vec::new());
         composer.textarea.set_cursor(/*pos*/ 2);
 
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        let _ = composer.handle_key_event(KeyEvent::new(
+            KeyCode::Char('r'),
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+        ));
         assert_eq!(composer.textarea.text(), "draft");
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
         assert_eq!(composer.textarea.text(), "remembered command");
@@ -807,8 +830,10 @@ mod tests {
             composer.set_text_content("draft".to_string(), Vec::new(), Vec::new());
             composer.textarea.set_cursor(/*pos*/ 2);
 
-            let _ =
-                composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+            let _ = composer.handle_key_event(KeyEvent::new(
+                KeyCode::Char('r'),
+                KeyModifiers::ALT | KeyModifiers::SHIFT,
+            ));
             let _ =
                 composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
             assert_eq!(composer.textarea.text(), "remembered command");
@@ -845,7 +870,10 @@ mod tests {
         assert!(composer.is_in_paste_burst());
         assert_eq!(composer.textarea.text(), "");
 
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        let _ = composer.handle_key_event(KeyEvent::new(
+            KeyCode::Char('r'),
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+        ));
 
         assert!(composer.history_search_active());
         assert!(!composer.is_in_paste_burst());
@@ -883,7 +911,10 @@ mod tests {
         assert!(composer.is_in_paste_burst());
         assert_eq!(composer.textarea.text(), "");
 
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        let _ = composer.handle_key_event(KeyEvent::new(
+            KeyCode::Char('r'),
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+        ));
 
         assert!(composer.history_search_active());
         assert!(!composer.is_in_paste_burst());
@@ -914,7 +945,10 @@ mod tests {
             .record_local_submission(HistoryEntry::new("newest entry".to_string()));
         composer.set_text_content(String::new(), Vec::new(), Vec::new());
 
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        let _ = composer.handle_key_event(KeyEvent::new(
+            KeyCode::Char('r'),
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+        ));
         for ch in ['m', 'a', 't', 'c', 'h'] {
             let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
         }
@@ -944,7 +978,10 @@ mod tests {
             .record_local_submission(HistoryEntry::new("git status".to_string()));
         composer.set_text_content("draft".to_string(), Vec::new(), Vec::new());
 
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        let _ = composer.handle_key_event(KeyEvent::new(
+            KeyCode::Char('r'),
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+        ));
         for ch in ['z', 'z', 'z'] {
             let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
         }

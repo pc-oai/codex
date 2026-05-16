@@ -2423,8 +2423,12 @@
             },
             "chat": {
               "decrease_reasoning_effort": null,
+              "discard_queued_message": null,
               "edit_queued_message": null,
-              "increase_reasoning_effort": null
+              "increase_reasoning_effort": null,
+              "rename_current_session": null,
+              "retitle_current_session": null,
+              "steer_queued_message": null
             },
             "composer": {
               "history_search_next": null,
@@ -2687,6 +2691,14 @@
           ],
           "description": "Decrease the active reasoning effort."
         },
+        "discard_queued_message": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Discard the most recently queued message."
+        },
         "edit_queued_message": {
           "allOf": [
             {
@@ -2702,6 +2714,30 @@
             }
           ],
           "description": "Increase the active reasoning effort."
+        },
+        "rename_current_session": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Open the manual rename prompt for the current session."
+        },
+        "retitle_current_session": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Generate a fresh title suggestion for the current session."
+        },
+        "steer_queued_message": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Promote the most recently queued message into an immediate steer."
         }
       },
       "type": "object"
@@ -3004,8 +3040,12 @@
           ],
           "default": {
             "decrease_reasoning_effort": null,
+            "discard_queued_message": null,
             "edit_queued_message": null,
-            "increase_reasoning_effort": null
+            "increase_reasoning_effort": null,
+            "rename_current_session": null,
+            "retitle_current_session": null,
+            "steer_queued_message": null
           }
         },
         "composer": {
@@ -4245,6 +4285,10 @@
       "description": "Size of the context window for the model, in tokens.",
       "format": "int64",
       "type": "integer"
+    },
+    "model_context_window_allow_unsafe_override": {
+      "description": "Allow a configured context window to exceed the model catalog max. This is intentionally opt-in for local experiments against backends that may support more than the published catalog says.",
+      "type": "boolean"
     },
     "model_instructions_file": {
       "allOf": [
