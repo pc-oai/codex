@@ -21,7 +21,9 @@ use crate::protocol::v2::TurnStatus;
 use crate::protocol::v2::UserInput;
 use crate::protocol::v2::WebSearchAction;
 use codex_protocol::items::parse_hook_prompt_message;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::MessagePhase;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentReasoningEvent;
 use codex_protocol::protocol::AgentReasoningRawContentEvent;
 use codex_protocol::protocol::AgentStatus;
@@ -53,7 +55,10 @@ use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::ViewImageToolCallEvent;
 use codex_protocol::protocol::WebSearchBeginEvent;
 use codex_protocol::protocol::WebSearchEndEvent;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use serde::Deserialize;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -88,6 +93,26 @@ pub struct ThreadHistoryBuilder {
     next_item_index: i64,
     current_rollout_index: usize,
     next_rollout_index: usize,
+    response_exec_calls: HashMap<String, ResponseExecCall>,
+}
+
+#[derive(Clone)]
+struct ResponseExecCall {
+    turn_id: String,
+    command: String,
+    cwd: AbsolutePathBuf,
+}
+
+#[derive(Deserialize)]
+struct PersistedExecCommandArgs {
+    cmd: String,
+    #[serde(default)]
+    workdir: Option<String>,
+}
+
+fn persisted_exec_cwd(workdir: Option<&str>) -> Option<AbsolutePathBuf> {
+    let workdir = workdir?;
+    AbsolutePathBuf::try_from(PathBuf::from(workdir)).ok()
 }
 
 impl Default for ThreadHistoryBuilder {
@@ -104,6 +129,7 @@ impl ThreadHistoryBuilder {
             next_item_index: 1,
             current_rollout_index: 0,
             next_rollout_index: 0,
+            response_exec_calls: HashMap::new(),
         }
     }
 
@@ -235,30 +261,103 @@ impl ThreadHistoryBuilder {
         }
     }
 
-    fn handle_response_item(&mut self, item: &codex_protocol::models::ResponseItem) {
-        let codex_protocol::models::ResponseItem::Message {
-            role, content, id, ..
-        } = item
-        else {
-            return;
-        };
+    fn handle_response_item(&mut self, item: &ResponseItem) {
+        match item {
+            ResponseItem::Message {
+                role, content, id, ..
+            } => {
+                if role != "user" {
+                    return;
+                }
 
-        if role != "user" {
+                let Some(hook_prompt) = parse_hook_prompt_message(id.as_ref(), content) else {
+                    return;
+                };
+
+                self.ensure_turn().items.push(ThreadItem::HookPrompt {
+                    id: hook_prompt.id,
+                    fragments: hook_prompt
+                        .fragments
+                        .into_iter()
+                        .map(crate::protocol::v2::HookPromptFragment::from)
+                        .collect(),
+                });
+            }
+            ResponseItem::FunctionCall {
+                name,
+                arguments,
+                call_id,
+                ..
+            } => self.handle_response_exec_call(name, arguments, call_id),
+            ResponseItem::FunctionCallOutput { call_id, output } => {
+                self.handle_response_exec_output(call_id, output)
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_response_exec_call(&mut self, name: &str, arguments: &str, call_id: &str) {
+        if name != "exec_command" {
             return;
         }
 
-        let Some(hook_prompt) = parse_hook_prompt_message(id.as_ref(), content) else {
+        let Ok(args) = serde_json::from_str::<PersistedExecCommandArgs>(arguments) else {
+            return;
+        };
+        let Some(cwd) = persisted_exec_cwd(args.workdir.as_deref()) else {
             return;
         };
 
-        self.ensure_turn().items.push(ThreadItem::HookPrompt {
-            id: hook_prompt.id,
-            fragments: hook_prompt
-                .fragments
-                .into_iter()
-                .map(crate::protocol::v2::HookPromptFragment::from)
-                .collect(),
-        });
+        let turn_id = self.ensure_turn().id.clone();
+        let call = ResponseExecCall {
+            turn_id,
+            command: args.cmd,
+            cwd,
+        };
+        self.response_exec_calls
+            .insert(call_id.to_string(), call.clone());
+        self.upsert_item_in_turn_id(
+            &call.turn_id,
+            ThreadItem::CommandExecution {
+                id: call_id.to_string(),
+                command: call.command,
+                cwd: call.cwd,
+                process_id: None,
+                source: crate::protocol::v2::CommandExecutionSource::Agent,
+                status: CommandExecutionStatus::InProgress,
+                command_actions: Vec::new(),
+                aggregated_output: None,
+                exit_code: None,
+                duration_ms: None,
+            },
+        );
+    }
+
+    fn handle_response_exec_output(&mut self, call_id: &str, output: &FunctionCallOutputPayload) {
+        let Some(call) = self.response_exec_calls.remove(call_id) else {
+            return;
+        };
+        let aggregated_output = output.body.to_text().filter(|text| !text.trim().is_empty());
+        let success = output.success.unwrap_or(true);
+        self.upsert_item_in_turn_id(
+            &call.turn_id,
+            ThreadItem::CommandExecution {
+                id: call_id.to_string(),
+                command: call.command,
+                cwd: call.cwd,
+                process_id: None,
+                source: crate::protocol::v2::CommandExecutionSource::Agent,
+                status: if success {
+                    CommandExecutionStatus::Completed
+                } else {
+                    CommandExecutionStatus::Failed
+                },
+                command_actions: Vec::new(),
+                aggregated_output,
+                exit_code: Some(if success { 0 } else { 1 }),
+                duration_ms: None,
+            },
+        );
     }
 
     fn handle_user_message(&mut self, payload: &UserMessageEvent) {
@@ -3126,5 +3225,57 @@ mod tests {
         let turns = build_turns_from_rollout_items(&items);
         assert_eq!(turns.len(), 1);
         assert!(turns[0].items.is_empty());
+    }
+
+    #[test]
+    fn rebuilds_exec_command_output_from_persisted_response_items() {
+        let items = vec![
+            RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-a".into(),
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            })),
+            RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+                id: Some("fc-1".into()),
+                name: "exec_command".into(),
+                namespace: None,
+                arguments: serde_json::json!({
+                    "cmd": "printf restored-output",
+                    "workdir": "/tmp/project",
+                })
+                .to_string(),
+                call_id: "call-1".into(),
+            }),
+            RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+                call_id: "call-1".into(),
+                output: FunctionCallOutputPayload::from_text("restored-output".into()),
+            }),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "turn-a".into(),
+                last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            })),
+        ];
+
+        let turns = build_turns_from_rollout_items(&items);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(
+            turns[0].items,
+            vec![ThreadItem::CommandExecution {
+                id: "call-1".into(),
+                command: "printf restored-output".into(),
+                cwd: AbsolutePathBuf::try_from("/tmp/project").expect("absolute test cwd"),
+                process_id: None,
+                source: crate::protocol::v2::CommandExecutionSource::Agent,
+                status: CommandExecutionStatus::Completed,
+                command_actions: Vec::new(),
+                aggregated_output: Some("restored-output".into()),
+                exit_code: Some(0),
+                duration_ms: None,
+            }]
+        );
     }
 }
