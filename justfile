@@ -12,6 +12,11 @@ alias c := codex
 codex *args:
     cargo run --bin codex -- "$@"
 
+# Build a runnable local Codex binary and advance the local footer version marker.
+[no-cd]
+local-build *args:
+    {{ justfile_directory() }}/scripts/local-build-codex "$@"
+
 # `codex exec`
 exec *args:
     cargo run --bin codex -- exec "$@"
