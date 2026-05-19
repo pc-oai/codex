@@ -10,6 +10,23 @@ use codex_app_server_protocol::PermissionProfileNetworkPermissions;
 use codex_app_server_protocol::SandboxPolicy;
 use pretty_assertions::assert_eq;
 
+fn normalized_durable_history_shape(rendered: &str) -> Vec<&'static str> {
+    let mut shape = Vec::new();
+    if rendered.contains("Ran") || rendered.contains("Explored") {
+        shape.push("tool-call");
+    }
+    if rendered.contains("preparing") || rendered.contains("replay-output") {
+        shape.push("tool-output");
+    }
+    if rendered.contains("Final response.") {
+        shape.push("assistant-final");
+    }
+    if rendered.contains("Worked for 2m 05s") {
+        shape.push("worked-time");
+    }
+    shape
+}
+
 #[tokio::test]
 async fn resumed_initial_messages_render_history() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -859,6 +876,121 @@ async fn replayed_in_progress_turn_marks_task_running() {
         .status_widget()
         .expect("status indicator should be visible");
     assert_eq!(status.header(), "Working");
+}
+
+#[tokio::test]
+async fn replayed_completed_exec_turn_rehydrates_tool_output() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.replay_thread_turns(
+        vec![AppServerTurn {
+            id: "turn-1".to_string(),
+            items: vec![AppServerThreadItem::CommandExecution {
+                id: "exec-1".to_string(),
+                command: "printf replay-output".to_string(),
+                cwd: test_path_buf("/tmp/project").abs(),
+                process_id: None,
+                source: ExecCommandSource::Agent,
+                status: AppServerCommandExecutionStatus::Completed,
+                command_actions: vec![AppServerCommandAction::Unknown {
+                    command: "printf replay-output".to_string(),
+                }],
+                aggregated_output: Some("replay-output".to_string()),
+                exit_code: Some(0),
+                duration_ms: Some(1),
+            }],
+            status: AppServerTurnStatus::Completed,
+            error: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: Some(125_000),
+        }],
+        ReplayKind::ResumeInitialMessages,
+    );
+
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("replay-output"), "rendered: {rendered}");
+    assert!(
+        rendered.contains("Worked for 2m 05s"),
+        "rendered: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn completed_work_turn_replay_preserves_durable_rendered_shape() {
+    let (mut live, mut live_rx, _live_op_rx) =
+        make_chatwidget_manual(/*model_override*/ None).await;
+    handle_turn_started(&mut live, "turn-1");
+    let exec = begin_exec_with_source(
+        &mut live,
+        "call-1",
+        "echo preparing",
+        ExecCommandSource::Agent,
+    );
+    end_exec(&mut live, exec, "preparing\n", "", /*exit_code*/ 0);
+    complete_assistant_message(
+        &mut live,
+        "msg-final",
+        "Final response.",
+        Some(MessagePhase::FinalAnswer),
+    );
+    handle_turn_completed(&mut live, "turn-1", Some(125_000));
+    let live_rendered = drain_insert_history(&mut live_rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let (mut replayed, mut replayed_rx, _replayed_op_rx) =
+        make_chatwidget_manual(/*model_override*/ None).await;
+    replayed.replay_thread_turns(
+        vec![AppServerTurn {
+            id: "turn-1".to_string(),
+            items: vec![
+                AppServerThreadItem::CommandExecution {
+                    id: "call-1".to_string(),
+                    command: "echo preparing".to_string(),
+                    cwd: test_path_buf("/tmp/project").abs(),
+                    process_id: None,
+                    source: ExecCommandSource::Agent,
+                    status: AppServerCommandExecutionStatus::Completed,
+                    command_actions: vec![AppServerCommandAction::Unknown {
+                        command: "echo preparing".to_string(),
+                    }],
+                    aggregated_output: Some("preparing\n".to_string()),
+                    exit_code: Some(0),
+                    duration_ms: Some(5),
+                },
+                AppServerThreadItem::AgentMessage {
+                    id: "msg-final".to_string(),
+                    text: "Final response.".to_string(),
+                    phase: Some(MessagePhase::FinalAnswer),
+                    memory_citation: None,
+                },
+            ],
+            status: AppServerTurnStatus::Completed,
+            error: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: Some(125_000),
+        }],
+        ReplayKind::ResumeInitialMessages,
+    );
+    let replayed_rendered = drain_insert_history(&mut replayed_rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert_eq!(
+        normalized_durable_history_shape(&replayed_rendered),
+        normalized_durable_history_shape(&live_rendered),
+        "live:\n{live_rendered}\nreplayed:\n{replayed_rendered}"
+    );
 }
 
 #[tokio::test]
