@@ -47,6 +47,7 @@ use crate::render::line_utils::prefix_lines;
 use crate::status::format_tokens_compact;
 use crate::ui_consts::FOOTER_INDENT_COLS;
 use crossterm::event::KeyCode;
+use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
@@ -128,7 +129,10 @@ impl FooterKeyHints {
             external_editor: Some(key_hint::ctrl(KeyCode::Char('g'))),
             edit_previous: Some(key_hint::plain(KeyCode::Esc)),
             show_transcript: Some(key_hint::ctrl(KeyCode::Char('t'))),
-            history_search: Some(key_hint::ctrl(KeyCode::Char('r'))),
+            history_search: Some(KeyBinding::new(
+                KeyCode::Char('r'),
+                KeyModifiers::ALT.union(KeyModifiers::SHIFT),
+            )),
             reasoning_down: Some(key_hint::alt(KeyCode::Char(','))),
             reasoning_up: Some(key_hint::alt(KeyCode::Char('.'))),
         }
@@ -167,7 +171,7 @@ impl CollaborationModeIndicator {
 /// (for example, showing `QuitShortcutReminder` only while its timer is active).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FooterMode {
-    /// Single-line incremental history search prompt shown while Ctrl+R search is active.
+    /// Single-line incremental history search prompt shown while history search is active.
     HistorySearch,
     /// Transient "press again to quit" reminder (Ctrl+C/Ctrl+D).
     QuitShortcutReminder,
@@ -1213,7 +1217,10 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
     ShortcutDescriptor {
         id: ShortcutId::HistorySearch,
         bindings: &[ShortcutBinding {
-            key: key_hint::ctrl(KeyCode::Char('r')),
+            key: KeyBinding::new(
+                KeyCode::Char('r'),
+                KeyModifiers::ALT.union(KeyModifiers::SHIFT),
+            ),
             condition: DisplayCondition::Always,
         }],
         prefix: "",

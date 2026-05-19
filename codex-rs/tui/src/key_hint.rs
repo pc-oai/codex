@@ -318,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn history_search_ctrl_bindings_match_c0_control_char_events() {
+    fn ctrl_bindings_match_c0_control_char_events() {
         assert!(
             ctrl(KeyCode::Char('r'))
                 .is_press(KeyEvent::new(KeyCode::Char('\u{0012}'), KeyModifiers::NONE))

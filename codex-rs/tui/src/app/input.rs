@@ -179,6 +179,32 @@ impl App {
         }
 
         if app_keymap_shortcuts_available
+            && self.keymap.app.reload_current_session.is_pressed(key_event)
+        {
+            if self.chat_widget.thread_id().is_some() {
+                self.app_event_tx.send(AppEvent::ReloadCurrentSession);
+            } else {
+                self.chat_widget.add_error_message(
+                    "Reload is unavailable before the session starts.".to_string(),
+                );
+                tui.frame_requester().schedule_frame();
+            }
+            return;
+        }
+
+        if app_keymap_shortcuts_available
+            && self
+                .keymap
+                .app
+                .toggle_condensed_transcript
+                .is_pressed(key_event)
+        {
+            self.app_event_tx
+                .send(AppEvent::ToggleCondensedTranscriptView);
+            return;
+        }
+
+        if app_keymap_shortcuts_available
             && self.keymap.app.open_external_editor.is_pressed(key_event)
         {
             // Only launch the external editor if there is no overlay and the bottom pane is not in use.
@@ -266,11 +292,15 @@ impl App {
     /// When a task is running, ChatWidget still owns this binding so it can pull a queued follow-up
     /// back into the composer. Once idle, the same gesture jumps straight to editing the last sent
     /// message instead of forcing the older Esc-Esc-Enter sequence. That edit intentionally
-    /// replaces any visible draft already in the composer.
+    /// replaces any visible draft already in the composer. Ctrl-E keeps its editor meaning unless
+    /// line-end movement would be a no-op for the current composer state.
     pub(super) fn should_handle_edit_last_message_shortcut(&self, key_event: KeyEvent) -> bool {
         key_event.kind == KeyEventKind::Press
             && self.app_keymap_shortcuts_available()
             && self.keymap.chat.edit_queued_message.is_pressed(key_event)
+            && self
+                .chat_widget
+                .edit_message_shortcut_may_claim_key_event(key_event)
             && self.chat_widget.is_normal_backtrack_mode()
     }
 
@@ -286,6 +316,9 @@ impl App {
         key_event.kind == KeyEventKind::Press
             && self.app_keymap_shortcuts_available()
             && self.keymap.chat.edit_queued_message.is_pressed(key_event)
+            && self
+                .chat_widget
+                .edit_message_shortcut_may_claim_key_event(key_event)
             && self.chat_widget.is_task_running()
             && !self.chat_widget.has_queued_follow_up_messages()
     }
@@ -294,6 +327,9 @@ impl App {
         key_event.kind == KeyEventKind::Press
             && self.app_keymap_shortcuts_available()
             && self.keymap.chat.edit_queued_message.is_pressed(key_event)
+            && self
+                .chat_widget
+                .edit_message_shortcut_may_claim_key_event(key_event)
             && self.backtrack_edit_preview_active()
             && self.chat_widget.is_normal_backtrack_mode()
     }
@@ -358,5 +394,54 @@ mod tests {
         app.chat_widget
             .set_composer_text("draft".to_string(), Vec::new(), Vec::new());
         assert!(app.should_handle_edit_last_message_shortcut(alt_up));
+    }
+
+    #[tokio::test]
+    async fn ctrl_e_edits_last_message_when_idle_cursor_is_at_input_end() {
+        let mut app = make_test_app().await;
+        let ctrl_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
+
+        app.chat_widget
+            .set_composer_text("draft".to_string(), Vec::new(), Vec::new());
+        app.chat_widget.set_composer_cursor("draft".len());
+
+        assert!(app.should_handle_edit_last_message_shortcut(ctrl_e));
+    }
+
+    #[tokio::test]
+    async fn ctrl_e_keeps_line_end_motion_when_idle_cursor_is_inside_draft() {
+        let mut app = make_test_app().await;
+        let ctrl_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
+
+        app.chat_widget
+            .set_composer_text("draft".to_string(), Vec::new(), Vec::new());
+        app.chat_widget.set_composer_cursor(/*pos*/ 1);
+
+        assert!(!app.should_handle_edit_last_message_shortcut(ctrl_e));
+    }
+
+    #[tokio::test]
+    async fn edit_last_message_shortcut_interrupts_running_turn_without_queued_follow_up() {
+        let mut app = make_test_app().await;
+        let ctrl_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
+
+        app.chat_widget.set_task_running_for_test(/*running*/ true);
+        app.chat_widget
+            .set_composer_text("draft".to_string(), Vec::new(), Vec::new());
+
+        assert!(app.should_interrupt_turn_for_edit_last_message_shortcut(ctrl_e));
+    }
+
+    #[tokio::test]
+    async fn ctrl_e_keeps_line_end_motion_during_running_turn_when_cursor_is_inside_draft() {
+        let mut app = make_test_app().await;
+        let ctrl_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
+
+        app.chat_widget.set_task_running_for_test(/*running*/ true);
+        app.chat_widget
+            .set_composer_text("draft".to_string(), Vec::new(), Vec::new());
+        app.chat_widget.set_composer_cursor(/*pos*/ 1);
+
+        assert!(!app.should_interrupt_turn_for_edit_last_message_shortcut(ctrl_e));
     }
 }

@@ -1019,6 +1019,48 @@ async fn alt_e_edits_most_recent_queued_message() {
 }
 
 #[tokio::test]
+async fn ctrl_e_edits_most_recent_queued_message_at_input_end() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.chat_keymap.edit_queued_message = vec![crate::key_hint::ctrl(KeyCode::Char('e'))];
+    chat.queued_message_edit_hint_binding = Some(crate::key_hint::ctrl(KeyCode::Char('e')));
+    chat.bottom_pane
+        .set_queued_message_edit_binding(chat.queued_message_edit_hint_binding);
+
+    chat.bottom_pane.set_task_running(/*running*/ true);
+    chat.set_composer_text("draft".to_string(), Vec::new(), Vec::new());
+    chat.set_composer_cursor("draft".len());
+    chat.queued_user_messages
+        .push_back(UserMessage::from("queued".to_string()).into());
+    chat.refresh_pending_input_preview();
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
+
+    assert_eq!(chat.bottom_pane.composer_text(), "queued".to_string());
+    assert!(chat.queued_user_messages.is_empty());
+}
+
+#[tokio::test]
+async fn ctrl_e_keeps_composer_draft_when_cursor_is_inside_input_with_queued_message() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.chat_keymap.edit_queued_message = vec![crate::key_hint::ctrl(KeyCode::Char('e'))];
+    chat.queued_message_edit_hint_binding = Some(crate::key_hint::ctrl(KeyCode::Char('e')));
+    chat.bottom_pane
+        .set_queued_message_edit_binding(chat.queued_message_edit_hint_binding);
+
+    chat.bottom_pane.set_task_running(/*running*/ true);
+    chat.set_composer_text("draft".to_string(), Vec::new(), Vec::new());
+    chat.set_composer_cursor(/*pos*/ 1);
+    chat.queued_user_messages
+        .push_back(UserMessage::from("queued".to_string()).into());
+    chat.refresh_pending_input_preview();
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
+
+    assert_eq!(chat.bottom_pane.composer_text(), "draft".to_string());
+    assert_eq!(chat.queued_user_messages.len(), 1);
+}
+
+#[tokio::test]
 async fn alt_down_steers_most_recent_queued_message() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.chat_keymap.steer_queued_message = vec![crate::key_hint::alt(KeyCode::Down)];

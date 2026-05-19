@@ -2462,7 +2462,9 @@
               "open_external_editor": null,
               "open_transcript": null,
               "queue": null,
+              "reload_current_session": null,
               "submit": null,
+              "toggle_condensed_transcript": null,
               "toggle_fast_mode": null,
               "toggle_shortcuts": null,
               "toggle_vim_mode": null
@@ -2981,6 +2983,14 @@
           ],
           "description": "Queue the current composer draft while a task is running."
         },
+        "reload_current_session": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Reload the current session and resume it in a fresh process."
+        },
         "submit": {
           "allOf": [
             {
@@ -2988,6 +2998,14 @@
             }
           ],
           "description": "Submit the current composer draft."
+        },
+        "toggle_condensed_transcript": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Toggle message-only main transcript view in native terminal scrollback."
         },
         "toggle_fast_mode": {
           "allOf": [
@@ -3018,7 +3036,7 @@
     },
     "TuiKeymap": {
       "additionalProperties": false,
-      "description": "Raw keymap configuration from `[tui.keymap]`.\n\nEach context contains action-level overrides. Missing actions inherit from built-in defaults, and selected chat/composer actions can fall back through `global` during runtime resolution.\n\nThis type is intentionally a persistence shape, not the structure used by input handlers. Runtime consumers should resolve it into `RuntimeKeymap` first so precedence, empty-list unbinding, and duplicate-key validation are applied consistently.",
+      "description": "Raw keymap configuration from `[tui.keymap]`.\n\nEach context contains action-level overrides. Missing actions inherit from built-in defaults, and selected chat/composer actions can fall back through `global` during runtime resolution.\n\nRuntime deserialization intentionally ignores unknown keys so older binaries can keep loading configs written by newer versions. The generated schema remains strict so editors and validation tools can still flag likely typos.\n\nThis type is intentionally a persistence shape, not the structure used by input handlers. Runtime consumers should resolve it into `RuntimeKeymap` first so precedence, empty-list unbinding, and duplicate-key validation are applied consistently.",
       "properties": {
         "approval": {
           "allOf": [
@@ -3105,7 +3123,9 @@
             "open_external_editor": null,
             "open_transcript": null,
             "queue": null,
+            "reload_current_session": null,
             "submit": null,
+            "toggle_condensed_transcript": null,
             "toggle_fast_mode": null,
             "toggle_shortcuts": null,
             "toggle_vim_mode": null

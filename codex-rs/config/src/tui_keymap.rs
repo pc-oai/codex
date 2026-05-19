@@ -85,7 +85,6 @@ impl KeybindingsSpec {
 
 /// Global keybindings. These are used when a context does not define an override.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
-#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiGlobalKeymap {
     /// Open the transcript overlay.
@@ -96,6 +95,10 @@ pub struct TuiGlobalKeymap {
     pub copy: Option<KeybindingsSpec>,
     /// Clear the terminal UI.
     pub clear_terminal: Option<KeybindingsSpec>,
+    /// Reload the current session and resume it in a fresh process.
+    pub reload_current_session: Option<KeybindingsSpec>,
+    /// Toggle message-only main transcript view in native terminal scrollback.
+    pub toggle_condensed_transcript: Option<KeybindingsSpec>,
     /// Submit the current composer draft.
     pub submit: Option<KeybindingsSpec>,
     /// Queue the current composer draft while a task is running.
@@ -110,7 +113,6 @@ pub struct TuiGlobalKeymap {
 
 /// Chat context keybindings.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
-#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiChatKeymap {
     /// Decrease the active reasoning effort.
@@ -131,7 +133,6 @@ pub struct TuiChatKeymap {
 
 /// Composer context keybindings. These override corresponding `global` actions.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
-#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiComposerKeymap {
     /// Submit the current composer draft.
@@ -148,7 +149,6 @@ pub struct TuiComposerKeymap {
 
 /// Editor context keybindings for text editing inside text areas.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
-#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiEditorKeymap {
     /// Insert a newline in the editor.
@@ -278,7 +278,6 @@ pub struct TuiVimOperatorKeymap {
 
 /// Pager context keybindings for transcript and static overlays.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
-#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiPagerKeymap {
     /// Scroll up by one row.
@@ -305,7 +304,6 @@ pub struct TuiPagerKeymap {
 
 /// List selection context keybindings for popup-style selectable lists.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
-#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiListKeymap {
     /// Move list selection up.
@@ -320,7 +318,6 @@ pub struct TuiListKeymap {
 
 /// Approval overlay keybindings.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
-#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiApprovalKeymap {
     /// Open the full-screen approval details view.
@@ -347,12 +344,15 @@ pub struct TuiApprovalKeymap {
 /// built-in defaults, and selected chat/composer actions can fall back
 /// through `global` during runtime resolution.
 ///
+/// Runtime deserialization intentionally ignores unknown keys so older binaries
+/// can keep loading configs written by newer versions. The generated schema
+/// remains strict so editors and validation tools can still flag likely typos.
+///
 /// This type is intentionally a persistence shape, not the structure used by
 /// input handlers. Runtime consumers should resolve it into
 /// `RuntimeKeymap` first so precedence, empty-list unbinding, and duplicate-key
 /// validation are applied consistently.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
-#[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiKeymap {
     #[serde(default)]
@@ -524,36 +524,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn misplaced_action_at_keymap_root_is_rejected() {
-        // Actions placed directly under [tui.keymap] instead of a context
-        // sub-table (e.g. [tui.keymap.global]) must produce a parse error,
-        // not be silently ignored.
+    fn unknown_action_at_keymap_root_is_ignored_for_forward_compatibility() {
         let toml_input = r#"
             open_transcript = "ctrl-s"
         "#;
-        let result = toml::from_str::<TuiKeymap>(toml_input);
-        assert!(
-            result.is_err(),
-            "expected error for action at keymap root, got: {result:?}"
-        );
+        let keymap = toml::from_str::<TuiKeymap>(toml_input).expect("forward-compatible parse");
+        assert_eq!(keymap, TuiKeymap::default());
     }
 
     #[test]
-    fn misspelled_action_under_context_is_rejected() {
+    fn unknown_action_under_context_is_ignored_for_forward_compatibility() {
         let toml_input = r#"
             [global]
-            open_transcrip = "ctrl-x"
+            future_action = "ctrl-x"
         "#;
-        let err = toml::from_str::<TuiKeymap>(toml_input)
-            .expect_err("expected unknown action under context");
-        assert!(
-            err.to_string().contains("open_transcrip"),
-            "expected error to mention misspelled field, got: {err}"
-        );
+        let keymap = toml::from_str::<TuiKeymap>(toml_input).expect("forward-compatible parse");
+        assert_eq!(keymap, TuiKeymap::default());
     }
 
     #[test]
-    fn removed_backtrack_actions_are_rejected() {
+    fn removed_backtrack_actions_are_ignored_for_forward_compatibility() {
         for (context, action) in [
             ("global", "edit_previous_message"),
             ("global", "confirm_edit_previous_message"),
@@ -569,12 +559,9 @@ mod tests {
                 {action} = "ctrl-x"
                 "#
             );
-            let err = toml::from_str::<TuiKeymap>(&toml_input)
-                .expect_err("expected removed backtrack action to be rejected");
-            assert!(
-                err.to_string().contains(action),
-                "expected error to mention removed field {action}, got: {err}"
-            );
+            let keymap =
+                toml::from_str::<TuiKeymap>(&toml_input).expect("forward-compatible parse");
+            assert_eq!(keymap, TuiKeymap::default());
         }
     }
 

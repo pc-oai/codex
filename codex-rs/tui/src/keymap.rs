@@ -61,6 +61,10 @@ pub(crate) struct AppKeymap {
     pub(crate) copy: Vec<KeyBinding>,
     /// Clear the terminal UI.
     pub(crate) clear_terminal: Vec<KeyBinding>,
+    /// Reload the current session and resume it in a fresh process.
+    pub(crate) reload_current_session: Vec<KeyBinding>,
+    /// Toggle message-only main transcript view in native terminal scrollback.
+    pub(crate) toggle_condensed_transcript: Vec<KeyBinding>,
     /// Toggle Vim mode for the composer input.
     pub(crate) toggle_vim_mode: Vec<KeyBinding>,
     /// Toggle Fast mode.
@@ -375,6 +379,16 @@ impl RuntimeKeymap {
                 &defaults.app.clear_terminal,
                 "tui.keymap.global.clear_terminal",
             )?,
+            reload_current_session: resolve_bindings(
+                keymap.global.reload_current_session.as_ref(),
+                &defaults.app.reload_current_session,
+                "tui.keymap.global.reload_current_session",
+            )?,
+            toggle_condensed_transcript: resolve_bindings(
+                keymap.global.toggle_condensed_transcript.as_ref(),
+                &defaults.app.toggle_condensed_transcript,
+                "tui.keymap.global.toggle_condensed_transcript",
+            )?,
             toggle_vim_mode: resolve_bindings(
                 keymap.global.toggle_vim_mode.as_ref(),
                 &defaults.app.toggle_vim_mode,
@@ -572,6 +586,8 @@ impl RuntimeKeymap {
                 open_external_editor: default_bindings![ctrl(KeyCode::Char('g'))],
                 copy: default_bindings![ctrl(KeyCode::Char('o'))],
                 clear_terminal: default_bindings![ctrl(KeyCode::Char('l'))],
+                reload_current_session: default_bindings![ctrl(KeyCode::Char('r'))],
+                toggle_condensed_transcript: default_bindings![alt(KeyCode::Char('c'))],
                 toggle_vim_mode: default_bindings![],
                 toggle_fast_mode: default_bindings![],
             },
@@ -586,6 +602,7 @@ impl RuntimeKeymap {
                 edit_queued_message: default_bindings![
                     alt(KeyCode::Up),
                     alt(KeyCode::Char('e')),
+                    ctrl(KeyCode::Char('e')),
                     shift(KeyCode::Left)
                 ],
                 discard_queued_message: default_bindings![ctrl(KeyCode::Char('x'))],
@@ -606,7 +623,7 @@ impl RuntimeKeymap {
                     KeyCode::Char('r'),
                     KeyModifiers::ALT | KeyModifiers::SHIFT,
                 ))],
-                history_search_next: default_bindings![ctrl(KeyCode::Char('s'))],
+                history_search_next: default_bindings![],
             },
             editor: EditorKeymap {
                 insert_newline: default_bindings![
@@ -798,6 +815,14 @@ impl RuntimeKeymap {
                 ),
                 ("copy", self.app.copy.as_slice()),
                 ("clear_terminal", self.app.clear_terminal.as_slice()),
+                (
+                    "reload_current_session",
+                    self.app.reload_current_session.as_slice(),
+                ),
+                (
+                    "toggle_condensed_transcript",
+                    self.app.toggle_condensed_transcript.as_slice(),
+                ),
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
                 ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
                 (
@@ -855,6 +880,14 @@ impl RuntimeKeymap {
                 ),
                 ("copy", self.app.copy.as_slice()),
                 ("clear_terminal", self.app.clear_terminal.as_slice()),
+                (
+                    "reload_current_session",
+                    self.app.reload_current_session.as_slice(),
+                ),
+                (
+                    "toggle_condensed_transcript",
+                    self.app.toggle_condensed_transcript.as_slice(),
+                ),
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
                 ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
                 (
@@ -913,6 +946,14 @@ impl RuntimeKeymap {
                 ),
                 ("copy", self.app.copy.as_slice()),
                 ("clear_terminal", self.app.clear_terminal.as_slice()),
+                (
+                    "reload_current_session",
+                    self.app.reload_current_session.as_slice(),
+                ),
+                (
+                    "toggle_condensed_transcript",
+                    self.app.toggle_condensed_transcript.as_slice(),
+                ),
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
                 ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
             ],
@@ -953,6 +994,14 @@ impl RuntimeKeymap {
                 ),
                 ("copy", self.app.copy.as_slice()),
                 ("clear_terminal", self.app.clear_terminal.as_slice()),
+                (
+                    "reload_current_session",
+                    self.app.reload_current_session.as_slice(),
+                ),
+                (
+                    "toggle_condensed_transcript",
+                    self.app.toggle_condensed_transcript.as_slice(),
+                ),
                 (
                     "chat.decrease_reasoning_effort",
                     self.chat.decrease_reasoning_effort.as_slice(),
@@ -1701,6 +1750,14 @@ mod tests {
             runtime.app.clear_terminal,
             vec![key_hint::ctrl(KeyCode::Char('l'))]
         );
+        assert_eq!(
+            runtime.app.reload_current_session,
+            vec![key_hint::ctrl(KeyCode::Char('r'))]
+        );
+        assert_eq!(
+            runtime.app.toggle_condensed_transcript,
+            vec![key_hint::alt(KeyCode::Char('c'))]
+        );
         assert_eq!(runtime.app.toggle_fast_mode, Vec::new());
         assert_eq!(
             runtime.chat.decrease_reasoning_effort,
@@ -1726,6 +1783,7 @@ mod tests {
             vec![
                 key_hint::alt(KeyCode::Up),
                 key_hint::alt(KeyCode::Char('e')),
+                key_hint::ctrl(KeyCode::Char('e')),
                 key_hint::shift(KeyCode::Left)
             ]
         );
@@ -1748,10 +1806,7 @@ mod tests {
                 KeyModifiers::ALT | KeyModifiers::SHIFT,
             )]
         );
-        assert_eq!(
-            runtime.composer.history_search_next,
-            vec![key_hint::ctrl(KeyCode::Char('s'))]
-        );
+        assert_eq!(runtime.composer.history_search_next, Vec::new());
         assert_eq!(runtime.editor.kill_whole_line, Vec::new());
     }
 
@@ -1931,6 +1986,22 @@ mod tests {
         keymap.global.toggle_fast_mode = Some(one("ctrl-l"));
 
         expect_conflict(&keymap, "clear_terminal", "toggle_fast_mode");
+    }
+
+    #[test]
+    fn reload_current_session_can_be_reassigned() {
+        let mut keymap = TuiKeymap::default();
+        keymap.global.reload_current_session = Some(one("ctrl-shift-u"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("runtime keymap");
+
+        assert_eq!(
+            runtime.app.reload_current_session,
+            vec![KeyBinding::new(
+                KeyCode::Char('u'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            )]
+        );
     }
 
     #[test]

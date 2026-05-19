@@ -5387,6 +5387,7 @@ impl ChatWidget {
 
         if key_event.kind == KeyEventKind::Press
             && self.chat_keymap.edit_queued_message.is_pressed(key_event)
+            && self.edit_message_shortcut_may_claim_key_event(key_event)
             && self.has_queued_follow_up_messages()
             && self.bottom_pane.no_modal_or_popup_active()
         {
@@ -10719,6 +10720,11 @@ impl ChatWidget {
         self.bottom_pane.is_task_running()
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_task_running_for_test(&mut self, running: bool) {
+        self.bottom_pane.set_task_running(running);
+    }
+
     pub(crate) fn toggle_vim_mode_and_notify(&mut self) {
         let enabled = self.bottom_pane.toggle_vim_enabled();
         let message = if enabled {
@@ -11317,6 +11323,31 @@ impl ChatWidget {
 
     pub(crate) fn composer_cursor(&self) -> usize {
         self.bottom_pane.composer_cursor()
+    }
+
+    /// Preserve Ctrl-E's Emacs-style cursor movement until it would do nothing useful.
+    ///
+    /// Other edit-message bindings are always eligible. Ctrl-E may claim the key only when the
+    /// composer is empty or its cursor is already at the absolute end of the current draft.
+    pub(crate) fn edit_message_shortcut_may_claim_key_event(&self, key_event: KeyEvent) -> bool {
+        if !matches!(
+            key_event,
+            KeyEvent {
+                code: KeyCode::Char('e'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            }
+        ) {
+            return true;
+        }
+
+        self.composer_is_empty() || self.composer_cursor() == self.composer_text().len()
+    }
+
+    /// Preserve Ctrl-A's line-start cursor movement until it would be a no-op.
+    pub(crate) fn agent_picker_shortcut_may_claim_key_event(&self, key_event: KeyEvent) -> bool {
+        multi_agents::open_agent_picker_shortcut_matches(key_event)
+            && (self.composer_is_empty() || self.composer_cursor() == 0)
     }
 
     pub(crate) fn is_task_running(&self) -> bool {
