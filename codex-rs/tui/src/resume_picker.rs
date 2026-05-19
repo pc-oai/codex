@@ -20,6 +20,7 @@ use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
+use codex_app_server_protocol::ThreadStatus;
 use codex_protocol::ThreadId;
 use codex_utils_path as path_utils;
 use color_eyre::eyre::Result;
@@ -42,6 +43,7 @@ use unicode_width::UnicodeWidthStr;
 
 const PAGE_SIZE: usize = 25;
 const LOAD_NEAR_THRESHOLD: usize = 5;
+const SESSION_ID_SUFFIX_LEN: usize = 8;
 
 #[derive(Debug, Clone)]
 pub struct SessionTarget {
@@ -70,6 +72,12 @@ pub enum SessionSelection {
 pub enum SessionPickerAction {
     Resume,
     Fork,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum SessionPickerRuntime {
+    Local,
+    Remote,
 }
 
 impl SessionPickerAction {
@@ -150,7 +158,7 @@ struct WarmAllDirectoriesCache {
 /// and pagination.
 ///
 /// The picker displays sessions in a table with timestamp columns (created/updated),
-/// git branch, working directory, and conversation preview. Users can toggle
+/// a session-id suffix, git branch, working directory, and conversation preview. Users can toggle
 /// between sorting by creation time and last-updated time using the Tab key.
 ///
 /// Sessions are loaded on-demand via cursor-based pagination. The backend
@@ -216,6 +224,43 @@ pub async fn run_fork_picker_with_app_server(
     .await
 }
 
+/// Runs a fixed picker over sessions that already matched a direct CLI lookup.
+///
+/// This is used when a short session-id fragment resolves to more than one
+/// candidate. The table stays sorted in the order supplied by the caller and
+/// shows all matching directories so the narrowed result set remains legible.
+pub async fn run_session_match_picker(
+    tui: &mut Tui,
+    action: SessionPickerAction,
+    id_fragment: &str,
+    threads: Vec<Thread>,
+    runtime: SessionPickerRuntime,
+) -> Result<SessionSelection> {
+    let rows = rows_from_app_server_threads(threads, runtime).await;
+    let num_scanned_files = rows.len();
+    let (_bg_tx, bg_rx) = mpsc::unbounded_channel();
+    let alt = AltScreenGuard::enter(tui);
+    let mut state = PickerState::new(
+        alt.tui.frame_requester(),
+        Arc::new(|_: PageLoadRequest| {}),
+        ProviderFilter::Any,
+        /*show_all*/ true,
+        /*scope_cwd_filter*/ None,
+        action,
+    );
+    state.relative_time_reference = Some(Utc::now());
+    state.query = id_fragment.to_string();
+    state.ingest_page(PickerPage {
+        rows,
+        next_cursor: None,
+        num_scanned_files,
+        reached_scan_cap: true,
+    });
+    state.request_frame();
+
+    run_session_picker_loop(alt, state, bg_rx).await
+}
+
 async fn run_session_picker_with_loader(
     tui: &mut Tui,
     config: &Config,
@@ -246,6 +291,14 @@ async fn run_session_picker_with_loader(
     state.start_initial_load();
     state.request_frame();
 
+    run_session_picker_loop(alt, state, bg_rx).await
+}
+
+async fn run_session_picker_loop(
+    alt: AltScreenGuard<'_>,
+    mut state: PickerState,
+    bg_rx: mpsc::UnboundedReceiver<BackgroundEvent>,
+) -> Result<SessionSelection> {
     let mut tui_events = alt.tui.event_stream().fuse();
     let mut background_events = UnboundedReceiverStream::new(bg_rx).fuse();
 
@@ -433,6 +486,11 @@ async fn load_app_server_page(
     sort_key: ThreadSortKey,
     include_non_interactive: bool,
 ) -> std::io::Result<PickerPage> {
+    let runtime = if app_server.is_remote() {
+        SessionPickerRuntime::Remote
+    } else {
+        SessionPickerRuntime::Local
+    };
     let response = app_server
         .thread_list(thread_list_params(
             cursor,
@@ -446,15 +504,40 @@ async fn load_app_server_page(
     let num_scanned_files = response.data.len();
 
     Ok(PickerPage {
-        rows: response
-            .data
-            .into_iter()
-            .filter_map(row_from_app_server_thread)
-            .collect(),
+        rows: rows_from_app_server_threads(response.data, runtime).await,
         next_cursor: response.next_cursor.map(PageCursor::AppServer),
         num_scanned_files,
         reached_scan_cap: false,
     })
+}
+
+async fn rows_from_app_server_threads(
+    threads: Vec<Thread>,
+    runtime: SessionPickerRuntime,
+) -> Vec<Row> {
+    let mut rows = Vec::with_capacity(threads.len());
+    for thread in threads {
+        let open_state = match runtime {
+            SessionPickerRuntime::Local => {
+                if crate::talon::session_command_socket_is_live(thread.id.as_str()).await {
+                    SessionOpenState::Open
+                } else {
+                    SessionOpenState::Closed
+                }
+            }
+            SessionPickerRuntime::Remote => {
+                if matches!(&thread.status, ThreadStatus::NotLoaded) {
+                    SessionOpenState::Closed
+                } else {
+                    SessionOpenState::Open
+                }
+            }
+        };
+        if let Some(row) = row_from_app_server_thread(thread, open_state) {
+            rows.push(row);
+        }
+    }
+    rows
 }
 
 impl SearchState {
@@ -481,6 +564,22 @@ struct Row {
     updated_at: Option<DateTime<Utc>>,
     cwd: Option<PathBuf>,
     git_branch: Option<String>,
+    open_state: SessionOpenState,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionOpenState {
+    Open,
+    Closed,
+}
+
+impl SessionOpenState {
+    fn label(self) -> &'static str {
+        match self {
+            SessionOpenState::Open => "yes",
+            SessionOpenState::Closed => "no",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -505,6 +604,24 @@ impl Row {
         self.thread_name.is_some()
     }
 
+    fn session_id_suffix(&self) -> String {
+        self.thread_id
+            .as_ref()
+            .map(|thread_id| {
+                let suffix = thread_id
+                    .to_string()
+                    .chars()
+                    .rev()
+                    .take(SESSION_ID_SUFFIX_LEN)
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect::<String>();
+                format!("…{suffix}")
+            })
+            .unwrap_or_else(|| "-".to_string())
+    }
+
     fn matches_query(&self, query: &str) -> bool {
         if self.preview.to_lowercase().contains(query) {
             return true;
@@ -513,6 +630,17 @@ impl Row {
             && thread_name.to_lowercase().contains(query)
         {
             return true;
+        }
+        if let Some(thread_id) = self.thread_id.as_ref() {
+            let thread_id = thread_id.to_string().to_lowercase();
+            if thread_id.contains(query) {
+                return true;
+            }
+            let normalized_thread_id = thread_id.replace('-', "");
+            let normalized_query = query.replace('-', "");
+            if !normalized_query.is_empty() && normalized_thread_id.contains(&normalized_query) {
+                return true;
+            }
         }
         false
     }
@@ -1073,7 +1201,7 @@ impl PickerState {
     }
 }
 
-fn row_from_app_server_thread(thread: Thread) -> Option<Row> {
+fn row_from_app_server_thread(thread: Thread, open_state: SessionOpenState) -> Option<Row> {
     let thread_id = match ThreadId::from_string(&thread.id) {
         Ok(thread_id) => thread_id,
         Err(err) => {
@@ -1098,6 +1226,7 @@ fn row_from_app_server_thread(thread: Thread) -> Option<Row> {
             .map(|dt| dt.with_timezone(&Utc)),
         cwd: Some(thread.cwd.to_path_buf()),
         git_branch: thread.git_info.and_then(|git_info| git_info.branch),
+        open_state,
     })
 }
 
@@ -1263,12 +1392,25 @@ fn render_list(
     let max_created_width = metrics.max_created_width;
     let max_updated_width = metrics.max_updated_width;
     let max_message_count_width = metrics.max_message_count_width;
+    let max_open_state_width = metrics.max_open_state_width;
+    let max_session_id_suffix_width = metrics.max_session_id_suffix_width;
     let max_branch_width = metrics.max_branch_width;
     let max_cwd_width = metrics.max_cwd_width;
 
     for (
         idx,
-        (row, (created_label, updated_label, message_count_label, branch_label, cwd_label)),
+        (
+            row,
+            (
+                created_label,
+                updated_label,
+                message_count_label,
+                open_state_label,
+                session_id_suffix_label,
+                branch_label,
+                cwd_label,
+            ),
+        ),
     ) in rows[start..end]
         .iter()
         .zip(labels[start..end].iter())
@@ -1330,6 +1472,14 @@ fn render_list(
                 span.dim()
             })
         };
+        let open_state_span = match row.open_state {
+            SessionOpenState::Open => {
+                Span::from(format!("{open_state_label:<max_open_state_width$}")).green()
+            }
+            SessionOpenState::Closed => {
+                Span::from(format!("{open_state_label:<max_open_state_width$}")).dim()
+            }
+        };
 
         let mut preview_width = area.width as usize;
         preview_width = preview_width.saturating_sub(marker_width);
@@ -1340,6 +1490,8 @@ fn render_list(
             preview_width = preview_width.saturating_sub(max_updated_width + 2);
         }
         preview_width = preview_width.saturating_sub(max_message_count_width + 2);
+        preview_width = preview_width.saturating_sub(max_open_state_width + 2);
+        preview_width = preview_width.saturating_sub(max_session_id_suffix_width + 2);
         if visibility.show_branch {
             preview_width = preview_width.saturating_sub(max_branch_width + 2);
         }
@@ -1370,6 +1522,12 @@ fn render_list(
         }
         spans.push(Span::from(format!(
             "{message_count_label:>max_message_count_width$}"
+        )));
+        spans.push("  ".into());
+        spans.push(open_state_span);
+        spans.push("  ".into());
+        spans.push(Span::from(format!(
+            "{session_id_suffix_label:<max_session_id_suffix_width$}"
         )));
         spans.push("  ".into());
         if let Some(branch) = branch_span {
@@ -1522,6 +1680,20 @@ fn render_column_headers(
     );
     spans.push(Span::from(label).bold());
     spans.push("  ".into());
+    let label = format!(
+        "{text:<width$}",
+        text = "Open",
+        width = metrics.max_open_state_width
+    );
+    spans.push(Span::from(label).bold());
+    spans.push("  ".into());
+    let label = format!(
+        "{text:<width$}",
+        text = "ID",
+        width = metrics.max_session_id_suffix_width
+    );
+    spans.push(Span::from(label).bold());
+    spans.push("  ".into());
     if visibility.show_branch {
         let label = format!(
             "{text:<width$}",
@@ -1552,10 +1724,13 @@ struct ColumnMetrics {
     max_created_width: usize,
     max_updated_width: usize,
     max_message_count_width: usize,
+    max_open_state_width: usize,
+    max_session_id_suffix_width: usize,
     max_branch_width: usize,
     max_cwd_width: usize,
-    /// (created_label, updated_label, message_count_label, branch_label, cwd_label) per row.
-    labels: Vec<(String, String, String, String, String)>,
+    /// (created_label, updated_label, message_count_label, open_state_label,
+    /// session_id_suffix_label, branch_label, cwd_label) per row.
+    labels: Vec<(String, String, String, String, String, String, String)>,
 }
 
 /// Determines which columns to render given available terminal width.
@@ -1596,10 +1771,13 @@ fn calculate_column_metrics(
     }
 
     let cwd_labels = cwd_labels_for_rows(rows, include_cwd);
-    let mut labels: Vec<(String, String, String, String, String)> = Vec::with_capacity(rows.len());
+    let mut labels: Vec<(String, String, String, String, String, String, String)> =
+        Vec::with_capacity(rows.len());
     let mut max_created_width = UnicodeWidthStr::width(CREATED_COLUMN_LABEL);
     let mut max_updated_width = UnicodeWidthStr::width(UPDATED_COLUMN_LABEL);
     let mut max_message_count_width = UnicodeWidthStr::width("Msgs");
+    let mut max_open_state_width = UnicodeWidthStr::width("Open");
+    let mut max_session_id_suffix_width = UnicodeWidthStr::width("ID");
     let mut max_branch_width = UnicodeWidthStr::width("Branch");
     let mut max_cwd_width = if include_cwd {
         UnicodeWidthStr::width("CWD")
@@ -1611,6 +1789,8 @@ fn calculate_column_metrics(
         let created = format_created_label_at(row, reference_now);
         let updated = format_updated_label_at(row, reference_now);
         let message_count = row.user_message_count.to_string();
+        let open_state = row.open_state.label().to_string();
+        let session_id_suffix = row.session_id_suffix();
         let branch_raw = row.git_branch.clone().unwrap_or_default();
         let branch = right_elide(&branch_raw, /*max*/ 24);
         let cwd = if include_cwd {
@@ -1622,15 +1802,29 @@ fn calculate_column_metrics(
         max_updated_width = max_updated_width.max(UnicodeWidthStr::width(updated.as_str()));
         max_message_count_width =
             max_message_count_width.max(UnicodeWidthStr::width(message_count.as_str()));
+        max_open_state_width =
+            max_open_state_width.max(UnicodeWidthStr::width(open_state.as_str()));
+        max_session_id_suffix_width =
+            max_session_id_suffix_width.max(UnicodeWidthStr::width(session_id_suffix.as_str()));
         max_branch_width = max_branch_width.max(UnicodeWidthStr::width(branch.as_str()));
         max_cwd_width = max_cwd_width.max(UnicodeWidthStr::width(cwd.as_str()));
-        labels.push((created, updated, message_count, branch, cwd));
+        labels.push((
+            created,
+            updated,
+            message_count,
+            open_state,
+            session_id_suffix,
+            branch,
+            cwd,
+        ));
     }
 
     ColumnMetrics {
         max_created_width,
         max_updated_width,
         max_message_count_width,
+        max_open_state_width,
+        max_session_id_suffix_width,
         max_branch_width,
         max_cwd_width,
         labels,
@@ -1717,6 +1911,8 @@ fn column_visibility(
         preview_width = preview_width.saturating_sub(metrics.max_updated_width + 2);
     }
     preview_width = preview_width.saturating_sub(metrics.max_message_count_width + 2);
+    preview_width = preview_width.saturating_sub(metrics.max_open_state_width + 2);
+    preview_width = preview_width.saturating_sub(metrics.max_session_id_suffix_width + 2);
     if show_branch {
         preview_width = preview_width.saturating_sub(metrics.max_branch_width + 2);
     }
@@ -1789,6 +1985,30 @@ mod tests {
             updated_at: Some(timestamp),
             cwd: None,
             git_branch: None,
+            open_state: SessionOpenState::Closed,
+        }
+    }
+
+    fn app_server_thread(thread_id: ThreadId, status: ThreadStatus) -> Thread {
+        Thread {
+            id: thread_id.to_string(),
+            forked_from_id: None,
+            preview: String::from("remote thread"),
+            ephemeral: false,
+            model_provider: String::from("openai"),
+            created_at: 1,
+            updated_at: 2,
+            status,
+            path: None,
+            cwd: test_path_buf("/tmp").abs(),
+            cli_version: String::from("0.0.0"),
+            source: codex_app_server_protocol::SessionSource::Cli,
+            agent_nickname: None,
+            agent_role: None,
+            git_info: None,
+            name: Some(String::from("Named thread")),
+            user_message_count: 0,
+            turns: Vec::new(),
         }
     }
 
@@ -1826,6 +2046,7 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            open_state: SessionOpenState::Closed,
         };
 
         assert_eq!(row.display_preview(), "My session");
@@ -1843,6 +2064,7 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            open_state: SessionOpenState::Closed,
         };
 
         assert_eq!(row.display_preview(), "🧪 🧭 🔎 My session");
@@ -1860,9 +2082,54 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            open_state: SessionOpenState::Closed,
         };
 
         assert!(row.has_custom_title());
+    }
+
+    #[test]
+    fn row_session_id_suffix_uses_last_eight_characters() {
+        let row = Row {
+            path: Some(PathBuf::from("/tmp/a.jsonl")),
+            preview: String::from("first message"),
+            thread_id: Some(
+                ThreadId::from_string("019dfe7f-c670-71b3-a1c8-ab8fac1bbd40")
+                    .expect("valid thread id"),
+            ),
+            thread_name: None,
+            user_message_count: 0,
+            created_at: None,
+            updated_at: None,
+            cwd: None,
+            git_branch: None,
+            open_state: SessionOpenState::Closed,
+        };
+
+        assert_eq!(row.session_id_suffix(), "…ac1bbd40");
+    }
+
+    #[test]
+    fn row_query_matches_session_id_fragments() {
+        let row = Row {
+            path: Some(PathBuf::from("/tmp/a.jsonl")),
+            preview: String::from("first message"),
+            thread_id: Some(
+                ThreadId::from_string("019dfe7f-c670-71b3-a1c8-ab8fac1bbd40")
+                    .expect("valid thread id"),
+            ),
+            thread_name: None,
+            user_message_count: 0,
+            created_at: None,
+            updated_at: None,
+            cwd: None,
+            git_branch: None,
+            open_state: SessionOpenState::Closed,
+        };
+
+        assert!(row.matches_query("ac1"));
+        assert!(row.matches_query("a1c8ab8f"));
+        assert!(!row.matches_query("deadbeef"));
     }
 
     #[test]
@@ -1945,6 +2212,7 @@ mod tests {
             updated_at: None,
             cwd: Some(PathBuf::from("/srv/remote-project")),
             git_branch: None,
+            open_state: SessionOpenState::Closed,
         };
 
         assert!(state.row_matches_filter(&row));
@@ -1963,6 +2231,7 @@ mod tests {
                 updated_at: None,
                 cwd: Some(PathBuf::from("/Users/pc/code/codex")),
                 git_branch: None,
+                open_state: SessionOpenState::Closed,
             },
             Row {
                 path: None,
@@ -1974,6 +2243,7 @@ mod tests {
                 updated_at: None,
                 cwd: Some(PathBuf::from("/tmp/other-project")),
                 git_branch: None,
+                open_state: SessionOpenState::Closed,
             },
         ];
 
@@ -1996,6 +2266,7 @@ mod tests {
                 updated_at: None,
                 cwd: Some(PathBuf::from("/Users/pc/code/codex")),
                 git_branch: None,
+                open_state: SessionOpenState::Closed,
             },
             Row {
                 path: None,
@@ -2007,6 +2278,7 @@ mod tests {
                 updated_at: None,
                 cwd: Some(PathBuf::from("/Users/pc/code/codex")),
                 git_branch: None,
+                open_state: SessionOpenState::Closed,
             },
         ];
 
@@ -2030,6 +2302,7 @@ mod tests {
                 updated_at: None,
                 cwd: Some(home.join("code/codex")),
                 git_branch: None,
+                open_state: SessionOpenState::Closed,
             },
             Row {
                 path: None,
@@ -2041,6 +2314,7 @@ mod tests {
                 updated_at: None,
                 cwd: Some(PathBuf::from("/tmp/codex")),
                 git_branch: None,
+                open_state: SessionOpenState::Closed,
             },
         ];
 
@@ -2072,24 +2346,32 @@ mod tests {
             Row {
                 path: Some(PathBuf::from("/tmp/a.jsonl")),
                 preview: String::from("Fix resume picker timestamps"),
-                thread_id: None,
+                thread_id: Some(
+                    ThreadId::from_string("019df98c-eb13-7963-8f32-1f1ae9c6cc6c")
+                        .expect("valid thread id"),
+                ),
                 thread_name: None,
                 user_message_count: 0,
                 created_at: Some(now - Duration::minutes(16)),
                 updated_at: Some(now - Duration::seconds(42)),
                 cwd: None,
                 git_branch: None,
+                open_state: SessionOpenState::Closed,
             },
             Row {
                 path: Some(PathBuf::from("/tmp/b.jsonl")),
                 preview: String::from("Investigate lazy pagination cap"),
-                thread_id: None,
+                thread_id: Some(
+                    ThreadId::from_string("019dfe7f-c670-71b3-a1c8-ab8fac1bbd40")
+                        .expect("valid thread id"),
+                ),
                 thread_name: Some(String::from("Resume picker cleanup")),
                 user_message_count: 12,
                 created_at: Some(now - Duration::hours(1)),
                 updated_at: Some(now - Duration::minutes(35)),
                 cwd: None,
                 git_branch: None,
+                open_state: SessionOpenState::Open,
             },
             Row {
                 path: Some(PathBuf::from("/tmp/c.jsonl")),
@@ -2101,6 +2383,7 @@ mod tests {
                 updated_at: Some(now - Duration::hours(2)),
                 cwd: None,
                 git_branch: None,
+                open_state: SessionOpenState::Closed,
             },
         ];
         state.all_rows = rows.clone();
@@ -2263,6 +2546,8 @@ mod tests {
             max_created_width: 8,
             max_updated_width: 12,
             max_message_count_width: 4,
+            max_open_state_width: 4,
+            max_session_id_suffix_width: 9,
             max_branch_width: 0,
             max_cwd_width: 0,
             labels: Vec::new(),
@@ -2290,7 +2575,7 @@ mod tests {
             }
         );
 
-        let wide = column_visibility(/*area_width*/ 46, &metrics, ThreadSortKey::CreatedAt);
+        let wide = column_visibility(/*area_width*/ 59, &metrics, ThreadSortKey::CreatedAt);
         assert_eq!(
             wide,
             ColumnVisibility {
@@ -2405,6 +2690,7 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            open_state: SessionOpenState::Closed,
         };
         state.all_rows = vec![row.clone()];
         state.filtered_rows = vec![row];
@@ -2445,6 +2731,7 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            open_state: SessionOpenState::Closed,
         };
         state.all_rows = vec![row.clone()];
         state.filtered_rows = vec![row];
@@ -2466,32 +2753,39 @@ mod tests {
     #[test]
     fn app_server_row_keeps_pathless_threads() {
         let thread_id = ThreadId::new();
-        let thread = Thread {
-            id: thread_id.to_string(),
-            forked_from_id: None,
-            preview: String::from("remote thread"),
-            ephemeral: false,
-            model_provider: String::from("openai"),
-            created_at: 1,
-            updated_at: 2,
-            status: codex_app_server_protocol::ThreadStatus::Idle,
-            path: None,
-            cwd: test_path_buf("/tmp").abs(),
-            cli_version: String::from("0.0.0"),
-            source: codex_app_server_protocol::SessionSource::Cli,
-            agent_nickname: None,
-            agent_role: None,
-            git_info: None,
-            name: Some(String::from("Named thread")),
-            user_message_count: 0,
-            turns: Vec::new(),
-        };
+        let thread = app_server_thread(thread_id, ThreadStatus::Idle);
 
-        let row = row_from_app_server_thread(thread).expect("row should be preserved");
+        let row = row_from_app_server_thread(thread, SessionOpenState::Open)
+            .expect("row should be preserved");
 
         assert_eq!(row.path, None);
         assert_eq!(row.thread_id, Some(thread_id));
         assert_eq!(row.thread_name, Some(String::from("Named thread")));
+        assert_eq!(row.open_state, SessionOpenState::Open);
+    }
+
+    #[tokio::test]
+    async fn remote_rows_mark_loaded_threads_open() {
+        let open_thread_id = ThreadId::new();
+        let closed_thread_id = ThreadId::new();
+        let rows = rows_from_app_server_threads(
+            vec![
+                app_server_thread(open_thread_id, ThreadStatus::Idle),
+                app_server_thread(closed_thread_id, ThreadStatus::NotLoaded),
+            ],
+            SessionPickerRuntime::Remote,
+        )
+        .await;
+
+        assert_eq!(
+            rows.into_iter()
+                .map(|row| (row.thread_id, row.open_state))
+                .collect::<Vec<_>>(),
+            vec![
+                (Some(open_thread_id), SessionOpenState::Open),
+                (Some(closed_thread_id), SessionOpenState::Closed),
+            ]
+        );
     }
 
     #[tokio::test]

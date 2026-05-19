@@ -276,7 +276,8 @@ struct DebugTraceReduceCommand {
 
 #[derive(Debug, Parser)]
 struct ResumeCommand {
-    /// Conversation/session id (UUID) or thread name. UUIDs take precedence if it parses.
+    /// Conversation/session id (UUID), short id fragment, or thread name.
+    /// UUIDs take precedence if the value parses exactly.
     /// If omitted, use --last to pick the most recent recorded session.
     #[arg(value_name = "SESSION_ID")]
     session_id: Option<String>,
@@ -302,7 +303,8 @@ struct ResumeCommand {
 
 #[derive(Debug, Parser)]
 struct ForkCommand {
-    /// Conversation/session id (UUID). When provided, forks this session.
+    /// Conversation/session id (UUID), short id fragment, or thread name.
+    /// UUIDs take precedence if the value parses exactly.
     /// If omitted, use --last to pick the most recent recorded session.
     #[arg(value_name = "SESSION_ID")]
     session_id: Option<String>,

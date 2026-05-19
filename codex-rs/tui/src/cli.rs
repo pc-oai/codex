@@ -20,8 +20,9 @@ pub struct Cli {
     #[clap(skip)]
     pub resume_last: bool,
 
-    /// Internal: resume a specific recorded session by id (UUID). Set by the
-    /// top-level `codex resume <SESSION_ID>` wrapper; not exposed as a public flag.
+    /// Internal: resume a specific recorded session by selector (exact UUID,
+    /// short id fragment, or thread name). Set by the top-level
+    /// `codex resume <SESSION_ID>` wrapper; not exposed as a public flag.
     #[clap(skip)]
     pub resume_session_id: Option<String>,
 
@@ -41,8 +42,9 @@ pub struct Cli {
     #[clap(skip)]
     pub fork_last: bool,
 
-    /// Internal: fork a specific recorded session by id (UUID). Set by the
-    /// top-level `codex fork <SESSION_ID>` wrapper; not exposed as a public flag.
+    /// Internal: fork a specific recorded session by selector (exact UUID,
+    /// short id fragment, or thread name). Set by the top-level
+    /// `codex fork <SESSION_ID>` wrapper; not exposed as a public flag.
     #[clap(skip)]
     pub fork_session_id: Option<String>,
 
