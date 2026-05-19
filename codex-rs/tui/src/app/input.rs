@@ -75,24 +75,21 @@ impl App {
         app_server: &mut AppServerSession,
         key_event: KeyEvent,
     ) {
-        // Some terminals, especially on macOS, encode Option+Left/Right as Option+b/f unless
-        // enhanced keyboard reporting is available. We only treat those word-motion fallbacks as
-        // agent-switch shortcuts when the composer is empty so we never steal the expected
-        // editing behavior for moving across words inside a draft.
-        let allow_agent_word_motion_fallback = !self.enhanced_keys_supported
-            && self.chat_widget.composer_text_with_pending().is_empty();
+        // Thread switching snapshots the active composer with the current thread before replaying
+        // the target one, so these shortcuts can stay live while drafts remain attached to the
+        // agent they were written for.
         if self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
-            // Alt+Left/Right are also natural word-motion keys in the composer. Keep agent
-            // fast-switch available only once the draft is empty so editing behavior wins whenever
-            // there is text on screen.
-            && self.chat_widget.composer_text_with_pending().is_empty()
-            && previous_agent_shortcut_matches(key_event, allow_agent_word_motion_fallback)
+            && previous_agent_shortcut_matches(key_event)
         {
             if let Some(thread_id) = self
-                .adjacent_thread_id_with_backfill(app_server, AgentNavigationDirection::Previous)
+                .adjacent_thread_id_for_switch_shortcut(
+                    app_server,
+                    AgentNavigationDirection::Previous,
+                )
                 .await
             {
+                self.show_agent_switch_feedback(tui, thread_id);
                 let _ = self
                     .select_agent_thread_and_discard_side(tui, app_server, thread_id)
                     .await;
@@ -101,15 +98,13 @@ impl App {
         }
         if self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
-            // Mirror the previous-agent rule above: empty drafts may use these keys for thread
-            // switching, but non-empty drafts keep them for expected word-wise cursor motion.
-            && self.chat_widget.composer_text_with_pending().is_empty()
-            && next_agent_shortcut_matches(key_event, allow_agent_word_motion_fallback)
+            && (next_agent_shortcut_matches(key_event) || rotate_agent_shortcut_matches(key_event))
         {
             if let Some(thread_id) = self
-                .adjacent_thread_id_with_backfill(app_server, AgentNavigationDirection::Next)
+                .adjacent_thread_id_for_switch_shortcut(app_server, AgentNavigationDirection::Next)
                 .await
             {
+                self.show_agent_switch_feedback(tui, thread_id);
                 let _ = self
                     .select_agent_thread_and_discard_side(tui, app_server, thread_id)
                     .await;
@@ -279,6 +274,67 @@ impl App {
                 self.chat_widget.handle_key_event(key_event);
             }
         };
+    }
+
+    fn show_agent_switch_feedback(&mut self, tui: &mut tui::Tui, target_thread_id: ThreadId) {
+        if let Some(strip) = self.agent_navigation.agent_neighbor_strip(
+            Some(target_thread_id),
+            self.primary_thread_id,
+            Some(target_thread_id),
+        ) {
+            self.chat_widget
+                .show_agent_navigation_strip(strip, Duration::from_millis(900));
+        }
+        self.draw_agent_switch_feedback_frame(tui);
+    }
+
+    fn draw_agent_switch_feedback_frame(&mut self, tui: &mut tui::Tui) {
+        let Ok(width) = tui.terminal.size().map(|size| size.width) else {
+            return;
+        };
+        self.chat_widget.pre_draw_tick();
+        let desired_height = self.chat_widget.desired_height(width);
+        let preserve_inline_bottom = self.chat_widget.agent_menu_overlay_active();
+        let draw_result = if self.terminal_resize_reflow_enabled() && preserve_inline_bottom {
+            tui.draw_with_resize_reflow_preserving_inline_bottom(desired_height, |frame| {
+                let area = frame.area();
+                self.chat_widget.render(area, frame.buffer);
+                if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
+                    frame.set_cursor_style(self.chat_widget.cursor_style(area));
+                    frame.set_cursor_position((x, y));
+                }
+            })
+        } else if self.terminal_resize_reflow_enabled() {
+            tui.draw_with_resize_reflow(desired_height, |frame| {
+                let area = frame.area();
+                self.chat_widget.render(area, frame.buffer);
+                if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
+                    frame.set_cursor_style(self.chat_widget.cursor_style(area));
+                    frame.set_cursor_position((x, y));
+                }
+            })
+        } else if preserve_inline_bottom {
+            tui.draw_preserving_inline_bottom(desired_height, |frame| {
+                let area = frame.area();
+                self.chat_widget.render(area, frame.buffer);
+                if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
+                    frame.set_cursor_style(self.chat_widget.cursor_style(area));
+                    frame.set_cursor_position((x, y));
+                }
+            })
+        } else {
+            tui.draw(desired_height, |frame| {
+                let area = frame.area();
+                self.chat_widget.render(area, frame.buffer);
+                if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
+                    frame.set_cursor_style(self.chat_widget.cursor_style(area));
+                    frame.set_cursor_position((x, y));
+                }
+            })
+        };
+        if let Err(err) = draw_result {
+            tracing::debug!(error = %err, "failed to draw agent switch feedback frame");
+        }
     }
 
     pub(super) fn should_handle_backtrack_esc(&self, key_event: KeyEvent) -> bool {

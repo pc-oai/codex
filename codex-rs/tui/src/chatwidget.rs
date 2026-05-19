@@ -1187,6 +1187,12 @@ pub(crate) struct ThreadInputState {
     agent_turn_running: bool,
 }
 
+impl ThreadInputState {
+    pub(crate) fn agent_turn_running(&self) -> bool {
+        self.agent_turn_running
+    }
+}
+
 impl From<String> for UserMessage {
     fn from(text: String) -> Self {
         Self {
@@ -1928,6 +1934,15 @@ impl ChatWidget {
         self.bottom_pane.set_active_agent_label(active_agent_label);
     }
 
+    pub(crate) fn show_agent_navigation_strip(&mut self, line: Line<'static>, duration: Duration) {
+        self.bottom_pane.show_agent_navigation_strip(line, duration);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn active_agent_label(&self) -> Option<&str> {
+        self.bottom_pane.active_agent_label()
+    }
+
     /// Recomputes footer status-line content from config and current runtime state.
     ///
     /// This method is the status-line orchestrator: it parses configured item identifiers,
@@ -2589,38 +2604,48 @@ impl ChatWidget {
             }
         }
         self.flush_unified_exec_wait_streak();
-        if !from_replay {
+        let runtime_metrics = if !from_replay {
             self.collect_runtime_metrics_delta();
             if !self.turn_runtime_metrics.is_empty() {
                 self.last_turn_runtime_metrics = Some(self.turn_runtime_metrics);
             }
-            let runtime_metrics =
-                (!self.turn_runtime_metrics.is_empty()).then_some(self.turn_runtime_metrics);
-            let show_work_separator = self.had_work_activity
-                && (self.needs_final_message_separator || runtime_metrics.is_some());
-            if show_work_separator || runtime_metrics.is_some() {
-                let elapsed_seconds = if show_work_separator {
-                    duration_ms
-                        .and_then(|duration_ms| u64::try_from(duration_ms).ok())
-                        .map(|duration_ms| duration_ms / 1_000)
-                        .or_else(|| {
+            (!self.turn_runtime_metrics.is_empty()).then_some(self.turn_runtime_metrics)
+        } else {
+            None
+        };
+        let show_work_separator = self.had_work_activity
+            && (self.needs_final_message_separator || runtime_metrics.is_some());
+        if show_work_separator || runtime_metrics.is_some() {
+            let elapsed_seconds = if show_work_separator {
+                duration_ms
+                    .and_then(|duration_ms| u64::try_from(duration_ms).ok())
+                    .map(|duration_ms| duration_ms / 1_000)
+                    .or_else(|| {
+                        if from_replay {
+                            None
+                        } else {
                             self.bottom_pane
                                 .status_widget()
                                 .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
-                        })
-                } else {
-                    None
-                };
-                self.add_to_history(history_cell::FinalMessageSeparator::new(
-                    elapsed_seconds,
-                    runtime_metrics,
-                    self.config.tui_timing.clone(),
-                ));
-            }
+                        }
+                    })
+            } else {
+                None
+            };
+            self.add_to_history(history_cell::FinalMessageSeparator::new(
+                elapsed_seconds,
+                runtime_metrics,
+                self.config.tui_timing.clone(),
+            ));
+        }
+        if !from_replay {
             self.needs_final_message_separator = false;
             self.had_work_activity = false;
             self.request_status_line_branch_refresh();
             self.request_status_line_git_summary_refresh();
+        } else {
+            self.needs_final_message_separator = false;
+            self.had_work_activity = false;
         }
         // Mark task stopped and request redraw now that all content is in history.
         self.pending_status_indicator_restore = false;
@@ -5385,6 +5410,15 @@ impl ChatWidget {
             return;
         }
 
+        if multi_agents::open_agent_picker_shortcut_matches(key_event)
+            && self.agent_picker_shortcut_may_claim_key_event(key_event)
+            && self.bottom_pane.no_modal_or_popup_active()
+        {
+            self.app_event_tx.send(AppEvent::OpenAgentPicker);
+            self.request_redraw();
+            return;
+        }
+
         if key_event.kind == KeyEventKind::Press
             && self.chat_keymap.edit_queued_message.is_pressed(key_event)
             && self.edit_message_shortcut_may_claim_key_event(key_event)
@@ -5595,6 +5629,20 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(params);
         self.refresh_plan_mode_nudge();
         self.request_redraw();
+    }
+
+    pub(crate) fn show_agent_menu(
+        &mut self,
+        items: Vec<crate::bottom_pane::AgentMenuItem>,
+        selected_thread_id: Option<codex_protocol::ThreadId>,
+    ) {
+        self.bottom_pane.show_agent_menu(items, selected_thread_id);
+        self.refresh_plan_mode_nudge();
+        self.request_redraw();
+    }
+
+    pub(crate) fn agent_menu_overlay_active(&self) -> bool {
+        self.bottom_pane.agent_menu_overlay_height().is_some()
     }
 
     pub(crate) fn no_modal_or_popup_active(&self) -> bool {
@@ -11408,11 +11456,14 @@ impl Drop for ChatWidget {
 impl Renderable for ChatWidget {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         self.as_renderable().render(area, buf);
+        self.bottom_pane.render_agent_menu_overlay(area, buf);
         self.last_rendered_width.set(Some(area.width as usize));
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        self.as_renderable().desired_height(width)
+        self.as_renderable()
+            .desired_height(width)
+            .max(self.bottom_pane.agent_menu_overlay_height().unwrap_or(0))
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {

@@ -57,6 +57,61 @@ async fn app_server_model_verification_renders_warning() {
 }
 
 #[tokio::test]
+async fn agent_menu_overlay_shows_every_agent_with_reserved_overlay_height() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    let width = 80;
+    let height_before_menu = chat.desired_height(width);
+    let main_thread_id = ThreadId::new();
+
+    chat.show_agent_menu(
+        vec![
+            crate::bottom_pane::AgentMenuItem {
+                thread_id: main_thread_id,
+                label: "Main".to_string(),
+                is_closed: false,
+            },
+            crate::bottom_pane::AgentMenuItem {
+                thread_id: ThreadId::new(),
+                label: "Hegel [worker]".to_string(),
+                is_closed: false,
+            },
+            crate::bottom_pane::AgentMenuItem {
+                thread_id: ThreadId::new(),
+                label: "Zeno [explorer]".to_string(),
+                is_closed: false,
+            },
+            crate::bottom_pane::AgentMenuItem {
+                thread_id: ThreadId::new(),
+                label: "Plato [reviewer]".to_string(),
+                is_closed: false,
+            },
+        ],
+        Some(main_thread_id),
+    );
+
+    assert!(chat.desired_height(width) >= height_before_menu);
+    assert!(chat.desired_height(width) >= 7);
+
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(
+        width, /*height*/ 24,
+    ))
+    .expect("create terminal");
+    terminal
+        .draw(|frame| chat.render(frame.area(), frame.buffer_mut()))
+        .expect("draw agent menu overlay");
+    let rendered = normalized_backend_snapshot(terminal.backend());
+
+    for agent in [
+        "Main",
+        "Hegel [worker]",
+        "Zeno [explorer]",
+        "Plato [reviewer]",
+    ] {
+        assert!(rendered.contains(agent), "missing {agent} in:\n{rendered}");
+    }
+}
+
+#[tokio::test]
 async fn context_indicator_shows_used_tokens_when_window_unknown() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(Some("unknown-model")).await;
 

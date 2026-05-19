@@ -1024,6 +1024,29 @@ impl AppServerSession {
         started_thread_from_start_response(response, &config, thread_params_mode).await
     }
 
+    pub(crate) async fn resume_thread_with_request_handle(
+        request_handle: AppServerRequestHandle,
+        config: Config,
+        thread_id: ThreadId,
+        thread_params_mode: ThreadParamsMode,
+        remote_cwd_override: Option<PathBuf>,
+    ) -> Result<AppServerStartedThread> {
+        let response: ThreadResumeResponse = request_handle
+            .request_typed(ClientRequest::ThreadResume {
+                request_id: next_background_request_id(),
+                params: thread_resume_params_from_config(
+                    config.clone(),
+                    thread_id,
+                    thread_params_mode,
+                    remote_cwd_override.as_deref(),
+                    /*resume_subagent_tree*/ false,
+                ),
+            })
+            .await
+            .wrap_err("thread/resume failed during TUI subagent prewarm")?;
+        started_thread_from_resume_response(response, &config, thread_params_mode).await
+    }
+
     pub(crate) async fn skills_list_with_request_handle(
         request_handle: AppServerRequestHandle,
         params: SkillsListParams,

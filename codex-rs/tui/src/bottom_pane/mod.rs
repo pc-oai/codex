@@ -47,6 +47,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 mod action_required_title;
+mod agent_menu;
 mod app_link_view;
 mod approval_overlay;
 mod mcp_server_elicitation;
@@ -58,6 +59,7 @@ mod status_surface_preview;
 mod title_setup;
 pub(crate) use action_required_title::ACTION_REQUIRED_PREVIEW_PREFIX;
 pub(crate) use action_required_title::build_action_required_title_text;
+pub(crate) use agent_menu::AgentMenuItem;
 pub(crate) use app_link_view::AppLinkElicitationTarget;
 pub(crate) use app_link_view::AppLinkSuggestionType;
 pub(crate) use app_link_view::AppLinkView;
@@ -128,6 +130,7 @@ pub(crate) use status_surface_preview::StatusSurfacePreviewData;
 pub(crate) use status_surface_preview::StatusSurfacePreviewItem;
 pub(crate) use title_setup::TerminalTitleItem;
 pub(crate) use title_setup::TerminalTitleSetupView;
+pub(crate) use title_setup::compact_title_items_for_thread_title;
 #[cfg(test)]
 pub(crate) use title_setup::preview_line_for_title_items;
 mod paste_burst;
@@ -202,6 +205,8 @@ pub(crate) struct BottomPane {
 
     /// Stack of views displayed instead of the composer (e.g. popups/modals).
     view_stack: Vec<Box<dyn BottomPaneView>>,
+    /// Floating, composer-preserving agent chooser anchored over the footer.
+    agent_menu: Option<agent_menu::AgentMenu>,
     delayed_approval_requests: VecDeque<DelayedApprovalRequest>,
     last_composer_activity_at: Option<Instant>,
 
@@ -271,6 +276,7 @@ impl BottomPane {
         Self {
             composer,
             view_stack: Vec::new(),
+            agent_menu: None,
             delayed_approval_requests: VecDeque::new(),
             last_composer_activity_at: None,
             app_event_tx,
@@ -566,6 +572,18 @@ impl BottomPane {
 
     /// Forward a key event to the active view or the composer.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
+        if let Some(agent_menu) = self.agent_menu.as_mut() {
+            if key_event.kind == KeyEventKind::Release {
+                return InputResult::None;
+            }
+
+            if agent_menu.handle_key_event(key_event) {
+                self.agent_menu = None;
+            }
+            self.request_redraw();
+            return InputResult::None;
+        }
+
         // If a modal/view is active, handle it here; otherwise forward to composer.
         if !self.view_stack.is_empty() {
             if key_event.kind == KeyEventKind::Release {
@@ -670,7 +688,10 @@ impl BottomPane {
     /// was received, but it does not decide whether the process should exit; `ChatWidget` owns the
     /// quit/interrupt state machine and uses the result to decide what happens next.
     pub(crate) fn on_ctrl_c(&mut self) -> CancellationEvent {
-        if let Some(view) = self.view_stack.last_mut() {
+        if self.agent_menu.take().is_some() {
+            self.request_redraw();
+            CancellationEvent::Handled
+        } else if let Some(view) = self.view_stack.last_mut() {
             let event = view.on_ctrl_c();
             let view_complete = view.is_complete();
             let completion = view.completion();
@@ -697,6 +718,10 @@ impl BottomPane {
     }
 
     pub fn handle_paste(&mut self, pasted: String) {
+        if self.agent_menu.is_some() {
+            return;
+        }
+
         let has_pasted_text = !pasted.is_empty();
         if let Some(view) = self.view_stack.last_mut() {
             let needs_redraw = view.handle_paste(pasted);
@@ -1091,6 +1116,20 @@ impl BottomPane {
         self.push_view(Box::new(view));
     }
 
+    /// Show the compact floating agent chooser without replacing the composer.
+    pub(crate) fn show_agent_menu(
+        &mut self,
+        items: Vec<AgentMenuItem>,
+        selected_thread_id: Option<codex_protocol::ThreadId>,
+    ) {
+        self.agent_menu = Some(agent_menu::AgentMenu::new(
+            items,
+            selected_thread_id,
+            self.app_event_tx.clone(),
+        ));
+        self.request_redraw();
+    }
+
     fn apply_standard_popup_hint(&self, params: &mut list_selection_view::SelectionViewParams) {
         if params.footer_hint.is_none()
             || params.footer_hint.as_ref() == Some(&popup_consts::standard_popup_hint_line())
@@ -1257,12 +1296,15 @@ impl BottomPane {
     /// overlays or popups and not running a task. This is the safe context to
     /// use Esc-Esc for backtracking from the main view.
     pub(crate) fn is_normal_backtrack_mode(&self) -> bool {
-        !self.is_task_running && self.view_stack.is_empty() && !self.composer.popup_active()
+        !self.is_task_running
+            && self.agent_menu.is_none()
+            && self.view_stack.is_empty()
+            && !self.composer.popup_active()
     }
 
     /// Return true when no popups or modal views are active, regardless of task state.
     pub(crate) fn can_launch_external_editor(&self) -> bool {
-        self.view_stack.is_empty() && !self.composer.popup_active()
+        self.agent_menu.is_none() && self.view_stack.is_empty() && !self.composer.popup_active()
     }
 
     /// Returns true when the bottom pane has no active modal view and no active composer popup.
@@ -1537,7 +1579,7 @@ impl BottomPane {
     }
 
     pub(crate) fn attach_image(&mut self, path: PathBuf) {
-        if self.view_stack.is_empty() {
+        if self.agent_menu.is_none() && self.view_stack.is_empty() {
             self.composer.attach_image(path);
             self.request_redraw();
         }
@@ -1643,6 +1685,16 @@ impl BottomPane {
         }
     }
 
+    pub(crate) fn show_agent_navigation_strip(&mut self, line: Line<'static>, duration: Duration) {
+        self.composer.show_agent_navigation_strip(line, duration);
+        self.request_redraw();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn active_agent_label(&self) -> Option<&str> {
+        self.composer.active_agent_label()
+    }
+
     pub(crate) fn set_side_conversation_context_label(&mut self, label: Option<String>) {
         if self.composer.set_side_conversation_context_label(label) {
             self.request_redraw();
@@ -1683,11 +1735,33 @@ impl Renderable for BottomPane {
         self.as_renderable().desired_height(width)
     }
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        self.as_renderable().cursor_pos(area)
+        if self.agent_menu.is_some() {
+            None
+        } else {
+            self.as_renderable().cursor_pos(area)
+        }
     }
 
     fn cursor_style(&self, area: Rect) -> crossterm::cursor::SetCursorStyle {
         self.as_renderable().cursor_style(area)
+    }
+}
+
+impl BottomPane {
+    /// Render the agent chooser over the already-laid-out chat surface.
+    ///
+    /// This intentionally lives outside [`Renderable::render`] so opening the chooser does not
+    /// change bottom-pane layout or inherit the composer's much shorter render area.
+    pub(crate) fn render_agent_menu_overlay(&self, area: Rect, buf: &mut Buffer) {
+        if let Some(agent_menu) = &self.agent_menu {
+            agent_menu.render(area, buf);
+        }
+    }
+
+    pub(crate) fn agent_menu_overlay_height(&self) -> Option<u16> {
+        self.agent_menu
+            .as_ref()
+            .map(agent_menu::AgentMenu::preferred_overlay_height)
     }
 }
 
@@ -1722,7 +1796,7 @@ mod tests {
             for x in 0..buf.area().width {
                 row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
             }
-            lines.push(row);
+            lines.push(row.trim_end().to_string());
         }
         lines.join("\n")
     }
@@ -1730,6 +1804,7 @@ mod tests {
     fn render_snapshot(pane: &BottomPane, area: Rect) -> String {
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
+        pane.render_agent_menu_overlay(area, &mut buf);
         snapshot_buffer(&buf)
     }
 
@@ -2618,6 +2693,175 @@ mod tests {
             );
         }
         assert_eq!(pane.composer_text(), "/agent ");
+    }
+
+    #[test]
+    fn floating_agent_menu_selects_thread_without_clobbering_draft() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = test_pane(tx);
+        let main_thread_id = codex_protocol::ThreadId::new();
+        let helper_thread_id = codex_protocol::ThreadId::new();
+
+        pane.insert_str("keep this draft");
+        pane.show_agent_menu(
+            vec![
+                AgentMenuItem {
+                    thread_id: main_thread_id,
+                    label: "Main".to_string(),
+                    is_closed: false,
+                },
+                AgentMenuItem {
+                    thread_id: helper_thread_id,
+                    label: "Hegel [worker]".to_string(),
+                    is_closed: false,
+                },
+            ],
+            Some(main_thread_id),
+        );
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        pane.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(pane.composer_text(), "keep this draft");
+        assert!(pane.no_modal_or_popup_active());
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(AppEvent::SelectAgentThread(thread_id)) if thread_id == helper_thread_id
+        ));
+    }
+
+    #[test]
+    fn floating_agent_menu_hides_the_composer_cursor() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = test_pane(tx);
+        let area = Rect::new(0, 0, 56, 8);
+        let thread_id = codex_protocol::ThreadId::new();
+
+        assert!(pane.cursor_pos(area).is_some());
+
+        pane.show_agent_menu(
+            vec![AgentMenuItem {
+                thread_id,
+                label: "Main".to_string(),
+                is_closed: false,
+            }],
+            Some(thread_id),
+        );
+
+        assert_eq!(pane.cursor_pos(area), None);
+    }
+
+    #[test]
+    fn floating_agent_menu_does_not_change_bottom_pane_height() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = test_pane(tx);
+        let width = 80;
+        let height_before_menu = pane.desired_height(width);
+        let thread_id = codex_protocol::ThreadId::new();
+
+        pane.show_agent_menu(
+            vec![
+                AgentMenuItem {
+                    thread_id,
+                    label: "Main".to_string(),
+                    is_closed: false,
+                },
+                AgentMenuItem {
+                    thread_id: codex_protocol::ThreadId::new(),
+                    label: "Hegel [worker]".to_string(),
+                    is_closed: false,
+                },
+                AgentMenuItem {
+                    thread_id: codex_protocol::ThreadId::new(),
+                    label: "Zeno [explorer]".to_string(),
+                    is_closed: false,
+                },
+            ],
+            Some(thread_id),
+        );
+
+        assert_eq!(pane.desired_height(width), height_before_menu);
+    }
+
+    #[test]
+    fn floating_agent_menu_stays_within_a_short_shifted_overlay_area() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = test_pane(tx);
+        let main_thread_id = codex_protocol::ThreadId::new();
+
+        pane.show_agent_menu(
+            vec![
+                AgentMenuItem {
+                    thread_id: main_thread_id,
+                    label: "Main".to_string(),
+                    is_closed: false,
+                },
+                AgentMenuItem {
+                    thread_id: codex_protocol::ThreadId::new(),
+                    label: "Hegel [worker]".to_string(),
+                    is_closed: false,
+                },
+                AgentMenuItem {
+                    thread_id: codex_protocol::ThreadId::new(),
+                    label: "Zeno [explorer]".to_string(),
+                    is_closed: false,
+                },
+                AgentMenuItem {
+                    thread_id: codex_protocol::ThreadId::new(),
+                    label: "Plato [reviewer]".to_string(),
+                    is_closed: false,
+                },
+            ],
+            Some(main_thread_id),
+        );
+
+        let area = Rect::new(0, 51, 173, 5);
+        let mut buf = Buffer::empty(area);
+        pane.render_agent_menu_overlay(area, &mut buf);
+    }
+
+    #[test]
+    fn floating_agent_menu_snapshot() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = test_pane(tx);
+        let main_thread_id = codex_protocol::ThreadId::new();
+
+        pane.insert_str("keep this draft visible");
+        pane.show_agent_menu(
+            vec![
+                AgentMenuItem {
+                    thread_id: main_thread_id,
+                    label: "Main".to_string(),
+                    is_closed: false,
+                },
+                AgentMenuItem {
+                    thread_id: codex_protocol::ThreadId::new(),
+                    label: "Hegel [worker]".to_string(),
+                    is_closed: false,
+                },
+                AgentMenuItem {
+                    thread_id: codex_protocol::ThreadId::new(),
+                    label: "Zeno [explorer]".to_string(),
+                    is_closed: true,
+                },
+                AgentMenuItem {
+                    thread_id: codex_protocol::ThreadId::new(),
+                    label: "Plato [reviewer]".to_string(),
+                    is_closed: false,
+                },
+            ],
+            Some(main_thread_id),
+        );
+
+        assert_snapshot!(
+            "floating_agent_menu_snapshot",
+            render_snapshot(&pane, Rect::new(0, 0, 56, 12))
+        );
     }
 
     #[test]

@@ -83,7 +83,7 @@ pub(crate) struct FooterProps {
     ///
     /// When both this label and the configured status line are available, they are rendered on the
     /// same row separated by ` · `.
-    pub(crate) active_agent_label: Option<String>,
+    pub(crate) active_agent_label: Option<Line<'static>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -788,9 +788,9 @@ pub(crate) fn passive_footer_status_line(props: &FooterProps) -> Option<Line<'st
     if let Some(active_agent_label) = props.active_agent_label.as_ref() {
         if let Some(existing) = line.as_mut() {
             existing.spans.push(" · ".dim());
-            existing.spans.push(active_agent_label.clone().dim());
+            existing.spans.extend(active_agent_label.spans.clone());
         } else {
-            line = Some(Line::from(active_agent_label.clone()).dim());
+            line = Some(active_agent_label.clone());
         }
     }
 
@@ -1936,7 +1936,7 @@ mod tests {
             status_line_value: None,
             status_line_enabled: false,
             key_hints: FooterKeyHints::default_bindings(),
-            active_agent_label: Some("Robie [explorer]".to_string()),
+            active_agent_label: Some(Line::from("Robie [explorer]").dim()),
         };
 
         snapshot_footer("footer_active_agent_label", props);
@@ -1952,10 +1952,43 @@ mod tests {
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
             key_hints: FooterKeyHints::default_bindings(),
-            active_agent_label: Some("Robie [explorer]".to_string()),
+            active_agent_label: Some(Line::from("Robie [explorer]").dim()),
         };
 
         snapshot_footer("footer_status_line_with_active_agent_label", props);
+    }
+
+    #[test]
+    fn footer_agent_navigation_strip_snapshot() {
+        snapshot_footer_with_mode_indicator_and_context(
+            "footer_agent_navigation_strip",
+            /*width*/ 160,
+            &FooterProps {
+                mode: FooterMode::ComposerEmpty,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                is_task_running: false,
+                collaboration_modes_enabled: false,
+                is_wsl: false,
+                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+                status_line_value: None,
+                status_line_enabled: false,
+                key_hints: FooterKeyHints::default_bindings(),
+                active_agent_label: Some(Line::from(vec![
+                    "Robie [explorer] · 2/4 · ⚙1".dim(),
+                    " · ".dim(),
+                    "‹ ".dim(),
+                    "Main [default]".dim(),
+                    " | ".dim(),
+                    "Robie [explorer]".cyan().bold(),
+                    " | ".dim(),
+                    "Atlas [worker]".dim(),
+                    " ›".dim(),
+                ])),
+            },
+            /*collaboration_mode_indicator*/ None,
+            Line::default(),
+        );
     }
 
     #[test]

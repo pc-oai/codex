@@ -991,6 +991,40 @@ async fn alt_up_edits_most_recent_queued_message() {
 }
 
 #[tokio::test]
+async fn ctrl_a_opens_agent_picker_when_composer_is_empty() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenAgentPicker));
+}
+
+#[tokio::test]
+async fn ctrl_a_opens_agent_picker_when_cursor_is_already_at_input_start() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.set_composer_text("draft".to_string(), Vec::new(), Vec::new());
+    chat.set_composer_cursor(/*pos*/ 0);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenAgentPicker));
+    assert_eq!(chat.bottom_pane.composer_text(), "draft".to_string());
+}
+
+#[tokio::test]
+async fn ctrl_a_keeps_line_start_motion_when_cursor_is_inside_input() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.set_composer_text("draft".to_string(), Vec::new(), Vec::new());
+    chat.set_composer_cursor(/*pos*/ 1);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
+
+    assert!(rx.try_recv().is_err());
+    assert_eq!(chat.composer_cursor(), 0);
+    assert_eq!(chat.bottom_pane.composer_text(), "draft".to_string());
+}
+
+#[tokio::test]
 async fn alt_e_edits_most_recent_queued_message() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.chat_keymap.edit_queued_message = vec![crate::key_hint::alt(KeyCode::Char('e'))];

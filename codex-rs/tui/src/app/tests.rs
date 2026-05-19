@@ -528,7 +528,7 @@ async fn reset_thread_event_state_aborts_listener_tasks() {
         .await
         .expect("listener task should report it started");
 
-    app.reset_thread_event_state();
+    app.reset_thread_event_state().await;
 
     assert_eq!(app.thread_event_listener_tasks.is_empty(), true);
     time::timeout(Duration::from_millis(50), dropped_rx)
@@ -674,6 +674,104 @@ async fn replay_thread_snapshot_restores_draft_and_queued_input() {
     }
 }
 
+#[test]
+fn thread_switch_snapshots_keep_drafts_with_their_threads() -> Result<()> {
+    const TEST_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
+
+    std::thread::Builder::new()
+        .stack_size(TEST_STACK_SIZE_BYTES)
+        .spawn(|| -> Result<()> {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(Box::pin(async {
+                let mut app = make_test_app().await;
+                let first_thread_id = ThreadId::new();
+                let second_thread_id = ThreadId::new();
+                let first_session =
+                    test_thread_session(first_thread_id, test_path_buf("/tmp/first-agent"));
+                let second_session =
+                    test_thread_session(second_thread_id, test_path_buf("/tmp/second-agent"));
+                app.thread_event_channels.insert(
+                    first_thread_id,
+                    ThreadEventChannel::new_with_session(
+                        THREAD_EVENT_CHANNEL_CAPACITY,
+                        first_session.clone(),
+                        Vec::new(),
+                    ),
+                );
+                app.thread_event_channels.insert(
+                    second_thread_id,
+                    ThreadEventChannel::new_with_session(
+                        THREAD_EVENT_CHANNEL_CAPACITY,
+                        second_session,
+                        Vec::new(),
+                    ),
+                );
+
+                app.activate_thread_channel(first_thread_id).await;
+                app.chat_widget.handle_thread_session(first_session);
+                app.chat_widget
+                    .apply_external_edit("draft for the first agent".to_string());
+                app.store_active_thread_receiver().await;
+                app.active_thread_id = None;
+
+                let (second_receiver, second_snapshot) = app
+                    .activate_thread_for_replay(second_thread_id)
+                    .await
+                    .expect("second thread snapshot");
+                app.active_thread_id = Some(second_thread_id);
+                app.active_thread_rx = Some(second_receiver);
+                let (second_widget, _app_event_tx, _rx, _op_rx) =
+                    make_chatwidget_manual_with_sender().await;
+                app.replace_chat_widget(second_widget).await;
+                app.replay_thread_snapshot(second_snapshot, /*resume_restored_queue*/ true);
+                assert_eq!(app.chat_widget.composer_text_with_pending(), "");
+
+                app.chat_widget
+                    .apply_external_edit("draft for the second agent".to_string());
+                app.store_active_thread_receiver().await;
+                app.active_thread_id = None;
+
+                let (first_receiver, first_snapshot) = app
+                    .activate_thread_for_replay(first_thread_id)
+                    .await
+                    .expect("first thread snapshot");
+                app.active_thread_id = Some(first_thread_id);
+                app.active_thread_rx = Some(first_receiver);
+                let (first_widget, _app_event_tx, _rx, _op_rx) =
+                    make_chatwidget_manual_with_sender().await;
+                app.replace_chat_widget(first_widget).await;
+                app.replay_thread_snapshot(first_snapshot, /*resume_restored_queue*/ true);
+                assert_eq!(
+                    app.chat_widget.composer_text_with_pending(),
+                    "draft for the first agent"
+                );
+
+                app.store_active_thread_receiver().await;
+                app.active_thread_id = None;
+                let (second_receiver, second_snapshot) = app
+                    .activate_thread_for_replay(second_thread_id)
+                    .await
+                    .expect("second thread snapshot after round trip");
+                app.active_thread_id = Some(second_thread_id);
+                app.active_thread_rx = Some(second_receiver);
+                let (second_widget, _app_event_tx, _rx, _op_rx) =
+                    make_chatwidget_manual_with_sender().await;
+                app.replace_chat_widget(second_widget).await;
+                app.replay_thread_snapshot(second_snapshot, /*resume_restored_queue*/ true);
+                assert_eq!(
+                    app.chat_widget.composer_text_with_pending(),
+                    "draft for the second agent"
+                );
+                Ok(())
+            }))
+        })?
+        .join()
+        .expect("draft round-trip test thread should not panic")?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn reload_draft_round_trip_preserves_visible_composer() {
     let mut app = make_test_app().await;
@@ -711,6 +809,20 @@ async fn active_turn_id_for_thread_uses_snapshot_turns() {
         app.active_turn_id_for_thread(thread_id).await,
         Some("turn-1".to_string())
     );
+}
+
+#[test]
+fn thread_switch_running_turn_preserves_terminal_progress_ownership() {
+    let snapshot = ThreadEventSnapshot {
+        session: None,
+        turns: vec![test_turn("turn-1", TurnStatus::InProgress, Vec::new())],
+        events: Vec::new(),
+        input_state: None,
+    };
+
+    assert!(App::thread_switch_snapshot_keeps_terminal_progress(
+        &snapshot
+    ));
 }
 
 #[tokio::test]
@@ -1541,6 +1653,93 @@ async fn should_attach_live_thread_for_selection_skips_closed_metadata_only_thre
 }
 
 #[tokio::test]
+async fn cached_agent_switch_skips_blocking_liveness_refresh() {
+    let mut app = make_test_app().await;
+    let thread_id = ThreadId::new();
+
+    assert!(app.should_check_agent_liveness_before_switch(thread_id));
+
+    app.thread_event_channels
+        .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
+    assert!(!app.should_check_agent_liveness_before_switch(thread_id));
+}
+
+#[tokio::test]
+async fn loaded_subagent_switch_prewarm_targets_cover_next_and_previous_once() {
+    let mut app = make_test_app().await;
+    let primary_thread_id = ThreadId::new();
+    let next_thread_id = ThreadId::new();
+    let previous_thread_id = ThreadId::new();
+    app.primary_thread_id = Some(primary_thread_id);
+    app.active_thread_id = Some(primary_thread_id);
+    app.agent_navigation.upsert(
+        primary_thread_id,
+        /*agent_nickname*/ None,
+        /*agent_role*/ None,
+        /*is_closed*/ false,
+    );
+    app.agent_navigation.upsert(
+        next_thread_id,
+        Some("Scout".to_string()),
+        Some("worker".to_string()),
+        /*is_closed*/ false,
+    );
+    app.agent_navigation.upsert(
+        previous_thread_id,
+        Some("Atlas".to_string()),
+        Some("reviewer".to_string()),
+        /*is_closed*/ false,
+    );
+
+    assert_eq!(
+        app.loaded_subagent_switch_prewarm_targets(),
+        vec![next_thread_id, previous_thread_id]
+    );
+
+    app.agent_navigation.remove(previous_thread_id);
+    assert_eq!(
+        app.loaded_subagent_switch_prewarm_targets(),
+        vec![next_thread_id]
+    );
+}
+
+#[tokio::test]
+async fn loaded_subagent_switch_prewarm_caches_a_switchable_thread_snapshot() {
+    let mut app = make_test_app().await;
+    let primary_thread_id = ThreadId::new();
+    let thread_id = ThreadId::new();
+    let session = test_thread_session(thread_id, test_path_buf("/tmp/prewarmed-agent"));
+    app.primary_thread_id = Some(primary_thread_id);
+    app.agent_navigation.upsert(
+        thread_id,
+        Some("Scout".to_string()),
+        Some("worker".to_string()),
+        /*is_closed*/ false,
+    );
+
+    app.cache_loaded_subagent_switch_prewarm(
+        primary_thread_id,
+        thread_id,
+        Ok(AppServerStartedThread {
+            session: session.clone(),
+            turns: Vec::new(),
+        }),
+    )
+    .await;
+
+    assert!(!app.should_attach_live_thread_for_selection(thread_id));
+    assert!(!app.should_check_agent_liveness_before_switch(thread_id));
+    let store = app
+        .thread_event_channels
+        .get(&thread_id)
+        .expect("prewarmed thread channel")
+        .store
+        .lock()
+        .await;
+    assert_eq!(store.snapshot().session, Some(session));
+}
+
+#[tokio::test]
 async fn refresh_agent_picker_thread_liveness_prunes_closed_metadata_only_threads() -> Result<()> {
     let mut app = Box::pin(make_test_app()).await;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
@@ -1594,6 +1793,32 @@ async fn open_agent_picker_prompts_to_enable_multi_agent_when_disabled() -> Resu
         .collect::<Vec<_>>()
         .join("\n");
     assert!(rendered.contains("Subagents will be enabled in the next session."));
+    Ok(())
+}
+
+#[tokio::test]
+async fn agent_switch_shortcut_target_reports_when_no_other_agents_exist() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let mut app_server =
+        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+
+    assert_eq!(
+        app.adjacent_thread_id_for_switch_shortcut(
+            &mut app_server,
+            AgentNavigationDirection::Next,
+        )
+        .await,
+        None
+    );
+
+    let cell = match app_event_rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+        other => panic!("expected InsertHistoryCell event, got {other:?}"),
+    };
+    assert!(
+        lines_to_single_string(&cell.display_lines(/*width*/ 120))
+            .contains("No other agents available to switch to.")
+    );
     Ok(())
 }
 
@@ -2313,6 +2538,82 @@ async fn refresh_pending_thread_approvals_only_lists_inactive_threads() {
     app.active_thread_id = Some(agent_thread_id);
     app.refresh_pending_thread_approvals().await;
     assert!(app.chat_widget.pending_thread_approvals().is_empty());
+}
+
+#[tokio::test]
+async fn active_agent_label_shows_cycle_position_and_working_subagent_count() {
+    let mut app = make_test_app().await;
+    let main_thread_id =
+        ThreadId::from_string("00000000-0000-0000-0000-000000000101").expect("valid thread");
+    let working_agent_id =
+        ThreadId::from_string("00000000-0000-0000-0000-000000000102").expect("valid thread");
+    let idle_agent_id =
+        ThreadId::from_string("00000000-0000-0000-0000-000000000103").expect("valid thread");
+    let closed_agent_id =
+        ThreadId::from_string("00000000-0000-0000-0000-000000000104").expect("valid thread");
+
+    app.primary_thread_id = Some(main_thread_id);
+    app.active_thread_id = Some(main_thread_id);
+    app.agent_navigation.upsert(
+        main_thread_id,
+        /*agent_nickname*/ None,
+        /*agent_role*/ None,
+        /*is_closed*/ false,
+    );
+    app.agent_navigation.upsert(
+        working_agent_id,
+        Some("Scout".to_string()),
+        Some("worker".to_string()),
+        /*is_closed*/ false,
+    );
+    app.agent_navigation.upsert(
+        idle_agent_id,
+        Some("Atlas".to_string()),
+        Some("explorer".to_string()),
+        /*is_closed*/ false,
+    );
+    app.agent_navigation.upsert(
+        closed_agent_id,
+        Some("Done".to_string()),
+        Some("worker".to_string()),
+        /*is_closed*/ true,
+    );
+
+    app.thread_event_channels.insert(
+        working_agent_id,
+        ThreadEventChannel::new_with_session(
+            THREAD_EVENT_CHANNEL_CAPACITY,
+            test_thread_session(working_agent_id, test_path_buf("/tmp/working-agent")),
+            vec![test_turn(
+                "turn-working",
+                TurnStatus::InProgress,
+                Vec::new(),
+            )],
+        ),
+    );
+    app.thread_event_channels.insert(
+        idle_agent_id,
+        ThreadEventChannel::new_with_session(
+            THREAD_EVENT_CHANNEL_CAPACITY,
+            test_thread_session(idle_agent_id, test_path_buf("/tmp/idle-agent")),
+            vec![test_turn("turn-idle", TurnStatus::Completed, Vec::new())],
+        ),
+    );
+    app.thread_event_channels.insert(
+        closed_agent_id,
+        ThreadEventChannel::new_with_session(
+            THREAD_EVENT_CHANNEL_CAPACITY,
+            test_thread_session(closed_agent_id, test_path_buf("/tmp/closed-agent")),
+            vec![test_turn("turn-closed", TurnStatus::InProgress, Vec::new())],
+        ),
+    );
+
+    app.refresh_agent_activity_label().await;
+
+    assert_eq!(
+        app.chat_widget.active_agent_label(),
+        Some("Main [default] · 1/4 · ⚙1")
+    );
 }
 
 #[tokio::test]
@@ -3098,6 +3399,14 @@ fn agent_picker_item_name_snapshot() {
     ]
     .join("\n");
     assert_app_snapshot!("agent_picker_item_name", snapshot);
+}
+
+#[test]
+fn agent_picker_subtitle_snapshot() {
+    assert_app_snapshot!(
+        "agent_picker_subtitle",
+        AgentNavigationState::picker_subtitle()
+    );
 }
 
 #[tokio::test]
@@ -4205,18 +4514,24 @@ async fn thread_switch_replay_buffer_uses_transcript_tail_mode_when_row_cap_pres
         .as_ref()
         .expect("thread switch replay buffer should be active");
     assert!(buffer.render_from_transcript_tail);
+    assert!(buffer.defer_terminal_writes);
     assert!(buffer.retained_lines.is_empty());
 }
 
 #[tokio::test]
-async fn thread_switch_replay_buffer_is_disabled_without_row_cap() {
+async fn thread_switch_replay_buffer_defers_terminal_writes_without_row_cap() {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
     enable_terminal_resize_reflow(&mut app);
     app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Disabled;
 
     app.begin_thread_switch_history_replay_buffer();
 
-    assert!(app.initial_history_replay_buffer.is_none());
+    let buffer = app
+        .initial_history_replay_buffer
+        .as_ref()
+        .expect("thread switch replay buffer should be active");
+    assert!(!buffer.render_from_transcript_tail);
+    assert!(buffer.defer_terminal_writes);
 }
 
 #[tokio::test]
@@ -5420,7 +5735,7 @@ async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
         terminal_title_invalid_items_warned: app.terminal_title_invalid_items_warned.clone(),
         session_telemetry: app.session_telemetry.clone(),
     });
-    app.replace_chat_widget(replacement);
+    app.replace_chat_widget(replacement).await;
 
     app.replay_thread_snapshot(
         ThreadEventSnapshot {
@@ -5706,34 +6021,38 @@ async fn shutdown_first_exit_returns_immediate_exit_when_shutdown_submit_fails()
 
 #[tokio::test]
 async fn shutdown_first_exit_persists_visible_draft_for_later_resume() {
-    let mut app = make_test_app().await;
-    let codex_home = tempdir().expect("codex home tempdir");
-    app.config.codex_home = codex_home.path().to_path_buf().abs();
-    let thread_id = ThreadId::new();
-    app.chat_widget.handle_thread_session(test_thread_session(
-        thread_id,
-        test_path_buf("/home/user/project"),
-    ));
-    app.chat_widget
-        .set_composer_text("draft to resume".to_string(), Vec::new(), Vec::new());
-    app.chat_widget.set_composer_cursor("draft".len());
+    Box::pin(async {
+        let mut app = make_test_app().await;
+        let codex_home = tempdir().expect("codex home tempdir");
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
+        let thread_id = ThreadId::new();
+        app.chat_widget.handle_thread_session(test_thread_session(
+            thread_id,
+            test_path_buf("/home/user/project"),
+        ));
+        app.chat_widget
+            .set_composer_text("draft to resume".to_string(), Vec::new(), Vec::new());
+        app.chat_widget.set_composer_cursor("draft".len());
 
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
-        app.chat_widget.config_ref(),
-    ))
-    .await
-    .expect("embedded app server");
-    let control = Box::pin(app.handle_exit_mode(&mut app_server, ExitMode::ShutdownFirst)).await;
+        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+            app.chat_widget.config_ref(),
+        ))
+        .await
+        .expect("embedded app server");
+        let control =
+            Box::pin(app.handle_exit_mode(&mut app_server, ExitMode::ShutdownFirst)).await;
 
-    assert!(matches!(
-        control,
-        AppRunControl::Exit(ExitReason::UserRequested)
-    ));
-    let draft = crate::reload_handoff::take_for_resume(codex_home.path(), thread_id)
-        .expect("load saved resume draft")
-        .expect("resume draft should exist");
-    assert_eq!(draft.text, "draft to resume");
-    assert_eq!(draft.cursor, "draft".len());
+        assert!(matches!(
+            control,
+            AppRunControl::Exit(ExitReason::UserRequested)
+        ));
+        let draft = crate::reload_handoff::take_for_resume(codex_home.path(), thread_id)
+            .expect("load saved resume draft")
+            .expect("resume draft should exist");
+        assert_eq!(draft.text, "draft to resume");
+        assert_eq!(draft.cursor, "draft".len());
+    })
+    .await;
 }
 
 #[tokio::test]

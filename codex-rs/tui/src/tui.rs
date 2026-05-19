@@ -3,6 +3,7 @@ use std::future::Future;
 use std::io::IsTerminal;
 use std::io::Result;
 use std::io::Stdout;
+use std::io::Write;
 use std::io::stdin;
 use std::io::stdout;
 use std::panic;
@@ -73,10 +74,19 @@ fn should_emit_notification(condition: NotificationCondition, terminal_focused: 
     }
 }
 
+fn preserve_viewport_bottom(area: &mut Rect, previous_bottom: u16) {
+    area.y = previous_bottom.saturating_sub(area.height);
+}
+
 #[cfg(test)]
 mod tests {
+    use super::CustomTerminal;
+    use super::Tui;
+    use super::preserve_viewport_bottom;
     use super::should_emit_notification;
+    use crate::test_backend::VT100Backend;
     use codex_config::types::NotificationCondition;
+    use ratatui::layout::Rect;
 
     #[test]
     fn unfocused_notification_condition_is_suppressed_when_focused() {
@@ -100,6 +110,48 @@ mod tests {
             NotificationCondition::Unfocused,
             /*terminal_focused*/ false
         ));
+    }
+
+    #[test]
+    fn thread_switch_clear_bottom_aligns_the_new_viewport_height() {
+        let backend = VT100Backend::new(/*width*/ 80, /*height*/ 24);
+        let mut terminal = CustomTerminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(
+            /*x*/ 0, /*y*/ 4, /*width*/ 80, /*height*/ 7,
+        ));
+
+        Tui::clear_thread_switch_viewport(&mut terminal, /*viewport_height*/ 5)
+            .expect("thread switch clear");
+
+        assert_eq!(
+            terminal.viewport_area,
+            Rect::new(
+                /*x*/ 0, /*y*/ 19, /*width*/ 80, /*height*/ 5
+            )
+        );
+    }
+
+    #[test]
+    fn inline_viewport_bottom_preservation_keeps_input_row_fixed_across_overlay_resize() {
+        let mut area = Rect::new(
+            /*x*/ 0, /*y*/ 10, /*width*/ 80, /*height*/ 7,
+        );
+        preserve_viewport_bottom(&mut area, /*previous_bottom*/ 16);
+        assert_eq!(
+            area,
+            Rect::new(
+                /*x*/ 0, /*y*/ 9, /*width*/ 80, /*height*/ 7
+            )
+        );
+
+        area.height = 6;
+        preserve_viewport_bottom(&mut area, /*previous_bottom*/ 16);
+        assert_eq!(
+            area,
+            Rect::new(
+                /*x*/ 0, /*y*/ 10, /*width*/ 80, /*height*/ 6
+            )
+        );
     }
 }
 
@@ -370,6 +422,7 @@ pub struct Tui {
     event_broker: Arc<EventBroker>,
     pub(crate) terminal: Terminal,
     pending_history_lines: Vec<Line<'static>>,
+    pending_thread_switch_clear: bool,
     alt_saved_viewport: Option<ratatui::layout::Rect>,
     #[cfg(unix)]
     suspend_context: SuspendContext,
@@ -381,6 +434,7 @@ pub struct Tui {
     notification_backend: Option<DesktopNotificationBackend>,
     notification_condition: NotificationCondition,
     is_zellij: bool,
+    preserve_inline_viewport_bottom_for_restore: bool,
     // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
     alt_screen_enabled: bool,
 }
@@ -408,6 +462,7 @@ impl Tui {
             event_broker: Arc::new(EventBroker::new()),
             terminal,
             pending_history_lines: vec![],
+            pending_thread_switch_clear: false,
             alt_saved_viewport: None,
             #[cfg(unix)]
             suspend_context: SuspendContext::new(),
@@ -417,6 +472,7 @@ impl Tui {
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             notification_condition: NotificationCondition::default(),
             is_zellij,
+            preserve_inline_viewport_bottom_for_restore: false,
             alt_screen_enabled: true,
         }
     }
@@ -590,6 +646,16 @@ impl Tui {
         self.pending_history_lines.clear();
     }
 
+    /// Clear thread-switch scrollback inside the next synchronized draw.
+    ///
+    /// The next frame also flushes replayed history and repaints the composer, so deferring the
+    /// raw terminal clear until that transaction keeps terminals from briefly showing an empty
+    /// screen between "old thread disappeared" and "new thread arrived."
+    pub(crate) fn schedule_thread_switch_clear(&mut self) {
+        self.pending_thread_switch_clear = true;
+        self.frame_requester().schedule_frame();
+    }
+
     /// Resize the inline viewport to `height` rows, scrolling content above it if
     /// the viewport would extend past the bottom of the screen. Returns `true` when
     /// the caller must invalidate the diff buffer (Zellij mode), because the scroll
@@ -598,6 +664,7 @@ impl Tui {
         terminal: &mut Terminal,
         height: u16,
         is_zellij: bool,
+        preserve_bottom: bool,
     ) -> Result<bool> {
         let size = terminal.size()?;
         let mut needs_full_repaint = false;
@@ -605,6 +672,9 @@ impl Tui {
         let mut area = terminal.viewport_area;
         area.height = height.min(size.height);
         area.width = size.width;
+        if preserve_bottom {
+            preserve_viewport_bottom(&mut area, terminal.viewport_area.bottom());
+        }
         if area.bottom() > size.height {
             let scroll_by = area.bottom() - size.height;
             if is_zellij {
@@ -654,6 +724,7 @@ impl Tui {
         terminal: &mut Terminal,
         height: u16,
         is_zellij: bool,
+        preserve_bottom: bool,
     ) -> Result<bool> {
         let size = terminal.size()?;
         let terminal_height_shrank = size.height < terminal.last_known_screen_size.height;
@@ -665,6 +736,9 @@ impl Tui {
         let mut area = terminal.viewport_area;
         area.height = height.min(size.height);
         area.width = size.width;
+        if preserve_bottom {
+            preserve_viewport_bottom(&mut area, previous_area.bottom());
+        }
         let mut needs_full_repaint = false;
 
         if area.bottom() > size.height {
@@ -679,7 +753,7 @@ impl Tui {
                 }
             }
             area.y = size.height - area.height;
-        } else if terminal_height_grew && viewport_was_bottom_aligned {
+        } else if !preserve_bottom && terminal_height_grew && viewport_was_bottom_aligned {
             area.y = size.height - area.height;
         }
 
@@ -719,6 +793,23 @@ impl Tui {
         height: u16,
         draw_fn: impl FnOnce(&mut custom_terminal::Frame),
     ) -> Result<()> {
+        self.draw_with_inline_bottom_preservation(height, /*preserve_bottom*/ false, draw_fn)
+    }
+
+    pub fn draw_preserving_inline_bottom(
+        &mut self,
+        height: u16,
+        draw_fn: impl FnOnce(&mut custom_terminal::Frame),
+    ) -> Result<()> {
+        self.draw_with_inline_bottom_preservation(height, /*preserve_bottom*/ true, draw_fn)
+    }
+
+    fn draw_with_inline_bottom_preservation(
+        &mut self,
+        height: u16,
+        preserve_bottom: bool,
+        draw_fn: impl FnOnce(&mut custom_terminal::Frame),
+    ) -> Result<()> {
         // If we are resuming from ^Z, we need to prepare the resume action now so we can apply it
         // in the synchronized update.
         #[cfg(unix)]
@@ -730,7 +821,10 @@ impl Tui {
         // the synchronized update, to avoid racing with the event reader.
         let mut pending_viewport_area = self.pending_viewport_area()?;
 
-        stdout().sync_update(|_| {
+        let preserve_bottom_requested = preserve_bottom;
+        let preserve_bottom =
+            preserve_bottom_requested || self.preserve_inline_viewport_bottom_for_restore;
+        let result = stdout().sync_update(|_| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
                 prepared.apply(&mut self.terminal)?;
@@ -742,8 +836,13 @@ impl Tui {
                 terminal.clear()?;
             }
 
-            let mut needs_full_repaint =
-                Self::update_inline_viewport(terminal, height, self.is_zellij)?;
+            let mut needs_full_repaint = if self.pending_thread_switch_clear {
+                self.pending_thread_switch_clear = false;
+                Self::clear_thread_switch_viewport(terminal, height)?;
+                true
+            } else {
+                Self::update_inline_viewport(terminal, height, self.is_zellij, preserve_bottom)?
+            };
             needs_full_repaint |= Self::flush_pending_history_lines(
                 terminal,
                 &mut self.pending_history_lines,
@@ -771,7 +870,9 @@ impl Tui {
             terminal.draw(|frame| {
                 draw_fn(frame);
             })
-        })?
+        })?;
+        self.preserve_inline_viewport_bottom_for_restore = preserve_bottom_requested;
+        result
     }
 
     /// Draw a frame using the resize-reflow viewport and history insertion rules.
@@ -784,6 +885,27 @@ impl Tui {
         height: u16,
         draw_fn: impl FnOnce(&mut custom_terminal::Frame),
     ) -> Result<()> {
+        self.draw_with_resize_reflow_and_inline_bottom_preservation(
+            height, /*preserve_bottom*/ false, draw_fn,
+        )
+    }
+
+    pub fn draw_with_resize_reflow_preserving_inline_bottom(
+        &mut self,
+        height: u16,
+        draw_fn: impl FnOnce(&mut custom_terminal::Frame),
+    ) -> Result<()> {
+        self.draw_with_resize_reflow_and_inline_bottom_preservation(
+            height, /*preserve_bottom*/ true, draw_fn,
+        )
+    }
+
+    fn draw_with_resize_reflow_and_inline_bottom_preservation(
+        &mut self,
+        height: u16,
+        preserve_bottom: bool,
+        draw_fn: impl FnOnce(&mut custom_terminal::Frame),
+    ) -> Result<()> {
         // If we are resuming from ^Z, we need to prepare the resume action now so we can apply it
         // in the synchronized update.
         #[cfg(unix)]
@@ -791,15 +913,28 @@ impl Tui {
             .suspend_context
             .prepare_resume_action(&mut self.terminal, &mut self.alt_saved_viewport);
 
-        stdout().sync_update(|_| {
+        let preserve_bottom_requested = preserve_bottom;
+        let preserve_bottom =
+            preserve_bottom_requested || self.preserve_inline_viewport_bottom_for_restore;
+        let result = stdout().sync_update(|_| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
                 prepared.apply(&mut self.terminal)?;
             }
 
             let terminal = &mut self.terminal;
-            let mut needs_full_repaint =
-                Self::update_inline_viewport_for_resize_reflow(terminal, height, self.is_zellij)?;
+            let mut needs_full_repaint = if self.pending_thread_switch_clear {
+                self.pending_thread_switch_clear = false;
+                Self::clear_thread_switch_viewport(terminal, height)?;
+                true
+            } else {
+                Self::update_inline_viewport_for_resize_reflow(
+                    terminal,
+                    height,
+                    self.is_zellij,
+                    preserve_bottom,
+                )?
+            };
             let flushed_history = Self::flush_pending_history_lines(
                 terminal,
                 &mut self.pending_history_lines,
@@ -828,7 +963,9 @@ impl Tui {
             terminal.draw(|frame| {
                 draw_fn(frame);
             })
-        })?
+        })?;
+        self.preserve_inline_viewport_bottom_for_restore = preserve_bottom_requested;
+        result
     }
 
     fn pending_viewport_area(&mut self) -> Result<Option<Rect>> {
@@ -851,5 +988,22 @@ impl Tui {
             }
         }
         Ok(None)
+    }
+
+    fn clear_thread_switch_viewport<B>(
+        terminal: &mut CustomTerminal<B>,
+        viewport_height: u16,
+    ) -> Result<()>
+    where
+        B: Backend + Write,
+    {
+        terminal.clear_scrollback_and_visible_screen_ansi()?;
+        let size = terminal.size()?;
+        let mut area = terminal.viewport_area;
+        area.width = size.width;
+        area.height = viewport_height.min(size.height);
+        area.y = size.height.saturating_sub(area.height);
+        terminal.set_viewport_area(area);
+        Ok(())
     }
 }

@@ -133,6 +133,12 @@ pub(crate) enum AppEvent {
     OpenAgentPicker,
     /// Switch the active thread to the selected agent.
     SelectAgentThread(ThreadId),
+    /// Cache a resume snapshot fetched off the UI path for a nearby loaded subagent.
+    LoadedSubagentSwitchPrewarmed {
+        primary_thread_id: ThreadId,
+        thread_id: ThreadId,
+        result: Box<Result<AppServerStartedThread, String>>,
+    },
 
     /// Fork the current thread into a transient side conversation.
     StartSide {
@@ -531,6 +537,10 @@ pub(crate) enum AppEvent {
 
     /// Finish buffering initial resume replay after all replay events have been queued.
     EndInitialHistoryReplayBuffer,
+
+    /// Finish a buffered agent-thread switch by clearing the old screen and inserting the new
+    /// transcript tail as one terminal update.
+    FinishThreadSwitchHistoryReplayBuffer,
 
     /// Replace the contiguous run of streaming `AgentMessageCell`s at the end of
     /// the transcript with a single `AgentMarkdownCell` that stores the raw

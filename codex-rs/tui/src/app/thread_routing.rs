@@ -176,20 +176,6 @@ impl App {
         true
     }
 
-    /// Mirrors the visible thread into the contextual footer row.
-    ///
-    /// The footer sometimes shows ambient context instead of an instructional hint. In multi-agent
-    /// sessions, that contextual row includes the currently viewed agent label. The label is
-    /// intentionally hidden until there is more than one known thread so single-thread sessions do
-    /// not spend footer space restating that the user is already on the main conversation.
-    pub(super) fn sync_active_agent_label(&mut self) {
-        let label = self
-            .agent_navigation
-            .active_agent_label(self.current_displayed_thread_id(), self.primary_thread_id);
-        self.chat_widget.set_active_agent_label(label);
-        self.sync_side_thread_ui();
-    }
-
     pub(super) async fn thread_cwd(&self, thread_id: ThreadId) -> Option<AbsolutePathBuf> {
         let channel = self.thread_event_channels.get(&thread_id)?;
         let store = channel.store.lock().await;
@@ -778,6 +764,49 @@ impl App {
             .collect();
 
         self.chat_widget.set_pending_thread_approvals(threads);
+        self.refresh_agent_activity_label().await;
+    }
+
+    pub(super) async fn refresh_agent_activity_label(&mut self) {
+        let working_subagents = self.working_subagent_count().await;
+        let label = self.agent_navigation.active_agent_label(
+            self.current_displayed_thread_id(),
+            self.primary_thread_id,
+            working_subagents,
+        );
+        self.chat_widget.set_active_agent_label(label);
+        if let Some(strip) = self.agent_navigation.agent_neighbor_strip(
+            self.current_displayed_thread_id(),
+            self.primary_thread_id,
+            self.current_displayed_thread_id(),
+        ) {
+            self.chat_widget
+                .show_agent_navigation_strip(strip, Duration::from_millis(900));
+        }
+        self.sync_side_thread_ui();
+    }
+
+    async fn working_subagent_count(&self) -> usize {
+        let subagent_thread_ids = self
+            .agent_navigation
+            .ordered_threads()
+            .into_iter()
+            .filter(|(_, entry)| !entry.is_closed)
+            .map(|(thread_id, _)| thread_id)
+            .filter(|thread_id| Some(*thread_id) != self.primary_thread_id)
+            .filter(|thread_id| !self.side_threads.contains_key(thread_id))
+            .collect::<Vec<_>>();
+        let mut working = 0;
+        for thread_id in subagent_thread_ids {
+            let Some(channel) = self.thread_event_channels.get(&thread_id) else {
+                continue;
+            };
+            let store = channel.store.lock().await;
+            if store.active_turn_id().is_some() {
+                working += 1;
+            }
+        }
+        working
     }
 
     pub(super) async fn refresh_side_parent_status_from_store(&mut self, thread_id: ThreadId) {
@@ -819,6 +848,7 @@ impl App {
             (guard.active, guard.side_parent_pending_status())
         };
         let notification_status_change = SideParentStatusChange::for_notification(&notification);
+        let thread_closed = matches!(notification, ServerNotification::ThreadClosed(_));
 
         if should_send {
             match sender.try_send(ThreadBufferedEvent::Notification(notification)) {
@@ -839,6 +869,9 @@ impl App {
             self.set_side_parent_status(thread_id, Some(status));
         } else if let Some(change) = notification_status_change {
             self.apply_side_parent_status_change(thread_id, change);
+        }
+        if thread_closed {
+            self.mark_agent_picker_thread_closed(thread_id).await;
         }
         self.refresh_pending_thread_approvals().await;
         Ok(())
@@ -891,7 +924,8 @@ impl App {
                         thread.agent_nickname,
                         thread.agent_role,
                         /*is_closed*/ false,
-                    );
+                    )
+                    .await;
                 }
                 Err(err) => {
                     tracing::warn!(
@@ -933,7 +967,8 @@ impl App {
             notification.thread.agent_nickname.clone(),
             notification.thread.agent_role.clone(),
             /*is_closed*/ false,
-        );
+        )
+        .await;
         Some(session)
     }
 
@@ -1041,7 +1076,8 @@ impl App {
         self.upsert_agent_picker_thread(
             thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
             /*is_closed*/ false,
-        );
+        )
+        .await;
         let channel = self.ensure_thread_channel(thread_id);
         {
             let mut store = channel.store.lock().await;
@@ -1241,12 +1277,8 @@ impl App {
         snapshot: ThreadEventSnapshot,
         resume_restored_queue: bool,
     ) {
-        let should_buffer_replay = self.terminal_resize_reflow_enabled()
-            && (!snapshot.turns.is_empty() || !snapshot.events.is_empty());
-        if should_buffer_replay {
-            self.app_event_tx
-                .send(AppEvent::BeginThreadSwitchHistoryReplayBuffer);
-        }
+        self.app_event_tx
+            .send(AppEvent::BeginThreadSwitchHistoryReplayBuffer);
         let suppress_replay_notices =
             replay_filter::snapshot_has_pending_interactive_request(&snapshot);
         if let Some(session) = snapshot.session {
@@ -1272,10 +1304,8 @@ impl App {
             }
             self.handle_thread_event_replay(event);
         }
-        if should_buffer_replay {
-            self.app_event_tx
-                .send(AppEvent::EndInitialHistoryReplayBuffer);
-        }
+        self.app_event_tx
+            .send(AppEvent::FinishThreadSwitchHistoryReplayBuffer);
         self.chat_widget
             .set_queue_autosend_suppressed(/*suppressed*/ false);
         self.chat_widget
@@ -1462,7 +1492,7 @@ impl App {
             && let Some((closed_thread_id, primary_thread_id)) =
                 self.active_non_primary_shutdown_target(notification)
         {
-            self.mark_agent_picker_thread_closed(closed_thread_id);
+            self.mark_agent_picker_thread_closed(closed_thread_id).await;
             if self.side_threads.contains_key(&closed_thread_id) {
                 self.discard_closed_side_thread(closed_thread_id).await;
                 self.select_agent_thread(tui, app_server, primary_thread_id)

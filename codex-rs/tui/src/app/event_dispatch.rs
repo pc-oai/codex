@@ -210,6 +210,10 @@ impl App {
             AppEvent::EndInitialHistoryReplayBuffer => {
                 self.finish_initial_history_replay_buffer(tui);
             }
+            AppEvent::FinishThreadSwitchHistoryReplayBuffer => {
+                tui.schedule_thread_switch_clear();
+                self.finish_initial_history_replay_buffer(tui);
+            }
             AppEvent::ConsolidateAgentMessage { source, cwd } => {
                 if !self.terminal_resize_reflow_enabled() {
                     self.transcript_reflow.clear();
@@ -1673,6 +1677,14 @@ impl App {
             AppEvent::SelectAgentThread(thread_id) => {
                 self.select_agent_thread_and_discard_side(tui, app_server, thread_id)
                     .await?;
+            }
+            AppEvent::LoadedSubagentSwitchPrewarmed {
+                primary_thread_id,
+                thread_id,
+                result,
+            } => {
+                self.cache_loaded_subagent_switch_prewarm(primary_thread_id, thread_id, *result)
+                    .await;
             }
             AppEvent::StartSide {
                 parent_thread_id,

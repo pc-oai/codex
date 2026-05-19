@@ -1419,8 +1419,13 @@ const MAIN_RESERVED_BINDINGS: &[(&str, KeyBinding)] = &[
         "fixed.return_from_side_or_backtrack",
         key_hint::plain(KeyCode::Esc),
     ),
-    ("fixed.previous_agent", key_hint::alt(KeyCode::Left)),
-    ("fixed.next_agent", key_hint::alt(KeyCode::Right)),
+    ("fixed.rotate_agent", key_hint::ctrl(KeyCode::Char('s'))),
+    (
+        "fixed.open_agent_picker",
+        key_hint::ctrl(KeyCode::Char('a')),
+    ),
+    ("fixed.previous_agent", key_hint::alt(KeyCode::Char('['))),
+    ("fixed.next_agent", key_hint::alt(KeyCode::Char(']'))),
     ("fixed.slash_command", key_hint::plain(KeyCode::Char('/'))),
     ("fixed.shell_command", key_hint::plain(KeyCode::Char('!'))),
     ("fixed.file_paths", key_hint::plain(KeyCode::Char('@'))),
@@ -2013,6 +2018,22 @@ mod tests {
     }
 
     #[test]
+    fn rejects_main_bindings_that_collide_with_agent_rotation_shortcuts() {
+        let mut keymap = TuiKeymap::default();
+        keymap.composer.submit = Some(one("ctrl-s"));
+
+        expect_conflict(&keymap, "composer.submit", "fixed.rotate_agent");
+    }
+
+    #[test]
+    fn rejects_main_bindings_that_collide_with_agent_picker_shortcut() {
+        let mut keymap = TuiKeymap::default();
+        keymap.composer.submit = Some(one("ctrl-a"));
+
+        expect_conflict(&keymap, "composer.submit", "fixed.open_agent_picker");
+    }
+
+    #[test]
     fn rejects_pager_bindings_that_collide_with_transcript_backtrack_keys() {
         let mut keymap = TuiKeymap::default();
         keymap.pager.close = Some(one("left"));
@@ -2076,6 +2097,18 @@ mod tests {
         assert_eq!(
             parse_keybinding("-").map(|binding| binding.parts()),
             Some((KeyCode::Char('-'), KeyModifiers::NONE))
+        );
+    }
+
+    #[test]
+    fn parses_alt_bracket_agent_navigation_specs() {
+        assert_eq!(
+            parse_keybinding("alt-[").map(|binding| binding.parts()),
+            Some((KeyCode::Char('['), KeyModifiers::ALT))
+        );
+        assert_eq!(
+            parse_keybinding("alt-]").map(|binding| binding.parts()),
+            Some((KeyCode::Char(']'), KeyModifiers::ALT))
         );
     }
 

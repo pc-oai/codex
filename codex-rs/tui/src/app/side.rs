@@ -375,7 +375,7 @@ impl App {
         } else {
             self.refresh_pending_thread_approvals().await;
         }
-        self.sync_active_agent_label();
+        self.refresh_agent_activity_label().await;
     }
 
     async fn interrupt_side_thread(

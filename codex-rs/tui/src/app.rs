@@ -20,9 +20,6 @@ use crate::app_server_session::app_server_rate_limit_snapshots;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::McpServerElicitationFormRequest;
-use crate::bottom_pane::SelectionItem;
-use crate::bottom_pane::SelectionViewParams;
-use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
 use crate::chatwidget::ReplayKind;
@@ -53,10 +50,10 @@ use crate::model_catalog::ModelCatalog;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
 use crate::model_migration::run_model_migration_prompt;
-use crate::multi_agents::agent_picker_status_dot_spans;
 use crate::multi_agents::format_agent_picker_item_name;
 use crate::multi_agents::next_agent_shortcut_matches;
 use crate::multi_agents::previous_agent_shortcut_matches;
+use crate::multi_agents::rotate_agent_shortcut_matches;
 use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
@@ -155,7 +152,6 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
-use ratatui::backend::Backend;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
@@ -430,6 +426,7 @@ struct SessionSummary {
 struct InitialHistoryReplayBuffer {
     retained_lines: VecDeque<Line<'static>>,
     render_from_transcript_tail: bool,
+    defer_terminal_writes: bool,
 }
 
 pub(crate) struct App {
@@ -1531,8 +1528,30 @@ See the Codex keymap documentation for supported actions and examples."
                     self.chat_widget.pre_draw_tick();
                     let desired_height =
                         self.chat_widget.desired_height(tui.terminal.size()?.width);
-                    if terminal_resize_reflow_enabled {
+                    let preserve_inline_bottom = self.chat_widget.agent_menu_overlay_active();
+                    if terminal_resize_reflow_enabled && preserve_inline_bottom {
+                        tui.draw_with_resize_reflow_preserving_inline_bottom(
+                            desired_height,
+                            |frame| {
+                                let area = frame.area();
+                                self.chat_widget.render(area, frame.buffer);
+                                if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
+                                    frame.set_cursor_style(self.chat_widget.cursor_style(area));
+                                    frame.set_cursor_position((x, y));
+                                }
+                            },
+                        )?;
+                    } else if terminal_resize_reflow_enabled {
                         tui.draw_with_resize_reflow(desired_height, |frame| {
+                            let area = frame.area();
+                            self.chat_widget.render(area, frame.buffer);
+                            if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
+                                frame.set_cursor_style(self.chat_widget.cursor_style(area));
+                                frame.set_cursor_position((x, y));
+                            }
+                        })?;
+                    } else if preserve_inline_bottom {
+                        tui.draw_preserving_inline_bottom(desired_height, |frame| {
                             let area = frame.area();
                             self.chat_widget.render(area, frame.buffer);
                             if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
