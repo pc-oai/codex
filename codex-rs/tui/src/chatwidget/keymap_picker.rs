@@ -15,7 +15,9 @@ use codex_config::types::TuiKeymap;
 use codex_terminal_detection::terminal_info;
 
 use super::ChatWidget;
+use super::queued_message_discard_hint_binding;
 use super::queued_message_edit_hint_binding;
+use super::queued_message_steer_hint_binding;
 use crate::app_event::KeymapEditIntent;
 use crate::keymap::RuntimeKeymap;
 use crate::keymap_setup;
@@ -173,8 +175,16 @@ impl ChatWidget {
             &self.chat_keymap.edit_queued_message,
             terminal_info(),
         );
+        let queued_message_steer_hint_binding =
+            queued_message_steer_hint_binding(&self.chat_keymap.steer_queued_message);
+        let queued_message_discard_hint_binding =
+            queued_message_discard_hint_binding(&self.chat_keymap.discard_queued_message);
         self.bottom_pane
             .set_queued_message_edit_binding(self.queued_message_edit_hint_binding);
+        self.bottom_pane
+            .set_queued_message_discard_binding(queued_message_discard_hint_binding);
+        self.bottom_pane
+            .set_queued_message_steer_binding(queued_message_steer_hint_binding);
         self.bottom_pane.set_keymap_bindings(runtime_keymap);
         self.request_redraw();
     }
