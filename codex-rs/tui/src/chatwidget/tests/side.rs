@@ -92,6 +92,17 @@ async fn slash_rename_with_args_is_rejected_for_side_threads() {
 }
 
 #[tokio::test]
+async fn direct_rename_is_rejected_for_side_threads() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_thread_rename_block_message(
+        "Side conversations are ephemeral and cannot be renamed.".to_string(),
+    );
+
+    assert!(!chat.rename_thread_from_text("investigate"));
+    assert_side_rename_rejected(&mut rx, &mut op_rx);
+}
+
+#[tokio::test]
 async fn slash_commands_without_side_flag_are_rejected_for_side_threads() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_side_conversation_active(/*active*/ true);
