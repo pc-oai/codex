@@ -25,6 +25,7 @@ use codex_config::Sourced;
 use codex_config::ThreadConfigLoader;
 use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::config_toml::ConfigToml;
+use codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT;
 use codex_config::config_toml::DEFAULT_PROJECT_DOC_MAX_BYTES;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
@@ -812,6 +813,10 @@ pub struct Config {
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: bool,
+
+    /// Maximum pasted text characters to render inline in the TUI composer
+    /// before switching to a compact placeholder.
+    pub paste_text_inline_char_limit: usize,
 
     /// When `false`, disables analytics across Codex product surfaces in this machine.
     /// Voluntarily left as Optional because the default value might depend on the client.
@@ -3144,6 +3149,9 @@ impl Config {
             notices,
             check_for_update_on_startup,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
+            paste_text_inline_char_limit: cfg
+                .paste_text_inline_char_limit
+                .unwrap_or(DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT),
             analytics_enabled: config_profile
                 .analytics
                 .as_ref()

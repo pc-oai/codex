@@ -11,6 +11,7 @@ use codex_config::config_toml::AgentRoleToml;
 use codex_config::config_toml::AgentsToml;
 use codex_config::config_toml::AutoReviewToml;
 use codex_config::config_toml::ConfigToml;
+use codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
@@ -598,6 +599,49 @@ status_line_use_colors = false
         !cfg.tui
             .expect("tui config should deserialize")
             .status_line_use_colors
+    );
+}
+
+#[test]
+fn config_toml_deserializes_paste_text_inline_char_limit() {
+    let toml = r#"
+paste_text_inline_char_limit = 4096
+"#;
+    let cfg: ConfigToml = toml::from_str(toml)
+        .expect("TOML deserialization should succeed for pasted text inline char limit");
+
+    assert_eq!(cfg.paste_text_inline_char_limit, Some(4096));
+}
+
+#[tokio::test]
+async fn runtime_config_resolves_paste_text_inline_char_limit() {
+    let cfg = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            paste_text_inline_char_limit: Some(4096),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config with pasted text inline char limit");
+
+    assert_eq!(cfg.paste_text_inline_char_limit, 4096);
+}
+
+#[tokio::test]
+async fn runtime_config_defaults_paste_text_inline_char_limit() {
+    let cfg = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load default config");
+
+    assert_eq!(
+        cfg.paste_text_inline_char_limit,
+        DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT
     );
 }
 
@@ -6470,6 +6514,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             notices: Default::default(),
             check_for_update_on_startup: true,
             disable_paste_burst: false,
+            paste_text_inline_char_limit: DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
@@ -6675,6 +6720,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         notices: Default::default(),
         check_for_update_on_startup: true,
         disable_paste_burst: false,
+        paste_text_inline_char_limit: DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
         tui_notifications: Default::default(),
         animations: true,
         show_tooltips: true,
@@ -6834,6 +6880,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         notices: Default::default(),
         check_for_update_on_startup: true,
         disable_paste_burst: false,
+        paste_text_inline_char_limit: DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
         tui_notifications: Default::default(),
         animations: true,
         show_tooltips: true,
@@ -6978,6 +7025,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         notices: Default::default(),
         check_for_update_on_startup: true,
         disable_paste_burst: false,
+        paste_text_inline_char_limit: DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
         tui_notifications: Default::default(),
         animations: true,
         show_tooltips: true,

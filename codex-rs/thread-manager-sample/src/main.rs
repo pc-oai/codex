@@ -266,6 +266,8 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         notices: Notice::default(),
         check_for_update_on_startup: false,
         disable_paste_burst: false,
+        paste_text_inline_char_limit:
+            codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
         analytics_enabled: Some(false),
         feedback_enabled: false,
         tool_suggest: ToolSuggestConfig::default(),

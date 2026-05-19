@@ -219,6 +219,7 @@ use crate::skills_helpers::skill_display_name;
 use crate::tui::FrameRequester;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use codex_app_server_protocol::AppInfo;
+use codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT;
 #[cfg(test)]
 use codex_core_skills::model::SkillInterface;
 use codex_core_skills::model::SkillMetadata;
@@ -238,9 +239,9 @@ use std::time::Instant;
 #[cfg(test)]
 use ratatui::style::Color;
 
-/// If the pasted content exceeds this number of characters, replace it with a
-/// placeholder in the UI.
-const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
+/// Default inline-display limit for pasted text. Runtime config can override
+/// this per composer instance.
+const LARGE_PASTE_CHAR_THRESHOLD: usize = DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT;
 
 fn user_input_too_large_message(actual_chars: usize) -> String {
     format!(
@@ -354,6 +355,9 @@ pub(crate) struct ChatComposer {
     paste_burst: PasteBurst,
     // When true, disables paste-burst logic and inserts characters immediately.
     disable_paste_burst: bool,
+    /// Pasted text longer than this is shown as a compact placeholder while the
+    /// full text remains available for submission.
+    paste_text_inline_char_limit: usize,
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
     previous_message_edit_mode: bool,
@@ -549,6 +553,7 @@ impl ChatComposer {
             input_disabled_placeholder: None,
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
+            paste_text_inline_char_limit: LARGE_PASTE_CHAR_THRESHOLD,
             footer_mode: FooterMode::ComposerEmpty,
             footer_hint_override: None,
             previous_message_edit_mode: false,
@@ -919,7 +924,7 @@ impl ChatComposer {
     ///
     /// Behavior:
     ///
-    /// - If the paste is larger than `LARGE_PASTE_CHAR_THRESHOLD` chars, inserts a placeholder
+    /// - If the paste is larger than the configured inline-display limit, inserts a placeholder
     ///   element (expanded on submit) and stores the full text in `pending_pastes`.
     /// - Otherwise, if the paste looks like an image path, attaches the image and inserts a
     ///   trailing space so the user can keep typing naturally.
@@ -930,7 +935,7 @@ impl ChatComposer {
     pub fn handle_paste(&mut self, pasted: String) -> bool {
         let pasted = pasted.replace("\r\n", "\n").replace('\r', "\n");
         let char_count = pasted.chars().count();
-        if char_count > LARGE_PASTE_CHAR_THRESHOLD {
+        if char_count > self.paste_text_inline_char_limit {
             let placeholder = self.next_large_paste_placeholder(char_count);
             self.textarea.insert_element(&placeholder);
             self.pending_pastes.push((placeholder, pasted));
@@ -997,6 +1002,10 @@ impl ChatComposer {
             }
             self.paste_burst.clear_after_explicit_paste();
         }
+    }
+
+    pub(crate) fn set_paste_text_inline_char_limit(&mut self, limit: usize) {
+        self.paste_text_inline_char_limit = limit;
     }
 
     /// Replace the composer content with text from an external editor.
@@ -7506,6 +7515,26 @@ mod tests {
     }
 
     #[test]
+    fn paste_text_inline_char_limit_can_keep_larger_paste_visible() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_paste_text_inline_char_limit(LARGE_PASTE_CHAR_THRESHOLD + 10);
+
+        let pasted = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 1);
+        composer.handle_paste(pasted.clone());
+
+        assert_eq!(composer.textarea.text(), pasted);
+        assert!(composer.pending_pastes.is_empty());
+    }
+
+    #[test]
     fn ui_snapshots() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
@@ -7563,6 +7592,18 @@ mod tests {
 
             insta::assert_snapshot!(name, terminal.backend());
         }
+    }
+
+    #[test]
+    fn paste_text_inline_char_limit_snapshot() {
+        snapshot_composer_state(
+            "paste_text_inline_char_limit_placeholder",
+            /*enhanced_keys_supported*/ false,
+            |composer| {
+                composer.set_paste_text_inline_char_limit(/*limit*/ 4);
+                composer.handle_paste("hello".to_string());
+            },
+        );
     }
 
     #[test]

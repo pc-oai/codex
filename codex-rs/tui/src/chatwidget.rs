@@ -4987,6 +4987,7 @@ impl ChatWidget {
                 enhanced_keys_supported,
                 placeholder_text: placeholder.clone(),
                 disable_paste_burst: config.disable_paste_burst,
+                paste_text_inline_char_limit: config.paste_text_inline_char_limit,
                 animations_enabled: config.animations,
                 skills: None,
             }),

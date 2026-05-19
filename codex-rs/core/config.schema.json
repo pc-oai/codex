@@ -4360,6 +4360,12 @@
       ],
       "description": "OTEL configuration."
     },
+    "paste_text_inline_char_limit": {
+      "description": "Maximum pasted text characters to render inline in the TUI composer. Longer pasted blocks are kept intact for submission, but shown as a compact placeholder while editing.",
+      "format": "uint",
+      "minimum": 0.0,
+      "type": "integer"
+    },
     "permissions": {
       "allOf": [
         {

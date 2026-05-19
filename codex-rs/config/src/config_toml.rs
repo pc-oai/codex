@@ -79,6 +79,10 @@ const fn default_project_doc_max_bytes() -> Option<usize> {
     Some(DEFAULT_PROJECT_DOC_MAX_BYTES)
 }
 
+/// Number of pasted text characters Codex shows inline before switching to a
+/// compact `[Pasted Content … chars]` placeholder in the TUI composer.
+pub const DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT: usize = 1000;
+
 fn default_project_doc_fallback_filenames() -> Option<Vec<String>> {
     Some(Vec::new())
 }
@@ -424,6 +428,11 @@ pub struct ConfigToml {
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: Option<bool>,
+
+    /// Maximum pasted text characters to render inline in the TUI composer.
+    /// Longer pasted blocks are kept intact for submission, but shown as a
+    /// compact placeholder while editing.
+    pub paste_text_inline_char_limit: Option<usize>,
 
     /// When `false`, disables analytics across Codex product surfaces in this machine.
     /// Defaults to `true`.

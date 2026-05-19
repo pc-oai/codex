@@ -166,6 +166,8 @@ pub(super) async fn make_chatwidget_manual(
         enhanced_keys_supported: false,
         placeholder_text: "Ask Codex to do anything".to_string(),
         disable_paste_burst: false,
+        paste_text_inline_char_limit:
+            codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
         animations_enabled: cfg.animations,
         skills: None,
     });

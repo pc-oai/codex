@@ -238,6 +238,7 @@ pub(crate) struct BottomPaneParams {
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) placeholder_text: String,
     pub(crate) disable_paste_burst: bool,
+    pub(crate) paste_text_inline_char_limit: usize,
     pub(crate) animations_enabled: bool,
     pub(crate) skills: Option<Vec<SkillMetadata>>,
 }
@@ -251,6 +252,7 @@ impl BottomPane {
             enhanced_keys_supported,
             placeholder_text,
             disable_paste_burst,
+            paste_text_inline_char_limit,
             animations_enabled,
             skills,
         } = params;
@@ -261,6 +263,7 @@ impl BottomPane {
             placeholder_text,
             disable_paste_burst,
         );
+        composer.set_paste_text_inline_char_limit(paste_text_inline_char_limit);
         composer.set_frame_requester(frame_requester.clone());
         let keymap = RuntimeKeymap::defaults();
         composer.set_keymap_bindings(&keymap);
@@ -1740,6 +1743,8 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst,
+            paste_text_inline_char_limit:
+                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         })
@@ -1840,6 +1845,8 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: true,
+            paste_text_inline_char_limit:
+                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -1860,6 +1867,8 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: true,
+            paste_text_inline_char_limit:
+                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -1891,6 +1900,8 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            paste_text_inline_char_limit:
+                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2141,6 +2152,8 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            paste_text_inline_char_limit:
+                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2208,6 +2221,8 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            paste_text_inline_char_limit:
+                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2235,6 +2250,8 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            paste_text_inline_char_limit:
+                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2266,6 +2283,8 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            paste_text_inline_char_limit:
+                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2289,6 +2308,8 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            paste_text_inline_char_limit:
+                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2318,6 +2339,8 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            paste_text_inline_char_limit:
+                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2355,6 +2378,8 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            paste_text_inline_char_limit:
+                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2387,6 +2412,8 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            paste_text_inline_char_limit:
+                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2418,6 +2445,8 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            paste_text_inline_char_limit:
+                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2447,6 +2476,8 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            paste_text_inline_char_limit:
+                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2470,6 +2501,8 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            paste_text_inline_char_limit:
+                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(vec![SkillMetadata {
                 name: "test-skill".to_string(),
@@ -2518,6 +2551,8 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            paste_text_inline_char_limit:
+                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2553,6 +2588,8 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            paste_text_inline_char_limit:
+                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2589,6 +2626,8 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            paste_text_inline_char_limit:
+                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2637,6 +2676,8 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            paste_text_inline_char_limit:
+                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2724,6 +2765,8 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            paste_text_inline_char_limit:
+                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2772,6 +2815,8 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            paste_text_inline_char_limit:
+                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2850,6 +2895,8 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            paste_text_inline_char_limit:
+                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
