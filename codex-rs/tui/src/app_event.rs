@@ -193,6 +193,9 @@ pub(crate) enum AppEvent {
     /// Request to restart the current session in a fresh Codex process.
     ReloadCurrentSession,
 
+    /// Toggle the main-view transcript between full history and message-only scrollback.
+    ToggleCondensedTranscriptView,
+
     /// Copy the most recent user request in the visible transcript.
     CopyLastRequest,
 

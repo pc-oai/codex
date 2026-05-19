@@ -46,6 +46,7 @@ use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use ratatui::text::Line;
 
 const NO_PREVIOUS_MESSAGE_TO_EDIT: &str = "No previous message to edit.";
 
@@ -298,12 +299,24 @@ impl App {
     /// Re-render the full transcript into the terminal scrollback in one call.
     /// Useful when switching sessions to ensure prior history remains visible.
     pub(crate) fn render_transcript_once(&mut self, tui: &mut tui::Tui) {
-        if !self.transcript_cells.is_empty() {
-            let width = tui.terminal.last_known_screen_size.width;
-            for cell in &self.transcript_cells {
-                tui.insert_history_lines(cell.display_lines(width));
-            }
+        let width = tui.terminal.last_known_screen_size.width;
+        let lines = self.render_transcript_lines_for_scrollback_replay(width);
+        if !lines.is_empty() {
+            tui.insert_history_lines(lines);
         }
+    }
+
+    /// Render the current main-view transcript projection with normal inter-cell spacing.
+    pub(super) fn render_transcript_lines_for_scrollback_replay(
+        &mut self,
+        width: u16,
+    ) -> Vec<Line<'static>> {
+        self.reset_history_emission_state();
+        let transcript_cells = self.transcript_cells.clone();
+        transcript_cells
+            .into_iter()
+            .flat_map(|cell| self.display_lines_for_history_insert(cell.as_ref(), width))
+            .collect()
     }
 
     /// Initialize backtrack state and show composer hint.

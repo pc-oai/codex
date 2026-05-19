@@ -982,6 +982,8 @@ pub(crate) struct ChatWidget {
     plan_delta_buffer: String,
     // True while a plan item is streaming.
     plan_item_active: bool,
+    // Whether the main terminal scrollback is projected as user + assistant messages only.
+    condensed_transcript_view: bool,
     // Runtime metrics accumulated across delta snapshots for the active turn.
     turn_runtime_metrics: RuntimeMetricsSummary,
     // Last completed turn's metrics, retained as a dim reference until the next turn reports its
@@ -5152,6 +5154,7 @@ impl ChatWidget {
             last_plan_progress: None,
             plan_delta_buffer: String::new(),
             plan_item_active: false,
+            condensed_transcript_view: false,
             turn_runtime_metrics: RuntimeMetricsSummary::default(),
             last_turn_runtime_metrics: None,
             last_rendered_width: std::cell::Cell::new(None),
@@ -11272,14 +11275,23 @@ impl ChatWidget {
         self.token_info = None;
     }
 
+    pub(crate) fn set_condensed_transcript_view(&mut self, condensed: bool) {
+        self.condensed_transcript_view = condensed;
+        self.request_redraw();
+    }
+
     fn as_renderable(&self) -> RenderableItem<'_> {
         let active_cell_renderable = match &self.active_cell {
+            Some(cell) if self.condensed_transcript_view && !cell.show_in_condensed_main_view() => {
+                RenderableItem::Owned(Box::new(()))
+            }
             Some(cell) => RenderableItem::Borrowed(cell).inset(Insets::tlbr(
                 /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
             )),
             None => RenderableItem::Owned(Box::new(())),
         };
         let active_hook_cell_renderable = match &self.active_hook_cell {
+            Some(_) if self.condensed_transcript_view => RenderableItem::Owned(Box::new(())),
             Some(cell) if cell.should_render() => {
                 RenderableItem::Borrowed(cell).inset(Insets::tlbr(
                     /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,

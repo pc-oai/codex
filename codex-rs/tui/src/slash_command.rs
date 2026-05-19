@@ -46,6 +46,7 @@ pub enum SlashCommand {
     Init,
     #[strum(to_string = "compact", serialize = "c")]
     Compact,
+    Condensed,
     Plan,
     Goal,
     Collab,
@@ -97,6 +98,9 @@ impl SlashCommand {
             SlashCommand::New => "start a new chat during a conversation",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
+            SlashCommand::Condensed => {
+                "toggle message-only main transcript view in terminal scrollback"
+            }
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Rename => "rename the current thread",
             SlashCommand::Retitle => "generate a concise title from this conversation",
@@ -268,7 +272,8 @@ impl SlashCommand {
             | SlashCommand::Quit
             | SlashCommand::Exit
             | SlashCommand::Delete
-            | SlashCommand::Side => true,
+            | SlashCommand::Side
+            | SlashCommand::Condensed => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
             SlashCommand::Realtime => true,
@@ -366,6 +371,15 @@ mod tests {
     fn em_alias_parses_to_emoji_command() {
         assert_eq!(SlashCommand::Emoji.command(), "emoji");
         assert_eq!(SlashCommand::from_str("em"), Ok(SlashCommand::Emoji));
+    }
+
+    #[test]
+    fn condensed_command_parses_to_condensed_command() {
+        assert_eq!(SlashCommand::Condensed.command(), "condensed");
+        assert_eq!(
+            SlashCommand::from_str("condensed"),
+            Ok(SlashCommand::Condensed)
+        );
     }
 
     #[test]

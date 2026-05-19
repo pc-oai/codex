@@ -65,16 +65,20 @@ pub(super) fn trailing_run_start<T: 'static>(transcript_cells: &[Arc<dyn History
 }
 
 impl App {
-    pub(super) fn reset_history_emission_state(&mut self) {
+    pub(crate) fn reset_history_emission_state(&mut self) {
         self.has_emitted_history_lines = false;
         self.deferred_history_lines.clear();
     }
 
-    fn display_lines_for_history_insert(
+    pub(crate) fn display_lines_for_history_insert(
         &mut self,
         cell: &dyn HistoryCell,
         width: u16,
     ) -> Vec<Line<'static>> {
+        if self.condensed_transcript_view && !cell.show_in_condensed_main_view() {
+            return Vec::new();
+        }
+
         let mut display = cell.display_lines(width);
         if !display.is_empty() && !cell.is_stream_continuation() {
             if self.has_emitted_history_lines {
@@ -125,13 +129,12 @@ impl App {
     /// defer terminal writes until the replay is complete and reuse the resize-reflow tail renderer
     /// so only the rows the terminal would retain are formatted and inserted.
     pub(super) fn begin_thread_switch_history_replay_buffer(&mut self) {
-        if self.terminal_resize_reflow_enabled()
-            && self.resize_reflow_max_rows().is_some()
-            && self.overlay.is_none()
-        {
+        if self.overlay.is_none() {
             self.initial_history_replay_buffer = Some(InitialHistoryReplayBuffer {
                 retained_lines: VecDeque::new(),
-                render_from_transcript_tail: true,
+                render_from_transcript_tail: self.terminal_resize_reflow_enabled()
+                    && self.resize_reflow_max_rows().is_some(),
+                defer_terminal_writes: true,
             });
         }
     }
@@ -158,7 +161,9 @@ impl App {
         }
 
         let retained_lines = buffer.retained_lines.into_iter().collect::<Vec<_>>();
-        tui.insert_history_lines(retained_lines);
+        if !retained_lines.is_empty() {
+            tui.insert_history_lines(retained_lines);
+        }
     }
 
     pub(super) fn insert_history_cell_lines_with_initial_replay_buffer(
@@ -185,6 +190,8 @@ impl App {
         if let Some(buffer) = &mut self.initial_history_replay_buffer {
             if let Some(max_rows) = max_rows {
                 Self::buffer_initial_history_replay_display_lines(buffer, display, max_rows);
+            } else if buffer.defer_terminal_writes {
+                buffer.retained_lines.extend(display);
             } else if self.overlay.is_some() {
                 self.deferred_history_lines.extend(display);
             } else {
@@ -448,6 +455,9 @@ impl App {
         while start > 0 {
             start -= 1;
             let cell = self.transcript_cells[start].clone();
+            if self.condensed_transcript_view && !cell.show_in_condensed_main_view() {
+                continue;
+            }
             let lines = cell.display_lines(width);
             rendered_rows += lines.len();
             cell_displays.push_front(ReflowCellDisplay {
@@ -467,6 +477,9 @@ impl App {
         {
             start -= 1;
             let cell = self.transcript_cells[start].clone();
+            if self.condensed_transcript_view && !cell.show_in_condensed_main_view() {
+                continue;
+            }
             cell_displays.push_front(ReflowCellDisplay {
                 lines: cell.display_lines(width),
                 is_stream_continuation: cell.is_stream_continuation(),

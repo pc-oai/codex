@@ -300,6 +300,7 @@ pub(super) async fn make_chatwidget_manual(
         last_plan_progress: None,
         plan_delta_buffer: String::new(),
         plan_item_active: false,
+        condensed_transcript_view: false,
         turn_runtime_metrics: RuntimeMetricsSummary::default(),
         last_turn_runtime_metrics: None,
         last_rendered_width: std::cell::Cell::new(None),

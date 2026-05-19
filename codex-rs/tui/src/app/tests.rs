@@ -23,6 +23,9 @@ use assert_matches::assert_matches;
 
 use crate::app_command::AppCommand as Op;
 use crate::diff_model::FileChange;
+use crate::exec_cell::CommandOutput;
+use crate::exec_cell::ExecCall;
+use crate::exec_cell::ExecCell;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::TerminalResizeReflowMaxRows;
@@ -32,9 +35,11 @@ use codex_app_server_protocol::AdditionalPermissionProfile;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
+use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileUpdateChange;
+use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerStartupState;
@@ -3804,6 +3809,7 @@ async fn make_test_app() -> App {
         runtime_permission_profile_override: None,
         file_search,
         transcript_cells: Vec::new(),
+        condensed_transcript_view: false,
         overlay: None,
         deferred_history_lines: Vec::new(),
         has_emitted_history_lines: false,
@@ -3868,6 +3874,7 @@ async fn make_test_app_with_channels() -> (
             runtime_permission_profile_override: None,
             file_search,
             transcript_cells: Vec::new(),
+            condensed_transcript_view: false,
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
@@ -4014,6 +4021,139 @@ async fn uncapped_resize_reflow_renders_all_cells_under_row_limit() {
             String::new(),
             "cell 2".to_string(),
         ]
+    );
+}
+
+#[tokio::test]
+async fn condensed_resize_reflow_keeps_only_user_and_agent_messages() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    app.condensed_transcript_view = true;
+    app.transcript_cells = vec![
+        plain_line_cell("tool setup noise"),
+        Arc::new(UserHistoryCell {
+            message: "Find the useful answer.".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>,
+        Arc::new(AgentMessageCell::new(
+            vec![Line::from("Here is the useful answer.")],
+            /*is_first_line*/ true,
+        )) as Arc<dyn HistoryCell>,
+        plain_line_cell("tool completion noise"),
+    ];
+
+    let rendered = app.render_transcript_lines_for_reflow(/*width*/ 80);
+    let text = rendered
+        .lines
+        .iter()
+        .map(rendered_line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(text.contains("Find the useful answer."));
+    assert!(text.contains("Here is the useful answer."));
+    assert!(!text.contains("tool setup noise"));
+    assert!(!text.contains("tool completion noise"));
+}
+
+#[tokio::test]
+async fn scrollback_replay_preserves_normal_spacing_between_history_cells() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    app.transcript_cells = vec![
+        plain_line_cell("first cell"),
+        plain_line_cell("second cell"),
+    ];
+
+    let rendered = app.render_transcript_lines_for_scrollback_replay(/*width*/ 80);
+
+    assert_eq!(
+        rendered.iter().map(rendered_line_text).collect::<Vec<_>>(),
+        vec![
+            "first cell".to_string(),
+            String::new(),
+            "second cell".to_string(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn scrollback_replay_restores_hidden_non_message_cells_after_condensed_mode() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    app.transcript_cells = vec![
+        plain_line_cell("tool output that should return"),
+        Arc::new(UserHistoryCell {
+            message: "Keep the conversation readable.".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>,
+    ];
+
+    app.condensed_transcript_view = true;
+    let condensed = app.render_transcript_lines_for_scrollback_replay(/*width*/ 80);
+    assert!(
+        !condensed
+            .iter()
+            .map(rendered_line_text)
+            .any(|line| line.contains("tool output that should return"))
+    );
+
+    app.condensed_transcript_view = false;
+    let restored = app.render_transcript_lines_for_scrollback_replay(/*width*/ 80);
+    assert!(
+        restored
+            .iter()
+            .map(rendered_line_text)
+            .any(|line| line.contains("tool output that should return"))
+    );
+}
+
+#[tokio::test]
+async fn scrollback_replay_restores_completed_exec_output_after_condensed_mode() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    let call_id = "exec-output".to_string();
+    let mut exec = ExecCell::new(
+        ExecCall {
+            call_id: call_id.clone(),
+            command: vec!["bash".into(), "-lc".into(), "printf visible-output".into()],
+            parsed: Vec::new(),
+            output: None,
+            source: ExecCommandSource::Agent,
+            start_time: None,
+            duration: None,
+            interaction_input: None,
+        },
+        /*animations_enabled*/ false,
+    );
+    assert!(exec.append_output(&call_id, "visible-output"));
+    exec.complete_call(
+        &call_id,
+        CommandOutput {
+            exit_code: 0,
+            aggregated_output: String::new(),
+            formatted_output: String::new(),
+        },
+        Duration::from_millis(1),
+    );
+    app.transcript_cells = vec![Arc::new(exec) as Arc<dyn HistoryCell>];
+
+    app.condensed_transcript_view = true;
+    let condensed = app.render_transcript_lines_for_scrollback_replay(/*width*/ 80);
+    assert!(
+        !condensed
+            .iter()
+            .map(rendered_line_text)
+            .any(|line| line.contains("visible-output"))
+    );
+
+    app.condensed_transcript_view = false;
+    let restored = app.render_transcript_lines_for_scrollback_replay(/*width*/ 80);
+    assert!(
+        restored
+            .iter()
+            .map(rendered_line_text)
+            .any(|line| line.contains("visible-output"))
     );
 }
 

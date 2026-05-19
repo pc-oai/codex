@@ -338,6 +338,10 @@ impl App {
                 }
                 return Ok(AppRunControl::Exit(ExitReason::ReloadRequested));
             }
+            AppEvent::ToggleCondensedTranscriptView => {
+                self.toggle_condensed_transcript_view(tui)?;
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::Exit(mode) => {
                 return Ok(self.handle_exit_mode(app_server, mode).await);
             }

@@ -174,6 +174,14 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
         false
     }
 
+    /// Whether this cell belongs in the main-view condensed transcript projection.
+    ///
+    /// Condensed mode is for skimming the conversation itself in native terminal scrollback, so
+    /// operational/tool/history chrome is hidden unless a conversational cell opts in.
+    fn show_in_condensed_main_view(&self) -> bool {
+        false
+    }
+
     /// Returns a coarse "animation tick" when transcript output is time-dependent.
     ///
     /// The transcript overlay caches the rendered output of the in-flight active cell, so cells
@@ -311,6 +319,10 @@ fn trim_trailing_blank_lines(mut lines: Vec<Line<'static>>) -> Vec<Line<'static>
 }
 
 impl HistoryCell for UserHistoryCell {
+    fn show_in_condensed_main_view(&self) -> bool {
+        true
+    }
+
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let wrap_width = width
             .saturating_sub(
@@ -477,6 +489,10 @@ impl AgentMessageCell {
 }
 
 impl HistoryCell for AgentMessageCell {
+    fn show_in_condensed_main_view(&self) -> bool {
+        true
+    }
+
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         adaptive_wrap_lines(
             &self.lines,
@@ -526,6 +542,10 @@ impl AgentMarkdownCell {
 }
 
 impl HistoryCell for AgentMarkdownCell {
+    fn show_in_condensed_main_view(&self) -> bool {
+        true
+    }
+
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let Some(wrap_width) =
             crate::width::usable_content_width_u16(width, /*reserved_cols*/ 2)

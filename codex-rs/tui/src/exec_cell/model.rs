@@ -82,12 +82,20 @@ impl ExecCell {
     pub(crate) fn complete_call(
         &mut self,
         call_id: &str,
-        output: CommandOutput,
+        mut output: CommandOutput,
         duration: Duration,
     ) -> bool {
         let Some(call) = self.calls.iter_mut().rev().find(|c| c.call_id == call_id) else {
             return false;
         };
+        if let Some(streamed_output) = call.output.as_ref() {
+            if output.aggregated_output.is_empty() {
+                output.aggregated_output = streamed_output.aggregated_output.clone();
+            }
+            if output.formatted_output.is_empty() {
+                output.formatted_output = streamed_output.formatted_output.clone();
+            }
+        }
         call.output = Some(output);
         call.duration = Some(duration);
         call.start_time = None;
@@ -172,5 +180,42 @@ impl ExecCall {
 
     pub(crate) fn is_unified_exec_interaction(&self) -> bool {
         matches!(self.source, ExecCommandSource::UnifiedExecInteraction)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn completion_without_output_preserves_streamed_output() {
+        let call_id = "call-1".to_string();
+        let mut cell = ExecCell::new(
+            ExecCall {
+                call_id: call_id.clone(),
+                command: vec!["printf".to_string(), "hello".to_string()],
+                parsed: Vec::new(),
+                output: None,
+                source: ExecCommandSource::Agent,
+                start_time: None,
+                duration: None,
+                interaction_input: None,
+            },
+            /*animations_enabled*/ false,
+        );
+
+        assert!(cell.append_output(&call_id, "streamed output"));
+        assert!(cell.complete_call(
+            &call_id,
+            CommandOutput {
+                exit_code: 0,
+                aggregated_output: String::new(),
+                formatted_output: String::new(),
+            },
+            Duration::from_millis(1),
+        ));
+
+        let output = cell.calls[0].output.as_ref().expect("completed output");
+        assert_eq!(output.aggregated_output, "streamed output");
     }
 }
