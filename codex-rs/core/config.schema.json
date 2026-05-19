@@ -2404,6 +2404,20 @@
           "description": "Enable animations (welcome screen, shimmer effects, spinners). Defaults to `true`.",
           "type": "boolean"
         },
+        "compact_session_header": {
+          "default": false,
+          "description": "Render the startup session header as a compact single-line card.",
+          "type": "boolean"
+        },
+        "context_used_style": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiContextUsedStyle"
+            }
+          ],
+          "default": "percent",
+          "description": "How to render the `context-used` status-line item."
+        },
         "keymap": {
           "allOf": [
             {
@@ -2607,6 +2621,15 @@
           "description": "Syntax highlighting theme name (kebab-case).\n\nWhen set, overrides automatic light/dark theme detection. Use `/theme` in the TUI or see `$CODEX_HOME/themes` for custom themes.",
           "type": "string"
         },
+        "timing": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiTiming"
+            }
+          ],
+          "default": null,
+          "description": "Compact per-turn timing display settings."
+        },
         "vim_mode_default": {
           "default": false,
           "description": "Start the composer in Vim mode (`Normal`) by default. Defaults to `false`.",
@@ -2795,6 +2818,38 @@
         }
       },
       "type": "object"
+    },
+    "TuiContextUsedStyle": {
+      "oneOf": [
+        {
+          "description": "Render as `14%`.",
+          "enum": [
+            "percent"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Render as `▰▱▱▱▱ 14%`.",
+          "enum": [
+            "blocks"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Render as `█░░░░ 14%`.",
+          "enum": [
+            "solid-blocks"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Render as `[=....] 14%`.",
+          "enum": [
+            "ascii"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "TuiEditorKeymap": {
       "additionalProperties": false,
@@ -3340,6 +3395,61 @@
             }
           ],
           "description": "Scroll up by one row."
+        }
+      },
+      "type": "object"
+    },
+    "TuiTiming": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Enable compact timing output in the TUI transcript. Defaults to `true` when the section is present.",
+          "type": "boolean"
+        },
+        "show": {
+          "default": null,
+          "description": "Ordered list of metrics to display. Defaults to: `ttft`, `tbt`.",
+          "items": {
+            "$ref": "#/definitions/TuiTimingMetric"
+          },
+          "type": "array"
+        },
+        "symbols": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiTimingSymbols"
+            }
+          ],
+          "default": null,
+          "description": "Optional per-metric symbol overrides."
+        }
+      },
+      "type": "object"
+    },
+    "TuiTimingMetric": {
+      "enum": [
+        "ttft",
+        "tbt",
+        "model",
+        "overhead"
+      ],
+      "type": "string"
+    },
+    "TuiTimingSymbols": {
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "overhead": {
+          "type": "string"
+        },
+        "tbt": {
+          "type": "string"
+        },
+        "ttft": {
+          "type": "string"
         }
       },
       "type": "object"
@@ -4280,6 +4390,11 @@
       "default": {},
       "description": "Definition for MCP servers that Codex can reach out to for tool calls.",
       "type": "object"
+    },
+    "mcp_servers_enabled": {
+      "default": true,
+      "description": "Whether configured MCP servers should be loaded for this process.",
+      "type": "boolean"
     },
     "memories": {
       "allOf": [
