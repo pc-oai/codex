@@ -371,6 +371,16 @@ impl AppServerSession {
         config: Config,
         thread_id: ThreadId,
     ) -> Result<AppServerStartedThread> {
+        self.resume_thread_with_tree_restore(config, thread_id, /*resume_subagent_tree*/ false)
+            .await
+    }
+
+    pub(crate) async fn resume_thread_with_tree_restore(
+        &mut self,
+        config: Config,
+        thread_id: ThreadId,
+        resume_subagent_tree: bool,
+    ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let response: ThreadResumeResponse = self
             .client
@@ -381,6 +391,7 @@ impl AppServerSession {
                     thread_id,
                     self.thread_params_mode(),
                     self.remote_cwd_override.as_deref(),
+                    resume_subagent_tree,
                 ),
             })
             .await
@@ -1298,6 +1309,7 @@ fn thread_resume_params_from_config(
     thread_id: ThreadId,
     thread_params_mode: ThreadParamsMode,
     remote_cwd_override: Option<&std::path::Path>,
+    resume_subagent_tree: bool,
 ) -> ThreadResumeParams {
     let permissions = permissions_selection_from_config(&config, thread_params_mode);
     let sandbox = permissions
@@ -1319,6 +1331,7 @@ fn thread_resume_params_from_config(
         sandbox,
         permissions,
         config: config_request_overrides_from_config(&config),
+        resume_subagent_tree,
         persist_extended_history: false,
         ..ThreadResumeParams::default()
     }
@@ -1747,6 +1760,7 @@ mod tests {
             thread_id,
             ThreadParamsMode::Remote,
             /*remote_cwd_override*/ None,
+            /*resume_subagent_tree*/ false,
         );
         let fork = thread_fork_params_from_config(
             config,
@@ -1767,6 +1781,21 @@ mod tests {
         assert_eq!(start.permissions, None);
         assert_eq!(resume.permissions, None);
         assert_eq!(fork.permissions, None);
+    }
+
+    #[tokio::test]
+    async fn thread_resume_params_forward_tree_restore_flag() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let config = build_config(&temp_dir).await;
+        let resume = thread_resume_params_from_config(
+            config,
+            ThreadId::new(),
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+            /*resume_subagent_tree*/ true,
+        );
+
+        assert!(resume.resume_subagent_tree);
     }
 
     #[test]
@@ -1852,6 +1881,7 @@ mod tests {
             thread_id,
             ThreadParamsMode::Remote,
             Some(remote_cwd.as_path()),
+            /*resume_subagent_tree*/ false,
         );
         let fork = thread_fork_params_from_config(
             config,

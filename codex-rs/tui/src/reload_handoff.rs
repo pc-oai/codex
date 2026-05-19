@@ -20,6 +20,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 const RELOAD_HANDOFF_DIR: &str = "reload-handoff";
+const RELOAD_TREE_HANDOFF_DIR: &str = "reload-tree-handoff";
 const RESUME_DRAFT_DIR: &str = "resume-drafts";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,12 +57,65 @@ struct ReloadDraftEnvelope {
     draft: ReloadDraft,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct ReloadTreeHandoff {
+    pub(crate) root_thread_id: ThreadId,
+    pub(crate) selected_thread_id: ThreadId,
+    pub(crate) selected_draft: Option<ReloadDraft>,
+}
+
+#[cfg(test)]
 pub(crate) fn save(codex_home: &Path, thread_id: ThreadId, draft: &ReloadDraft) -> io::Result<()> {
     save_in_dir(codex_home, RELOAD_HANDOFF_DIR, thread_id, draft)
 }
 
 pub(crate) fn take(codex_home: &Path, thread_id: ThreadId) -> io::Result<Option<ReloadDraft>> {
     take_in_dir(codex_home, RELOAD_HANDOFF_DIR, thread_id)
+}
+
+/// Persist enough context for a fresh process to reopen the same agent tree and visible thread.
+pub(crate) fn save_tree(
+    codex_home: &Path,
+    root_thread_id: ThreadId,
+    selected_thread_id: ThreadId,
+    selected_draft: Option<&ReloadDraft>,
+) -> io::Result<()> {
+    let dir = draft_dir(codex_home, RELOAD_TREE_HANDOFF_DIR);
+    fs::create_dir_all(&dir)?;
+    let path = draft_path(codex_home, RELOAD_TREE_HANDOFF_DIR, root_thread_id);
+    let temp_path = dir.join(format!("{root_thread_id}.{}.tmp", std::process::id()));
+    let envelope = ReloadTreeHandoff {
+        root_thread_id,
+        selected_thread_id,
+        selected_draft: selected_draft.cloned().filter(ReloadDraft::has_content),
+    };
+    let payload = serde_json::to_vec(&envelope).map_err(io::Error::other)?;
+    fs::write(&temp_path, payload)?;
+    fs::rename(temp_path, path)?;
+    Ok(())
+}
+
+/// Consume the one-shot tree reload context for the root thread being resumed.
+pub(crate) fn take_tree(
+    codex_home: &Path,
+    root_thread_id: ThreadId,
+) -> io::Result<Option<ReloadTreeHandoff>> {
+    let path = draft_path(codex_home, RELOAD_TREE_HANDOFF_DIR, root_thread_id);
+    let payload = match fs::read(&path) {
+        Ok(payload) => payload,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    let envelope: ReloadTreeHandoff = serde_json::from_slice(&payload).map_err(io::Error::other)?;
+    fs::remove_file(&path)?;
+    if envelope.root_thread_id != root_thread_id {
+        return Ok(None);
+    }
+    clear_resume(codex_home, envelope.selected_thread_id)?;
+    if envelope.root_thread_id != envelope.selected_thread_id {
+        clear_resume(codex_home, envelope.root_thread_id)?;
+    }
+    Ok(Some(envelope))
 }
 
 /// Replace the durable quit/resume draft for one thread.
@@ -258,6 +312,92 @@ mod tests {
         );
         assert_eq!(
             take_for_resume(temp.path(), thread_id).expect("stale resume cleared"),
+            None
+        );
+    }
+
+    #[test]
+    fn tree_handoff_round_trips_root_selection_and_draft_once() {
+        let temp = tempdir().expect("tempdir");
+        let root_thread_id = ThreadId::new();
+        let selected_thread_id = ThreadId::new();
+        let draft = sample_draft();
+
+        save_tree(
+            temp.path(),
+            root_thread_id,
+            selected_thread_id,
+            Some(&draft),
+        )
+        .expect("save tree handoff");
+
+        assert_eq!(
+            take_tree(temp.path(), root_thread_id).expect("take tree handoff"),
+            Some(ReloadTreeHandoff {
+                root_thread_id,
+                selected_thread_id,
+                selected_draft: Some(draft),
+            })
+        );
+        assert_eq!(
+            take_tree(temp.path(), root_thread_id).expect("take tree handoff again"),
+            None
+        );
+    }
+
+    #[test]
+    fn tree_handoff_keeps_selection_even_without_a_draft() {
+        let temp = tempdir().expect("tempdir");
+        let root_thread_id = ThreadId::new();
+        let selected_thread_id = ThreadId::new();
+
+        save_tree(
+            temp.path(),
+            root_thread_id,
+            selected_thread_id,
+            /*selected_draft*/ None,
+        )
+        .expect("save tree handoff");
+
+        assert_eq!(
+            take_tree(temp.path(), root_thread_id).expect("take tree handoff"),
+            Some(ReloadTreeHandoff {
+                root_thread_id,
+                selected_thread_id,
+                selected_draft: None,
+            })
+        );
+    }
+
+    #[test]
+    fn tree_handoff_clears_stale_resume_drafts_for_root_and_selection() {
+        let temp = tempdir().expect("tempdir");
+        let root_thread_id = ThreadId::new();
+        let selected_thread_id = ThreadId::new();
+        let draft = sample_draft();
+
+        replace_resume(temp.path(), root_thread_id, Some(&draft)).expect("save root resume draft");
+        replace_resume(temp.path(), selected_thread_id, Some(&draft))
+            .expect("save selection resume draft");
+        save_tree(
+            temp.path(),
+            root_thread_id,
+            selected_thread_id,
+            Some(&draft),
+        )
+        .expect("save tree handoff");
+
+        assert!(
+            take_tree(temp.path(), root_thread_id)
+                .expect("take tree handoff")
+                .is_some()
+        );
+        assert_eq!(
+            take_for_resume(temp.path(), root_thread_id).expect("root draft cleared"),
+            None
+        );
+        assert_eq!(
+            take_for_resume(temp.path(), selected_thread_id).expect("selection draft cleared"),
             None
         );
     }

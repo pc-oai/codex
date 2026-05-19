@@ -299,18 +299,18 @@ impl App {
                 self.chat_widget.on_commit_tick();
             }
             AppEvent::ReloadCurrentSession => {
-                if let Some(thread_id) = self.chat_widget.thread_id()
-                    && let Some(draft) = self.chat_widget.capture_reload_draft()
-                    && let Err(err) = crate::reload_handoff::save(
+                if let Some(selected_thread_id) = self.chat_widget.thread_id()
+                    && let Err(err) = crate::reload_handoff::save_tree(
                         self.chat_widget.config_ref().codex_home.as_path(),
-                        thread_id,
-                        &draft,
+                        self.primary_thread_id.unwrap_or(selected_thread_id),
+                        selected_thread_id,
+                        self.chat_widget.capture_reload_draft().as_ref(),
                     )
                 {
                     tracing::warn!(
                         error = %err,
-                        %thread_id,
-                        "failed to preserve composer draft before reload"
+                        %selected_thread_id,
+                        "failed to preserve reload tree context before reload"
                     );
                 }
                 match std::env::current_dir() {
