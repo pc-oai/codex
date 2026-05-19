@@ -86,6 +86,30 @@ async fn terminal_title_promotes_leading_thread_emoji_after_spinner() {
 }
 
 #[tokio::test]
+async fn terminal_title_compacts_location_segments_when_thread_title_exists() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.tui_terminal_title = Some(vec![
+        "activity".to_string(),
+        "project-name".to_string(),
+        "run-state".to_string(),
+        "thread-title".to_string(),
+        "session-id".to_string(),
+    ]);
+    chat.thread_id = Some(
+        codex_protocol::ThreadId::from_string("019e2274-d98c-7080-aa1d-046adb5117aa")
+            .expect("valid thread id"),
+    );
+    chat.thread_name = Some("Compact terminal title".to_string());
+    chat.bottom_pane.set_task_running(/*running*/ true);
+    chat.refresh_terminal_title();
+
+    assert_eq!(
+        chat.last_terminal_title,
+        Some("⠋ Compact terminal title | …db5117aa".to_string())
+    );
+}
+
+#[tokio::test]
 async fn terminal_title_action_required_blinks_when_animations_are_enabled() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.bottom_pane.set_task_running(/*running*/ true);

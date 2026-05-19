@@ -259,3 +259,16 @@ async fn terminal_title_preview_uses_title_truncation_for_live_values() {
 
     assert_eq!(preview, format!("{truncated_thread} | {truncated_branch}"));
 }
+
+#[tokio::test]
+async fn terminal_title_preview_uses_session_id_suffix_for_live_values() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(
+        codex_protocol::ThreadId::from_string("019e2274-d98c-7080-aa1d-046adb5117aa")
+            .expect("valid thread id"),
+    );
+
+    let preview = title_preview_line(&mut chat, &[TerminalTitleItem::SessionId]);
+
+    assert_eq!(preview, "…db5117aa");
+}

@@ -4,6 +4,7 @@
 //! behavior easier to review without paging through the rest of `chatwidget.rs`.
 
 use super::*;
+use crate::bottom_pane::compact_title_items_for_thread_title;
 use crate::bottom_pane::status_line_from_segments_with_muting;
 use crate::branch_summary;
 use crate::status::format_tokens_compact;
@@ -20,6 +21,7 @@ pub(super) const TERMINAL_TITLE_SPINNER_FRAMES: [&str; 10] =
 
 /// Time between spinner frame advances in the terminal title.
 pub(super) const TERMINAL_TITLE_SPINNER_INTERVAL: Duration = Duration::from_millis(100);
+const TERMINAL_TITLE_SESSION_ID_SUFFIX_LEN: usize = 8;
 
 /// Time between action-required blink phases in the terminal title.
 const TERMINAL_TITLE_ACTION_REQUIRED_INTERVAL: Duration = Duration::from_secs(1);
@@ -320,12 +322,12 @@ impl ChatWidget {
         selections: &StatusSurfaceSelections,
         now: Instant,
     ) -> Option<String> {
+        let items = self.terminal_title_items_for_rendering(selections);
         if self.terminal_title_shows_action_required_with_selections(selections) {
-            return Some(self.action_required_terminal_title_text(selections, now));
+            return Some(self.action_required_terminal_title_text(&items, now));
         }
 
-        let mut segments = selections
-            .terminal_title_items
+        let mut segments = items
             .iter()
             .copied()
             .filter_map(|item| {
@@ -333,9 +335,7 @@ impl ChatWidget {
                     .map(|value| (item, value))
             })
             .collect::<Vec<_>>();
-        if selections
-            .terminal_title_items
-            .contains(&TerminalTitleItem::Thread)
+        if items.contains(&TerminalTitleItem::Thread)
             && let Some(emoji) = self.leading_thread_title_emoji()
         {
             let insert_at = usize::from(
@@ -359,15 +359,36 @@ impl ChatWidget {
 
     fn action_required_terminal_title_text(
         &mut self,
-        selections: &StatusSurfaceSelections,
+        items: &[TerminalTitleItem],
         now: Instant,
     ) -> String {
         crate::bottom_pane::build_action_required_title_text(
             self.action_required_terminal_title_prefix_at(now),
-            selections.terminal_title_items.iter().copied(),
+            items.iter().copied(),
             &[TerminalTitleItem::Status],
             |item| self.terminal_title_value_for_item(item, now),
         )
+    }
+
+    fn terminal_title_items_for_rendering(
+        &self,
+        selections: &StatusSurfaceSelections,
+    ) -> Vec<TerminalTitleItem> {
+        if self.terminal_title_has_thread_text(selections) {
+            compact_title_items_for_thread_title(&selections.terminal_title_items)
+        } else {
+            selections.terminal_title_items.clone()
+        }
+    }
+
+    fn terminal_title_has_thread_text(&self, selections: &StatusSurfaceSelections) -> bool {
+        selections
+            .terminal_title_items
+            .contains(&TerminalTitleItem::Thread)
+            && self
+                .thread_name
+                .as_ref()
+                .is_some_and(|name| !thread_title_without_leading_emoji(name).is_empty())
     }
 
     fn action_required_terminal_title_prefix_at(&self, now: Instant) -> &'static str {
@@ -848,7 +869,7 @@ impl ChatWidget {
                 .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),
             TerminalTitleItem::SessionId => self
                 .status_line_value_for_item(StatusLineItem::SessionId)
-                .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),
+                .map(Self::terminal_title_session_id_suffix),
             TerminalTitleItem::FastMode => self
                 .status_line_value_for_item(StatusLineItem::FastMode)
                 .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),
@@ -982,6 +1003,19 @@ impl ChatWidget {
         let mut truncated = head.graphemes(true).take(max_chars - 3).collect::<String>();
         truncated.push_str("...");
         truncated
+    }
+
+    /// Keeps the distinguishing tail of a UUID-shaped session id compact in terminal chrome.
+    fn terminal_title_session_id_suffix(value: String) -> String {
+        let suffix = value
+            .chars()
+            .rev()
+            .take(TERMINAL_TITLE_SESSION_ID_SUFFIX_LEN)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect::<String>();
+        format!("…{suffix}")
     }
 }
 

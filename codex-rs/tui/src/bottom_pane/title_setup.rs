@@ -84,6 +84,23 @@ pub(crate) enum TerminalTitleItem {
     TaskProgress,
 }
 
+pub(crate) fn compact_title_items_for_thread_title(
+    items: &[TerminalTitleItem],
+) -> Vec<TerminalTitleItem> {
+    items
+        .iter()
+        .copied()
+        .filter(|item| {
+            !matches!(
+                item,
+                TerminalTitleItem::Project
+                    | TerminalTitleItem::CurrentDir
+                    | TerminalTitleItem::Status
+            )
+        })
+        .collect()
+}
+
 impl TerminalTitleItem {
     pub(crate) fn description(self) -> &'static str {
         match self {
@@ -177,6 +194,14 @@ pub(crate) fn preview_line_for_title_items(
     items: &[TerminalTitleItem],
     preview_data: &StatusSurfacePreviewData,
 ) -> Option<Line<'static>> {
+    let compact_items = items.contains(&TerminalTitleItem::Thread)
+        && preview_data.has_live_value_for(StatusSurfacePreviewItem::ThreadTitle);
+    let items = if compact_items {
+        compact_title_items_for_thread_title(items)
+    } else {
+        items.to_vec()
+    };
+
     if items.contains(&TerminalTitleItem::Spinner) {
         let preview = build_action_required_title_text(
             ACTION_REQUIRED_PREVIEW_PREFIX,

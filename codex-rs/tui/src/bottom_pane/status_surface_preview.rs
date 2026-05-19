@@ -170,6 +170,12 @@ impl StatusSurfacePreviewData {
         self.values.get(&item).map(|value| value.text.as_str())
     }
 
+    pub(crate) fn has_live_value_for(&self, item: StatusSurfacePreviewItem) -> bool {
+        self.values
+            .get(&item)
+            .is_some_and(|value| !value.is_placeholder)
+    }
+
     pub(crate) fn status_line_for_items<I>(
         &self,
         items: I,
