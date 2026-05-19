@@ -1204,6 +1204,11 @@ impl ChatComposer {
         self.previous_message_edit_mode = enabled;
     }
 
+    #[cfg(test)]
+    pub(crate) fn footer_hint_override_items(&self) -> Option<Vec<(String, String)>> {
+        self.footer_hint_override.clone()
+    }
+
     /// Updates whether the Plan-mode nudge replaces the ambient footer row.
     ///
     /// Returns `true` only when the rendered footer can change so callers can avoid scheduling

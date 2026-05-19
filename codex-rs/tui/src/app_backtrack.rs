@@ -109,6 +109,7 @@ pub(crate) struct PendingBacktrackRollback {
     pub(crate) selection: BacktrackSelection,
     pub(crate) thread_id: Option<ThreadId>,
     pub(crate) edited_user_message: Option<UserMessage>,
+    pub(crate) submission_already_started: bool,
 }
 
 /// A direct-edit preview that has not yet mutated thread history.
@@ -230,7 +231,8 @@ impl App {
             return;
         }
 
-        let num_turns = user_total.saturating_sub(selection.nth_user_message);
+        let rollback_turns = rollback_depth(user_total, selection.nth_user_message);
+        let num_turns = rollback_turns;
         let num_turns = u32::try_from(num_turns).unwrap_or(u32::MAX);
         if num_turns == 0 {
             return;
@@ -241,11 +243,17 @@ impl App {
         let local_image_paths = selection.local_image_paths.clone();
         let remote_image_urls = selection.remote_image_urls.clone();
         let has_remote_image_urls = !remote_image_urls.is_empty();
+        let is_edit_submission = edited_user_message.is_some();
         self.backtrack.pending_rollback = Some(PendingBacktrackRollback {
             selection,
             thread_id: self.chat_widget.thread_id(),
             edited_user_message,
+            submission_already_started: false,
         });
+        if is_edit_submission {
+            self.chat_widget
+                .show_edit_last_message_pending_hint(edit_last_message_hint_target(rollback_turns));
+        }
         self.chat_widget
             .submit_op(AppCommand::thread_rollback(num_turns));
         if self.backtrack.edit_preview.is_none() {
@@ -564,6 +572,10 @@ impl App {
         } else {
             self.chat_widget.capture_reload_draft()
         };
+        let edit_depth = rollback_depth(
+            user_count(&self.transcript_cells),
+            selection.nth_user_message,
+        );
         self.chat_widget
             .set_remote_image_urls(selection.remote_image_urls.clone());
         self.chat_widget.set_composer_text(
@@ -571,7 +583,8 @@ impl App {
             selection.text_elements.clone(),
             selection.local_image_paths.clone(),
         );
-        self.chat_widget.show_edit_last_message_hint();
+        self.chat_widget
+            .show_edit_last_message_hint(edit_last_message_hint_target(edit_depth));
         self.backtrack.edit_preview = Some(BacktrackEditPreview {
             selection,
             thread_id: self.chat_widget.thread_id(),
@@ -622,7 +635,7 @@ impl App {
         true
     }
 
-    /// Commit a direct-edit preview by rolling the thread back before resubmitting the edit.
+    /// Commit a direct-edit preview by rolling the thread back before starting the edit turn.
     pub(crate) fn commit_backtrack_edit_preview(&mut self) -> bool {
         if self.backtrack.pending_rollback.is_some() {
             return true;
@@ -639,12 +652,42 @@ impl App {
         let Some(edited_user_message) = self.chat_widget.take_composer_user_message() else {
             return true;
         };
-        self.apply_backtrack_rollback_with_submission(preview.selection, Some(edited_user_message));
+        let rollback_turns = rollback_depth(
+            user_count(&self.transcript_cells),
+            preview.selection.nth_user_message,
+        );
+        let rollback_turns = u32::try_from(rollback_turns).unwrap_or(u32::MAX);
+        if rollback_turns == 0 {
+            return true;
+        }
+        self.backtrack.pending_rollback = Some(PendingBacktrackRollback {
+            selection: preview.selection,
+            thread_id: preview.thread_id,
+            edited_user_message: Some(edited_user_message.clone()),
+            submission_already_started: true,
+        });
+        self.chat_widget
+            .show_edit_last_message_pending_hint(edit_last_message_hint_target(
+                usize::try_from(rollback_turns).unwrap_or(usize::MAX),
+            ));
+        if !self
+            .chat_widget
+            .submit_user_message_from_backtrack_edit(edited_user_message, Some(rollback_turns))
+        {
+            self.handle_backtrack_rollback_failed();
+        }
         true
     }
 
     pub(crate) fn backtrack_edit_preview_active(&self) -> bool {
         self.backtrack.edit_preview.is_some()
+    }
+
+    pub(crate) fn pending_combined_edit_rollback_active(&self) -> bool {
+        self.backtrack
+            .pending_rollback
+            .as_ref()
+            .is_some_and(|pending| pending.submission_already_started)
     }
 
     /// Confirm a primed backtrack from the main view (no overlay visible).
@@ -689,6 +732,12 @@ impl App {
         {
             self.chat_widget
                 .restore_user_message_to_composer(edited_user_message);
+            let edit_depth = rollback_depth(
+                user_count(&self.transcript_cells),
+                pending.selection.nth_user_message,
+            );
+            self.chat_widget
+                .show_edit_last_message_hint(edit_last_message_hint_target(edit_depth));
         }
     }
 
@@ -731,8 +780,15 @@ impl App {
         if let Some(edited_user_message) = pending.edited_user_message {
             self.backtrack.edit_preview = None;
             self.chat_widget.clear_edit_last_message_hint();
-            self.chat_widget
-                .submit_user_message_from_backtrack_edit(edited_user_message);
+            if pending.submission_already_started {
+                self.chat_widget
+                    .confirm_backtrack_edit_submission(&edited_user_message);
+            } else {
+                self.chat_widget.submit_user_message_from_backtrack_edit(
+                    edited_user_message,
+                    /*rollback_num_turns*/ None,
+                );
+            }
         }
     }
 
@@ -843,6 +899,17 @@ pub(crate) fn trim_transcript_cells_drop_last_n_user_turns(
 
 pub(crate) fn user_count(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> usize {
     user_positions_iter(cells).count()
+}
+
+fn rollback_depth(user_total: usize, nth_user_message: usize) -> usize {
+    user_total.saturating_sub(nth_user_message)
+}
+
+fn edit_last_message_hint_target(edit_depth: usize) -> String {
+    match edit_depth {
+        0 | 1 => "previous message".to_string(),
+        edit_depth => format!("{edit_depth} messages back"),
+    }
 }
 
 fn has_backtrack_target(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> bool {

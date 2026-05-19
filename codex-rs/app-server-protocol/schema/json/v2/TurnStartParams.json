@@ -574,6 +574,15 @@
       ],
       "description": "Override the personality for this turn and subsequent turns."
     },
+    "rollbackNumTurns": {
+      "description": "Optionally rewind the last N user turns before starting this turn.\n\nThis supports direct edit flows that replace an earlier user message.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
     "sandboxPolicy": {
       "anyOf": [
         {

@@ -534,6 +534,7 @@ impl AppServerSession {
         &mut self,
         thread_id: ThreadId,
         items: Vec<UserInput>,
+        rollback_num_turns: Option<u32>,
         cwd: PathBuf,
         approval_policy: AskForApproval,
         approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
@@ -560,6 +561,7 @@ impl AppServerSession {
                 params: TurnStartParams {
                     thread_id: thread_id.to_string(),
                     input: items,
+                    rollback_num_turns,
                     responsesapi_client_metadata: None,
                     environments: None,
                     cwd: Some(cwd),

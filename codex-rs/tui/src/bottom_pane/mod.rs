@@ -886,6 +886,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    #[cfg(test)]
+    pub(crate) fn footer_hint_override_items(&self) -> Option<Vec<(String, String)>> {
+        self.composer.footer_hint_override_items()
+    }
+
     /// Applies the externally decided Plan-mode nudge visibility to the footer presentation.
     pub(crate) fn set_plan_mode_nudge_visible(&mut self, visible: bool) {
         if self.composer.set_plan_mode_nudge_visible(visible) {

@@ -783,6 +783,13 @@ pub enum Op {
     /// responsible for undoing any edits on disk.
     ThreadRollback { num_turns: u32 },
 
+    /// Rewind the visible conversation history before starting the next user turn.
+    ///
+    /// This is used by direct edit flows that replace an earlier user message.
+    /// The nested operation must be one of the user-input variants handled by
+    /// `user_input_or_turn_inner`.
+    ThreadRollbackThenUserInput { num_turns: u32, next_op: Box<Op> },
+
     /// Request a code review from the agent.
     Review { review_request: ReviewRequest },
 
@@ -906,6 +913,7 @@ impl Op {
             Self::SetThreadName { .. } => "set_thread_name",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
             Self::ThreadRollback { .. } => "thread_rollback",
+            Self::ThreadRollbackThenUserInput { .. } => "thread_rollback_then_user_input",
             Self::Review { .. } => "review",
             Self::ApproveGuardianDeniedAction { .. } => "approve_guardian_denied_action",
             Self::Shutdown => "shutdown",

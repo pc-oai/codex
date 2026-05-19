@@ -3954,6 +3954,26 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/rolledBack"
+              ],
+              "title": "Thread/rolledBackNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadRolledBackNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/rolledBackNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/goal/updated"
               ],
               "title": "Thread/goal/updatedNotificationMethod",
@@ -17069,6 +17089,25 @@
         "title": "ThreadRollbackResponse",
         "type": "object"
       },
+      "ThreadRolledBackNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "numTurns": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "numTurns",
+          "threadId"
+        ],
+        "title": "ThreadRolledBackNotification",
+        "type": "object"
+      },
       "ThreadSetNameParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -17936,6 +17975,15 @@
               }
             ],
             "description": "Override the personality for this turn and subsequent turns."
+          },
+          "rollbackNumTurns": {
+            "description": "Optionally rewind the last N user turns before starting this turn.\n\nThis supports direct edit flows that replace an earlier user message.",
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "sandboxPolicy": {
             "anyOf": [

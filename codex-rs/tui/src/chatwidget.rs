@@ -5582,6 +5582,11 @@ impl ChatWidget {
         self.bottom_pane.set_footer_hint_override(items);
     }
 
+    #[cfg(test)]
+    pub(crate) fn footer_hint_override_items(&self) -> Option<Vec<(String, String)>> {
+        self.bottom_pane.footer_hint_override_items()
+    }
+
     pub(crate) fn show_selection_view(&mut self, params: SelectionViewParams) {
         self.bottom_pane.show_selection_view(params);
         self.refresh_plan_mode_nudge();
@@ -5916,8 +5921,18 @@ impl ChatWidget {
         );
     }
 
-    pub(crate) fn submit_user_message_from_backtrack_edit(&mut self, user_message: UserMessage) {
-        self.submit_user_message(user_message);
+    pub(crate) fn submit_user_message_from_backtrack_edit(
+        &mut self,
+        user_message: UserMessage,
+        rollback_num_turns: Option<u32>,
+    ) -> bool {
+        self.submit_user_message_with_history_and_shell_escape_policy(
+            user_message,
+            UserMessageHistoryRecord::UserMessageText,
+            ShellEscapePolicy::Allow,
+            rollback_num_turns,
+        )
+        .0
     }
 
     fn submit_user_message_with_history_record(
@@ -5929,6 +5944,7 @@ impl ChatWidget {
             user_message,
             history_record,
             ShellEscapePolicy::Allow,
+            /*rollback_num_turns*/ None,
         )
         .0
     }
@@ -5942,6 +5958,7 @@ impl ChatWidget {
             user_message,
             UserMessageHistoryRecord::UserMessageText,
             shell_escape_policy,
+            /*rollback_num_turns*/ None,
         )
         .1
     }
@@ -5951,6 +5968,7 @@ impl ChatWidget {
         user_message: UserMessage,
         history_record: UserMessageHistoryRecord,
         shell_escape_policy: ShellEscapePolicy,
+        rollback_num_turns: Option<u32>,
     ) -> (bool, Option<AppCommand>) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
@@ -5995,6 +6013,10 @@ impl ChatWidget {
         } = user_message;
 
         let render_in_history = !self.agent_turn_running;
+        // Combined rollback+edit submissions must wait until rollback confirmation before they
+        // render locally. Otherwise the rollback trim can remove the optimistic row, and the later
+        // server echo is suppressed as a duplicate even though no editable user row remains.
+        let display_in_history = render_in_history && rollback_num_turns.is_none();
         let mut items: Vec<UserInput> = Vec::new();
 
         // Special-case: "!cmd" executes a local shell command instead of sending to the model.
@@ -6184,7 +6206,7 @@ impl ChatWidget {
             None => None,
         };
         let permission_profile = self.config.permissions.permission_profile();
-        let op = AppCommand::user_turn(
+        let mut op = AppCommand::user_turn(
             items,
             self.config.cwd.to_path_buf(),
             AskForApproval::from(self.config.permissions.approval_policy.value()),
@@ -6197,6 +6219,9 @@ impl ChatWidget {
             collaboration_mode,
             personality,
         );
+        if let Some(rollback_num_turns) = rollback_num_turns {
+            op = op.with_rollback_num_turns(rollback_num_turns);
+        }
 
         if !self.submit_op(op.clone()) {
             return (false, None);
@@ -6207,26 +6232,12 @@ impl ChatWidget {
 
         // Persist the submitted text to cross-session message history. Mentions are encoded into
         // placeholder syntax so recall can reconstruct the mention bindings in a future session.
-        let encoded_mentions = mention_bindings
-            .iter()
-            .map(|binding| LinkedMention {
-                mention: binding.mention.clone(),
-                path: binding.path.clone(),
-            })
-            .collect::<Vec<_>>();
-        let history_text = match &history_record {
-            UserMessageHistoryRecord::UserMessageText if !text.is_empty() => {
-                Some(encode_history_mentions(&text, &encoded_mentions))
-            }
-            UserMessageHistoryRecord::Override(history) if !history.text.is_empty() => {
-                Some(encode_history_mentions(&history.text, &encoded_mentions))
-            }
-            UserMessageHistoryRecord::UserMessageText | UserMessageHistoryRecord::Override(_) => {
-                None
-            }
-        };
-        if let Some(history_text) = history_text {
-            self.submit_op(AppCommand::add_to_history(history_text));
+        //
+        // Combined rollback+edit submissions deliberately defer this write until rollback
+        // confirmation arrives. If rollback fails, the edited draft is restored instead of
+        // becoming a false-positive history entry.
+        if rollback_num_turns.is_none() {
+            self.record_user_message_history(&text, &mention_bindings, &history_record);
         }
 
         if let Some(pending_steer) = pending_steer {
@@ -6236,7 +6247,7 @@ impl ChatWidget {
         }
 
         // Show replayable user content in conversation history.
-        let display_user_message = render_in_history.then(|| {
+        let display_user_message = display_in_history.then(|| {
             user_message_display_for_history(
                 UserMessage {
                     text,
@@ -6254,6 +6265,51 @@ impl ChatWidget {
 
         self.needs_final_message_separator = false;
         (true, Some(op))
+    }
+
+    pub(crate) fn record_backtrack_edit_history(&mut self, user_message: &UserMessage) {
+        self.record_user_message_history(
+            &user_message.text,
+            &user_message.mention_bindings,
+            &UserMessageHistoryRecord::UserMessageText,
+        );
+    }
+
+    pub(crate) fn confirm_backtrack_edit_submission(&mut self, user_message: &UserMessage) {
+        self.record_backtrack_edit_history(user_message);
+        self.on_user_message_display(user_message_display_for_history(
+            user_message.clone(),
+            &UserMessageHistoryRecord::UserMessageText,
+        ));
+    }
+
+    fn record_user_message_history(
+        &mut self,
+        text: &str,
+        mention_bindings: &[MentionBinding],
+        history_record: &UserMessageHistoryRecord,
+    ) {
+        let encoded_mentions = mention_bindings
+            .iter()
+            .map(|binding| LinkedMention {
+                mention: binding.mention.clone(),
+                path: binding.path.clone(),
+            })
+            .collect::<Vec<_>>();
+        let history_text = match history_record {
+            UserMessageHistoryRecord::UserMessageText if !text.is_empty() => {
+                Some(encode_history_mentions(text, &encoded_mentions))
+            }
+            UserMessageHistoryRecord::Override(history) if !history.text.is_empty() => {
+                Some(encode_history_mentions(&history.text, &encoded_mentions))
+            }
+            UserMessageHistoryRecord::UserMessageText | UserMessageHistoryRecord::Override(_) => {
+                None
+            }
+        };
+        if let Some(history_text) = history_text {
+            self.submit_op(AppCommand::add_to_history(history_text));
+        }
     }
 
     /// Restore the blocked submission draft without losing mention resolution state.
@@ -6725,6 +6781,7 @@ impl ChatWidget {
             | ServerNotification::ThreadStatusChanged(_)
             | ServerNotification::ThreadArchived(_)
             | ServerNotification::ThreadUnarchived(_)
+            | ServerNotification::ThreadRolledBack(_)
             | ServerNotification::RawResponseItemCompleted(_)
             | ServerNotification::CommandExecOutputDelta(_)
             | ServerNotification::ProcessOutputDelta(_)
@@ -10784,14 +10841,21 @@ impl ChatWidget {
         self.bottom_pane.clear_esc_backtrack_hint();
     }
 
-    pub(crate) fn show_edit_last_message_hint(&mut self) {
+    pub(crate) fn show_edit_last_message_hint(&mut self, target: String) {
         self.bottom_pane
             .set_previous_message_edit_mode(/*enabled*/ true);
         self.bottom_pane.set_footer_hint_override(Some(vec![
-            ("Editing".to_string(), "previous message".to_string()),
+            ("Editing".to_string(), target),
             ("Enter".to_string(), "submit".to_string()),
             ("Esc".to_string(), "cancel".to_string()),
         ]));
+    }
+
+    pub(crate) fn show_edit_last_message_pending_hint(&mut self, target: String) {
+        self.bottom_pane
+            .set_previous_message_edit_mode(/*enabled*/ true);
+        self.bottom_pane
+            .set_footer_hint_override(Some(vec![("Rewinding".to_string(), target)]));
     }
 
     pub(crate) fn clear_edit_last_message_hint(&mut self) {

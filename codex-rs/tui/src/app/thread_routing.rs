@@ -506,6 +506,7 @@ impl App {
             }
             AppCommand::UserTurn {
                 items,
+                rollback_num_turns,
                 cwd,
                 approval_policy,
                 approvals_reviewer,
@@ -597,6 +598,7 @@ impl App {
                         .turn_start(
                             thread_id,
                             items.to_vec(),
+                            *rollback_num_turns,
                             cwd.clone(),
                             *approval_policy,
                             approvals_reviewer,
@@ -1368,6 +1370,21 @@ impl App {
             &event,
             ThreadBufferedEvent::Notification(ServerNotification::TurnCompleted(_))
         );
+        if let ThreadBufferedEvent::Notification(ServerNotification::ThreadRolledBack(notification)) =
+            &event
+            && self.pending_combined_edit_rollback_active()
+        {
+            self.handle_backtrack_rollback_succeeded(notification.num_turns);
+        }
+        if let ThreadBufferedEvent::Notification(ServerNotification::Error(notification)) = &event
+            && matches!(
+                notification.error.codex_error_info,
+                Some(codex_app_server_protocol::CodexErrorInfo::ThreadRollbackFailed)
+            )
+            && self.pending_combined_edit_rollback_active()
+        {
+            self.handle_backtrack_rollback_failed();
+        }
         match event {
             ThreadBufferedEvent::Notification(notification) => {
                 self.chat_widget

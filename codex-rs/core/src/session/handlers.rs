@@ -663,7 +663,7 @@ pub async fn compact(sess: &Arc<Session>, sub_id: String) {
     .await;
 }
 
-pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32) {
+pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32) -> bool {
     if num_turns == 0 {
         sess.send_event_raw(Event {
             id: sub_id,
@@ -673,7 +673,7 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
             }),
         })
         .await;
-        return;
+        return false;
     }
 
     let has_active_turn = { sess.active_turn.lock().await.is_some() };
@@ -686,7 +686,7 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
             }),
         })
         .await;
-        return;
+        return false;
     }
 
     let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
@@ -701,7 +701,7 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
                 }),
             })
             .await;
-            return;
+            return false;
         }
     };
     if let Err(err) = live_thread.flush().await {
@@ -713,7 +713,7 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
             }),
         })
         .await;
-        return;
+        return false;
     }
 
     let stored_history = match live_thread.load_history(/*include_archived*/ false).await {
@@ -727,7 +727,7 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
                 }),
             })
             .await;
-            return;
+            return false;
         }
     };
 
@@ -761,6 +761,7 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         msg: rollback_msg,
     })
     .await;
+    true
 }
 
 async fn persist_thread_name_update(
@@ -1117,6 +1118,12 @@ pub(super) async fn submission_loop(
                 }
                 Op::ThreadRollback { num_turns } => {
                     thread_rollback(&sess, sub.id.clone(), num_turns).await;
+                    false
+                }
+                Op::ThreadRollbackThenUserInput { num_turns, next_op } => {
+                    if thread_rollback(&sess, sub.id.clone(), num_turns).await {
+                        user_input_or_turn(&sess, sub.id.clone(), *next_op).await;
+                    }
                     false
                 }
                 Op::SetThreadName { name } => {

@@ -4100,6 +4100,23 @@
       ],
       "type": "object"
     },
+    "ThreadRolledBackNotification": {
+      "properties": {
+        "numTurns": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "numTurns",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadStartedNotification": {
       "properties": {
         "thread": {
@@ -4935,6 +4952,26 @@
         "params"
       ],
       "title": "Thread/name/updatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/rolledBack"
+          ],
+          "title": "Thread/rolledBackNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadRolledBackNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/rolledBackNotification",
       "type": "object"
     },
     {

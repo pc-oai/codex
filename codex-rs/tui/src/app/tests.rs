@@ -4735,12 +4735,36 @@ async fn edit_last_message_preview_steps_to_older_messages() {
 
     assert!(app.edit_last_message_from_command());
     assert_eq!(app.chat_widget.composer_text_with_pending(), "third");
+    assert_eq!(
+        app.chat_widget.footer_hint_override_items(),
+        Some(vec![
+            ("Editing".to_string(), "previous message".to_string()),
+            ("Enter".to_string(), "submit".to_string()),
+            ("Esc".to_string(), "cancel".to_string()),
+        ])
+    );
 
     assert!(app.step_backtrack_edit_preview_older());
     assert_eq!(app.chat_widget.composer_text_with_pending(), "second");
+    assert_eq!(
+        app.chat_widget.footer_hint_override_items(),
+        Some(vec![
+            ("Editing".to_string(), "2 messages back".to_string()),
+            ("Enter".to_string(), "submit".to_string()),
+            ("Esc".to_string(), "cancel".to_string()),
+        ])
+    );
 
     assert!(app.step_backtrack_edit_preview_older());
     assert_eq!(app.chat_widget.composer_text_with_pending(), "first");
+    assert_eq!(
+        app.chat_widget.footer_hint_override_items(),
+        Some(vec![
+            ("Editing".to_string(), "3 messages back".to_string()),
+            ("Enter".to_string(), "submit".to_string()),
+            ("Esc".to_string(), "cancel".to_string()),
+        ])
+    );
 
     assert!(app.step_backtrack_edit_preview_older());
     assert_eq!(app.chat_widget.composer_text_with_pending(), "first");
@@ -4795,8 +4819,21 @@ async fn commit_older_edit_last_message_preview_rolls_back_selected_depth() {
         .set_composer_text("edited second".to_string(), Vec::new(), Vec::new());
 
     assert!(app.commit_backtrack_edit_preview());
-    assert_eq!(op_rx.try_recv(), Ok(Op::ThreadRollback { num_turns: 2 }));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::UserTurn {
+            rollback_num_turns: Some(2),
+            ..
+        })
+    );
     assert!(op_rx.try_recv().is_err());
+    assert_eq!(
+        app.chat_widget.footer_hint_override_items(),
+        Some(vec![(
+            "Rewinding".to_string(),
+            "2 messages back".to_string(),
+        )])
+    );
 }
 
 #[tokio::test]
@@ -4866,23 +4903,114 @@ async fn commit_edit_last_message_preview_rolls_back_then_submits_edit() {
 
     assert!(app.backtrack_edit_preview_active());
     assert_eq!(app.chat_widget.composer_text_with_pending(), "");
-    assert_eq!(op_rx.try_recv(), Ok(Op::ThreadRollback { num_turns: 1 }));
+    assert_eq!(
+        app.chat_widget.footer_hint_override_items(),
+        Some(vec![(
+            "Rewinding".to_string(),
+            "previous message".to_string(),
+        )])
+    );
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::UserTurn {
+            rollback_num_turns: Some(1),
+            ..
+        })
+    );
     assert!(op_rx.try_recv().is_err());
 
-    app.handle_backtrack_rollback_succeeded(/*num_turns*/ 1);
+    app.handle_thread_event_now(ThreadBufferedEvent::Notification(
+        ServerNotification::ThreadRolledBack(
+            codex_app_server_protocol::ThreadRolledBackNotification {
+                thread_id: app.chat_widget.thread_id().expect("thread id").to_string(),
+                num_turns: 1,
+            },
+        ),
+    ));
 
     assert!(!app.backtrack_edit_preview_active());
     assert!(app.transcript_cells.is_empty());
-    match op_rx.try_recv() {
-        Ok(Op::UserTurn { items, .. }) => assert_eq!(
-            items,
-            vec![UserInput::Text {
-                text: "edited".to_string(),
-                text_elements: Vec::new(),
-            }]
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::AddToHistory { text }) if text == "edited"
+    );
+    assert!(op_rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn edit_last_message_can_reopen_after_submitted_edit_is_committed() {
+    let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    app.chat_widget.handle_thread_session(test_thread_session(
+        thread_id,
+        test_path_buf("/home/user/project"),
+    ));
+    while op_rx.try_recv().is_ok() {}
+    while app_event_rx.try_recv().is_ok() {}
+    app.transcript_cells = vec![
+        Arc::new(UserHistoryCell {
+            message: "original".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>,
+        Arc::new(AgentMessageCell::new(
+            vec![Line::from("assistant reply")],
+            /*is_first_line*/ true,
+        )) as Arc<dyn HistoryCell>,
+    ];
+
+    assert!(app.edit_last_message_from_command());
+    app.chat_widget
+        .set_composer_text("edited".to_string(), Vec::new(), Vec::new());
+    assert!(app.commit_backtrack_edit_preview());
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::UserTurn {
+            rollback_num_turns: Some(1),
+            ..
+        })
+    );
+    app.handle_thread_event_now(ThreadBufferedEvent::Notification(
+        ServerNotification::ThreadRolledBack(
+            codex_app_server_protocol::ThreadRolledBackNotification {
+                thread_id: thread_id.to_string(),
+                num_turns: 1,
+            },
         ),
-        other => panic!("expected edited user turn submission, got {other:?}"),
+    ));
+    while op_rx.try_recv().is_ok() {}
+    while let Ok(event) = app_event_rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            app.transcript_cells.push(cell.into());
+        }
     }
+
+    app.handle_thread_event_now(ThreadBufferedEvent::Notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: "turn-edit".to_string(),
+            completed_at_ms: 0,
+            item: ThreadItem::UserMessage {
+                id: "user-edited".to_string(),
+                content: vec![AppServerUserInput::Text {
+                    text: "edited".to_string(),
+                    text_elements: Vec::new(),
+                }],
+            },
+        }),
+    ));
+    while let Ok(event) = app_event_rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            app.transcript_cells.push(cell.into());
+        }
+    }
+    app.handle_thread_event_now(ThreadBufferedEvent::Notification(
+        turn_completed_notification(thread_id, "turn-edit", TurnStatus::Completed),
+    ));
+
+    assert!(app.edit_last_message_from_command());
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "edited");
 }
 
 #[tokio::test]
@@ -4910,12 +5038,26 @@ async fn failed_edit_last_message_preview_rollback_restores_edited_draft() {
     app.chat_widget
         .set_composer_text("edited".to_string(), Vec::new(), Vec::new());
     assert!(app.commit_backtrack_edit_preview());
-    assert_eq!(op_rx.try_recv(), Ok(Op::ThreadRollback { num_turns: 1 }));
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::UserTurn {
+            rollback_num_turns: Some(1),
+            ..
+        })
+    );
 
     app.handle_backtrack_rollback_failed();
 
     assert!(app.backtrack_edit_preview_active());
     assert_eq!(app.chat_widget.composer_text_with_pending(), "edited");
+    assert_eq!(
+        app.chat_widget.footer_hint_override_items(),
+        Some(vec![
+            ("Editing".to_string(), "previous message".to_string()),
+            ("Enter".to_string(), "submit".to_string()),
+            ("Esc".to_string(), "cancel".to_string()),
+        ])
+    );
     assert_eq!(app.transcript_cells.len(), 2);
     assert!(op_rx.try_recv().is_err());
 }

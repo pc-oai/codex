@@ -65,6 +65,7 @@ use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_app_server_protocol::ThreadRealtimeTranscriptDeltaNotification;
 use codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification;
 use codex_app_server_protocol::ThreadRollbackResponse;
+use codex_app_server_protocol::ThreadRolledBackNotification;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
 use codex_app_server_protocol::ToolRequestUserInputOption;
@@ -1145,7 +1146,15 @@ pub(crate) async fn apply_bespoke_event_handling(
             )
             .await;
         }
-        EventMsg::ThreadRolledBack(_rollback_event) => {
+        EventMsg::ThreadRolledBack(rollback_event) => {
+            outgoing
+                .send_server_notification(ServerNotification::ThreadRolledBack(
+                    ThreadRolledBackNotification {
+                        thread_id: conversation_id.to_string(),
+                        num_turns: rollback_event.num_turns,
+                    },
+                ))
+                .await;
             let pending = {
                 let mut state = thread_state.lock().await;
                 state.pending_rollbacks.take()

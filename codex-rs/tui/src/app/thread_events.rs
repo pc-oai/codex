@@ -112,6 +112,14 @@ impl ThreadEventStore {
             ServerNotification::ThreadClosed(_) => {
                 self.active_turn_id = None;
             }
+            ServerNotification::ThreadRolledBack(notification) => {
+                let turns_to_drop = usize::try_from(notification.num_turns).unwrap_or(usize::MAX);
+                let keep_len = self.turns.len().saturating_sub(turns_to_drop);
+                self.turns.truncate(keep_len);
+                self.buffer.clear();
+                self.pending_interactive_replay = PendingInteractiveReplayState::default();
+                self.active_turn_id = None;
+            }
             _ => {}
         }
         self.buffer

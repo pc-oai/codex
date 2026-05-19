@@ -344,6 +344,9 @@ impl TurnRequestProcessor {
             );
             return Err(error);
         }
+        if matches!(params.rollback_num_turns, Some(0)) {
+            return Err(invalid_request("rollbackNumTurns must be >= 1"));
+        }
         let (thread_id, thread) =
             self.load_thread(&params.thread_id)
                 .await
@@ -494,6 +497,13 @@ impl TurnRequestProcessor {
                 final_output_json_schema: params.output_schema,
                 responsesapi_client_metadata: params.responsesapi_client_metadata,
             }
+        };
+        let turn_op = match params.rollback_num_turns {
+            Some(num_turns) => Op::ThreadRollbackThenUserInput {
+                num_turns,
+                next_op: Box::new(turn_op),
+            },
+            None => turn_op,
         };
         let turn_id = self
             .submit_core_op(&request_id, thread.as_ref(), turn_op)

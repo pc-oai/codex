@@ -5773,6 +5773,12 @@ pub struct TurnEnvironmentParams {
 pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
+    /// Optionally rewind the last N user turns before starting this turn.
+    ///
+    /// This supports direct edit flows that replace an earlier user message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub rollback_num_turns: Option<u32>,
     /// Optional turn-scoped Responses API client metadata.
     #[experimental("turn/start.responsesapiClientMetadata")]
     #[ts(optional = nullable)]
@@ -7024,6 +7030,14 @@ pub struct ThreadNameUpdatedNotification {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub thread_name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRolledBackNotification {
+    pub thread_id: String,
+    pub num_turns: u32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -11782,6 +11796,7 @@ mod tests {
         let without_override = TurnStartParams {
             thread_id: "thread_123".to_string(),
             input: vec![],
+            rollback_num_turns: None,
             responsesapi_client_metadata: None,
             environments: None,
             cwd: None,
