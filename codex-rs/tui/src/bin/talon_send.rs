@@ -73,6 +73,11 @@ enum Command {
     CopyLastResponse,
     /// Generate a fresh title suggestion for the current thread.
     RetitleCurrentSession,
+    /// Rename the current thread to an explicit title.
+    RenameCurrentSession {
+        /// Exact title to assign to the current thread.
+        name: String,
+    },
     /// Generate or refresh the leading emoji for the current thread title.
     EmojiCurrentSession,
     /// Interrupt the currently running turn, if any.
@@ -121,6 +126,9 @@ enum TalonCommand {
     CopyLastRequest,
     CopyLastResponse,
     RetitleCurrentSession,
+    RenameCurrentSession {
+        name: String,
+    },
     EmojiCurrentSession,
     InterruptCurrentTurn,
     ExitCurrentSession,
@@ -231,6 +239,16 @@ fn main() -> Result<()> {
             write_request(&request_path, request)?;
             format!(
                 "requested retitle_current_session via {}",
+                request_path.display()
+            )
+        }
+        Command::RenameCurrentSession { name } => {
+            let request = TalonRequest {
+                commands: vec![TalonCommand::RenameCurrentSession { name }],
+            };
+            write_request(&request_path, request)?;
+            format!(
+                "requested rename_current_session via {}",
                 request_path.display()
             )
         }

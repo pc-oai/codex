@@ -163,7 +163,7 @@ use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::io::Write;
+use std::future::pending;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -179,7 +179,6 @@ use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::JoinHandle;
-use tokio::time::interval;
 use toml::Value as TomlValue;
 use uuid::Uuid;
 mod agent_navigation;
@@ -629,6 +628,7 @@ impl App {
         crate::talon::TalonAmbientState {
             version: 1,
             session_id: self.chat_widget.thread_id().map(|id| id.to_string()),
+            local_build_number: crate::version::local_build_number(),
             is_task_running: self.chat_widget.is_task_running(),
             last_user_request: self.latest_user_request_text(),
             recent_user_requests: self.recent_user_request_texts(Self::TALON_RECENT_MESSAGE_LIMIT),
@@ -646,11 +646,11 @@ impl App {
         let _ = crate::talon::write_state(paths, &self.talon_ambient_state());
     }
 
-    fn handle_talon_file_rpc(&mut self, tui: &mut tui::Tui, paths: &crate::talon::TalonPaths) {
-        let Ok(Some(req)) = crate::talon::read_request(paths) else {
-            return;
-        };
-
+    fn handle_talon_request(
+        &mut self,
+        tui: &mut tui::Tui,
+        req: crate::talon::TalonRequest,
+    ) -> crate::talon::TalonResponse {
         let mut applied: Vec<String> = Vec::new();
 
         for cmd in req.commands {
@@ -699,6 +699,11 @@ impl App {
                 RetitleCurrentSession => {
                     self.chat_widget.request_retitle_suggestion();
                     applied.push("retitle_current_session".to_string());
+                }
+                RenameCurrentSession { name } => {
+                    if self.chat_widget.rename_thread_from_text(&name) {
+                        applied.push("rename_current_session".to_string());
+                    }
                 }
                 EmojiCurrentSession => {
                     self.chat_widget.request_emoji_suggestion();
@@ -762,19 +767,17 @@ impl App {
                 .recent_agent_markdowns(Self::TALON_RECENT_MESSAGE_LIMIT),
             model: self.chat_widget.current_model().to_string(),
             reasoning_effort: self.chat_widget.current_reasoning_effort(),
+            local_build_number: crate::version::local_build_number(),
         };
 
-        let resp = crate::talon::TalonResponse {
+        crate::talon::TalonResponse {
             version: 1,
             status: crate::talon::TalonResponseStatus::Ok,
             state,
             applied,
             error: None,
             timestamp_ms: crate::talon::now_timestamp_ms(),
-        };
-
-        let _ = crate::talon::write_response(paths, &resp);
-        let _ = crate::talon::remove_request(paths);
+        }
     }
 
     pub fn chatwidget_init_for_forked_or_resumed_thread(
@@ -1267,8 +1270,26 @@ See the Codex keymap documentation for supported actions and examples."
         let tui_events = tui.event_stream();
         tokio::pin!(tui_events);
 
-        let talon_paths = crate::talon::resolve_paths().ok();
-        let mut talon_tick = interval(Duration::from_millis(200));
+        let mut talon_paths = app
+            .chat_widget
+            .thread_id()
+            .and_then(|thread_id| crate::talon::resolve_session_paths(&thread_id.to_string()).ok());
+        let (mut talon_socket_rx, mut _talon_socket_task) =
+            if let Some(paths) = talon_paths.as_ref() {
+                match crate::talon::start_socket_acceptor(paths).await {
+                    Ok((request_rx, join_handle)) => (Some(request_rx), Some(join_handle)),
+                    Err(err) => {
+                        tracing::warn!("failed to start Talon command socket: {err}");
+                        (None, None)
+                    }
+                }
+            } else {
+                tracing::warn!("Codex thread ID unavailable; Talon command socket not started");
+                (None, None)
+            };
+        if let Some(paths) = talon_paths.as_ref() {
+            app.write_talon_ambient_state(paths);
+        }
 
         tui.frame_requester().schedule_frame();
         app.refresh_startup_skills(&app_server);
@@ -1306,7 +1327,49 @@ See the Codex keymap documentation for supported actions and examples."
         let exit_reason_result = if let Some(exit_reason) = pre_loop_exit_reason {
             Ok(exit_reason)
         } else {
-            loop {
+            'event_loop: loop {
+                // Resume and fork replay their visible history through AppEvents. Drain any
+                // ready work before accepting the next terminal input so shortcuts like Ctrl-E
+                // see the rebuilt transcript instead of briefly treating it as empty.
+                while let Ok(event) = app_event_rx.try_recv() {
+                    match app.handle_event(tui, &mut app_server, event).await {
+                        Ok(AppRunControl::Continue) => {}
+                        Ok(AppRunControl::Exit(reason)) => break 'event_loop Ok(reason),
+                        Err(err) => break 'event_loop Err(err),
+                    }
+                }
+                if talon_paths.is_none()
+                    && let Some(thread_id) = app.chat_widget.thread_id()
+                {
+                    match crate::talon::resolve_session_paths(&thread_id.to_string()) {
+                        Ok(paths) => {
+                            match crate::talon::start_socket_acceptor(&paths).await {
+                                Ok((request_rx, join_handle)) => {
+                                    talon_socket_rx = Some(request_rx);
+                                    _talon_socket_task = Some(join_handle);
+                                }
+                                Err(err) => {
+                                    tracing::warn!(
+                                        "failed to start delayed Talon command socket: {err}"
+                                    );
+                                }
+                            }
+                            app.write_talon_ambient_state(&paths);
+                            talon_paths = Some(paths);
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                "failed to resolve delayed Talon command socket paths: {err}"
+                            );
+                        }
+                    }
+                }
+                if App::should_stop_waiting_for_initial_session(
+                    waiting_for_initial_session_configured,
+                    app.primary_thread_id,
+                ) {
+                    waiting_for_initial_session_configured = false;
+                }
                 let control = select! {
                     Some(event) = app_event_rx.recv() => {
                         match app.handle_event(tui, &mut app_server, event).await {
@@ -1354,16 +1417,22 @@ See the Codex keymap documentation for supported actions and examples."
                         }
                         AppRunControl::Continue
                     }
-                    _ = talon_tick.tick() => {
-                        if let Some(paths) = &talon_paths {
-                            app.handle_talon_file_rpc(tui, paths);
+                    talon_request = async {
+                        if let Some(rx) = talon_socket_rx.as_mut() {
+                            rx.recv().await
+                        } else {
+                            pending::<Option<crate::talon::TalonSocketRequest>>().await
                         }
-                        if let Some(thread_id) = app.chat_widget.thread_id()
-                            && let Ok(paths) =
-                                crate::talon::resolve_session_paths(&thread_id.to_string())
-                        {
-                            app.handle_talon_file_rpc(tui, &paths);
-                            app.write_talon_ambient_state(&paths);
+                    } => {
+                        if let Some(talon_request) = talon_request {
+                            let response = app.handle_talon_request(tui, talon_request.request);
+                            let _ = talon_request.response_tx.send(response);
+                            if let Some(paths) = talon_paths.as_ref() {
+                                app.write_talon_ambient_state(paths);
+                            }
+                        } else {
+                            talon_socket_rx = None;
+                            tracing::warn!("Talon command socket request channel closed");
                         }
                         AppRunControl::Continue
                     }
@@ -1376,7 +1445,7 @@ See the Codex keymap documentation for supported actions and examples."
                 }
                 match control {
                     AppRunControl::Continue => {}
-                    AppRunControl::Exit(reason) => break Ok(reason),
+                    AppRunControl::Exit(reason) => break 'event_loop Ok(reason),
                 }
             }
         };

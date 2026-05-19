@@ -55,6 +55,9 @@ enum TalonCommand {
     CopyLastRequest,
     CopyLastResponse,
     RetitleCurrentSession,
+    RenameCurrentSession {
+        name: String,
+    },
     EmojiCurrentSession,
     InterruptCurrentTurn,
     ExitCurrentSession,
@@ -101,6 +104,8 @@ struct TalonEditorState {
     model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    local_build_number: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -179,6 +184,10 @@ fn main() -> Result<()> {
                 }
                 TalonCommand::RetitleCurrentSession => {
                     applied.push("retitle_current_session".to_string());
+                }
+                TalonCommand::RenameCurrentSession { name } => {
+                    let _ = name;
+                    applied.push("rename_current_session".to_string());
                 }
                 TalonCommand::EmojiCurrentSession => {
                     applied.push("emoji_current_session".to_string());
