@@ -3969,6 +3969,10 @@ pub struct ThreadResumeParams {
     #[experimental("thread/resume.excludeTurns")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exclude_turns: bool,
+    /// When true, restore still-open thread-spawn descendants for this resumed root thread.
+    #[experimental("thread/resume.resumeSubagentTree")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub resume_subagent_tree: bool,
     /// If true, persist additional EventMsg variants to the rollout file.
     /// However, `thread/read`, `thread/resume`, and `thread/fork` still only
     /// return the limited form of thread history for scalability reasons.
@@ -10210,10 +10214,26 @@ mod tests {
     }
 
     #[test]
+    fn client_request_thread_resume_subagent_tree_is_marked_experimental() {
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(
+            &crate::ClientRequest::ThreadResume {
+                request_id: crate::RequestId::Integer(3),
+                params: ThreadResumeParams {
+                    thread_id: "thr_tree_root".to_string(),
+                    resume_subagent_tree: true,
+                    ..Default::default()
+                },
+            },
+        );
+
+        assert_eq!(reason, Some("thread/resume.resumeSubagentTree"));
+    }
+
+    #[test]
     fn client_request_thread_fork_granular_approval_policy_is_marked_experimental() {
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(
             &crate::ClientRequest::ThreadFork {
-                request_id: crate::RequestId::Integer(3),
+                request_id: crate::RequestId::Integer(4),
                 params: ThreadForkParams {
                     thread_id: "thr_456".to_string(),
                     approval_policy: Some(AskForApproval::Granular {

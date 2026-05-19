@@ -662,6 +662,17 @@ impl ThreadManager {
         .await
     }
 
+    /// Reopen persisted open thread-spawn descendants after a root thread has been resumed.
+    pub async fn resume_open_subagent_descendants_from_rollout(
+        &self,
+        config: Config,
+        root_thread_id: ThreadId,
+    ) -> CodexResult<()> {
+        self.agent_control()
+            .resume_open_descendants_from_rollout(config, root_thread_id, /*root_depth*/ 0)
+            .await
+    }
+
     pub(crate) async fn start_thread_with_user_shell_override_for_tests(
         &self,
         config: Config,

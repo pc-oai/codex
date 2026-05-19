@@ -524,6 +524,7 @@ mod thread_processor_behavior_tests {
             developer_instructions: None,
             personality: None,
             exclude_turns: false,
+            resume_subagent_tree: false,
             persist_extended_history: false,
         };
         let config_snapshot = ThreadConfigSnapshot {

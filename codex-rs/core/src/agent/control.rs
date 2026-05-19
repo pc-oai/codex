@@ -448,12 +448,24 @@ impl AgentControl {
             session_source,
         ))
         .await?;
+        self.resume_open_descendants_from_rollout(config, thread_id, root_depth)
+            .await?;
+        Ok(resumed_thread_id)
+    }
+
+    /// Reopen persisted descendants whose thread-spawn edge is still marked open.
+    pub(crate) async fn resume_open_descendants_from_rollout(
+        &self,
+        config: crate::config::Config,
+        thread_id: ThreadId,
+        root_depth: i32,
+    ) -> CodexResult<()> {
         let state = self.upgrade()?;
-        let Ok(resumed_thread) = state.get_thread(resumed_thread_id).await else {
-            return Ok(resumed_thread_id);
+        let Ok(resumed_thread) = state.get_thread(thread_id).await else {
+            return Ok(());
         };
         let Some(state_db_ctx) = resumed_thread.state_db() else {
-            return Ok(resumed_thread_id);
+            return Ok(());
         };
 
         let mut resume_queue = VecDeque::from([(thread_id, root_depth)]);
@@ -508,7 +520,7 @@ impl AgentControl {
             }
         }
 
-        Ok(resumed_thread_id)
+        Ok(())
     }
 
     async fn resume_single_agent_from_rollout(

@@ -2275,6 +2275,7 @@ impl ThreadRequestProcessor {
             developer_instructions,
             personality,
             exclude_turns,
+            resume_subagent_tree,
             persist_extended_history,
         } = params;
         let include_turns = !exclude_turns;
@@ -2369,6 +2370,18 @@ impl ThreadRequestProcessor {
                     request_id.connection_id,
                     "thread",
                 );
+                if resume_subagent_tree
+                    && let Err(err) = self
+                        .thread_manager
+                        .resume_open_subagent_descendants_from_rollout(config.clone(), thread_id)
+                        .await
+                {
+                    tracing::warn!(
+                        %thread_id,
+                        %err,
+                        "failed to resume open subagent descendants"
+                    );
+                }
 
                 let mut thread = match self
                     .load_thread_from_resume_source_or_send_internal(
@@ -2603,6 +2616,21 @@ impl ThreadRequestProcessor {
                 .thread_goal_processor
                 .pending_resume_goal_state(existing_thread.as_ref())
                 .await;
+            if params.resume_subagent_tree
+                && let Err(err) = self
+                    .thread_manager
+                    .resume_open_subagent_descendants_from_rollout(
+                        existing_thread.config().await.as_ref().clone(),
+                        existing_thread_id,
+                    )
+                    .await
+            {
+                tracing::warn!(
+                    %existing_thread_id,
+                    %err,
+                    "failed to resume open subagent descendants for running thread"
+                );
+            }
 
             let command = crate::thread_state::ThreadListenerCommand::SendThreadResumeResponse(
                 Box::new(crate::thread_state::PendingThreadResumeRequest {
