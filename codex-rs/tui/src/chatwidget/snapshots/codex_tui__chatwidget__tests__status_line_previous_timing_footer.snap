@@ -1,6 +1,5 @@
 ---
 source: tui/src/chatwidget/tests/status_and_layout.rs
-assertion_line: 2146
 expression: normalized_backend_snapshot(terminal.backend())
 ---
 "                                                                                "
@@ -9,4 +8,4 @@ expression: normalized_backend_snapshot(terminal.backend())
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "
-"                                                             v2 · 800ms  ≋3ms  "
+"                                                            v55 · 800ms  ≋3ms  "
