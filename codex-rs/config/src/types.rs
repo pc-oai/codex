@@ -717,6 +717,13 @@ pub struct Tui {
     #[serde(default)]
     pub terminal_title: Option<Vec<String>>,
 
+    /// Show a terminal-native progress bar while Codex is actively working, when supported.
+    ///
+    /// Today this uses Ghostty's OSC 9;4 graphical progress surface.
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub terminal_progress_bar: bool,
+
     /// Syntax highlighting theme name (kebab-case).
     ///
     /// When set, overrides automatic light/dark theme detection.

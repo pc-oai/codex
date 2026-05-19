@@ -2580,6 +2580,11 @@
           "description": "Color status line items with colors derived from the active syntax theme. Defaults to `true`.",
           "type": "boolean"
         },
+        "terminal_progress_bar": {
+          "default": true,
+          "description": "Show a terminal-native progress bar while Codex is actively working, when supported.\n\nToday this uses Ghostty's OSC 9;4 graphical progress surface. Defaults to `true`.",
+          "type": "boolean"
+        },
         "terminal_resize_reflow_max_rows": {
           "default": null,
           "description": "Trim terminal resize-reflow replay to the most recent rendered terminal rows when the transcript exceeds this cap. Omit to use Codex's terminal-specific default. Set to `0` to keep all rendered rows.",

@@ -554,6 +554,9 @@ pub struct Config {
     /// message when blocked on the user.
     pub tui_terminal_title: Option<Vec<String>>,
 
+    /// Whether to emit terminal-native working progress bars when supported.
+    pub tui_terminal_progress_bar: bool,
+
     /// Syntax highlighting theme override (kebab-case name).
     pub tui_theme: Option<String>,
 
@@ -3202,6 +3205,11 @@ impl Config {
                 .map(|t| t.context_used_style)
                 .unwrap_or_default(),
             tui_terminal_title: cfg.tui.as_ref().and_then(|t| t.terminal_title.clone()),
+            tui_terminal_progress_bar: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.terminal_progress_bar)
+                .unwrap_or(true),
             tui_theme: cfg.tui.as_ref().and_then(|t| t.theme.clone()),
             terminal_resize_reflow,
             tui_keymap: cfg

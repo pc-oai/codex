@@ -198,6 +198,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         tui_status_line_use_colors: true,
         tui_context_used_style: Default::default(),
         tui_terminal_title: None,
+        tui_terminal_progress_bar: true,
         tui_theme: None,
         terminal_resize_reflow: TerminalResizeReflowConfig::default(),
         tui_keymap: TuiKeymap::default(),

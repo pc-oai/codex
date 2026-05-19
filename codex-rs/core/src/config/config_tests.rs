@@ -557,6 +557,7 @@ fn config_toml_deserializes_model_availability_nux() {
             status_line_use_colors: true,
             context_used_style: Default::default(),
             terminal_title: None,
+            terminal_progress_bar: true,
             theme: None,
             keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig {
@@ -603,6 +604,37 @@ status_line_use_colors = false
 }
 
 #[test]
+fn config_toml_terminal_progress_bar_defaults_to_enabled() {
+    let toml = r#"
+[tui]
+"#;
+    let cfg: ConfigToml =
+        toml::from_str(toml).expect("TOML deserialization should succeed for TUI config");
+
+    assert!(
+        cfg.tui
+            .expect("tui config should deserialize")
+            .terminal_progress_bar
+    );
+}
+
+#[test]
+fn config_toml_deserializes_terminal_progress_bar_disabled() {
+    let toml = r#"
+[tui]
+terminal_progress_bar = false
+"#;
+    let cfg: ConfigToml =
+        toml::from_str(toml).expect("TOML deserialization should succeed for TUI config");
+
+    assert!(
+        !cfg.tui
+            .expect("tui config should deserialize")
+            .terminal_progress_bar
+    );
+}
+
+#[test]
 fn config_toml_deserializes_paste_text_inline_char_limit() {
     let toml = r#"
 paste_text_inline_char_limit = 4096
@@ -611,6 +643,25 @@ paste_text_inline_char_limit = 4096
         .expect("TOML deserialization should succeed for pasted text inline char limit");
 
     assert_eq!(cfg.paste_text_inline_char_limit, Some(4096));
+}
+
+#[tokio::test]
+async fn runtime_config_resolves_terminal_progress_bar_disabled() {
+    let cfg = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            tui: Some(Tui {
+                terminal_progress_bar: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config with terminal progress bar disabled");
+
+    assert!(!cfg.tui_terminal_progress_bar);
 }
 
 #[tokio::test]
@@ -2178,6 +2229,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             status_line_use_colors: true,
             context_used_style: Default::default(),
             terminal_title: None,
+            terminal_progress_bar: true,
             theme: None,
             keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
@@ -6531,6 +6583,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             tui_status_line_use_colors: true,
             tui_context_used_style: Default::default(),
             tui_terminal_title: None,
+            tui_terminal_progress_bar: true,
             tui_theme: None,
             tui_timing: None,
             otel: OtelConfig::default(),
@@ -6737,6 +6790,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         tui_status_line_use_colors: true,
         tui_context_used_style: Default::default(),
         tui_terminal_title: None,
+        tui_terminal_progress_bar: true,
         tui_theme: None,
         tui_timing: None,
         otel: OtelConfig::default(),
@@ -6897,6 +6951,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         tui_status_line_use_colors: true,
         tui_context_used_style: Default::default(),
         tui_terminal_title: None,
+        tui_terminal_progress_bar: true,
         tui_theme: None,
         tui_timing: None,
         otel: OtelConfig::default(),
@@ -7042,6 +7097,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         tui_status_line_use_colors: true,
         tui_context_used_style: Default::default(),
         tui_terminal_title: None,
+        tui_terminal_progress_bar: true,
         tui_theme: None,
         tui_timing: None,
         otel: OtelConfig::default(),

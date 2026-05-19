@@ -77,6 +77,8 @@ use crate::status::StatusHistoryHandle;
 use crate::status::format_directory_display;
 use crate::status::format_tokens_compact;
 use crate::status::rate_limit_snapshot_display_for_limit;
+use crate::terminal_progress::clear_terminal_progress;
+use crate::terminal_progress::show_terminal_progress_indeterminate;
 use crate::terminal_title::SetTerminalTitleResult;
 use crate::terminal_title::clear_terminal_title;
 use crate::terminal_title::set_terminal_title;
@@ -834,6 +836,8 @@ pub(crate) struct ChatWidget {
     /// This is kept separate from `mcp_startup_status` so that MCP startup progress (or completion)
     /// can update the status header without accidentally clearing the spinner for an active turn.
     agent_turn_running: bool,
+    /// Whether Codex currently owns Ghostty's OSC 9;4 progress-bar surface.
+    managed_terminal_progress_active: bool,
     /// Tracks per-server MCP startup state while startup is in progress.
     ///
     /// The map is `Some(_)` from the first startup status update until the
@@ -1713,8 +1717,55 @@ impl ChatWidget {
     /// conversation surface look like Codex is actively working on the user's behalf.
     fn update_task_running_state(&mut self) {
         self.bottom_pane.set_task_running(self.agent_turn_running);
+        self.sync_managed_terminal_progress();
         self.refresh_plan_mode_nudge();
         self.refresh_status_surfaces();
+    }
+
+    fn sync_managed_terminal_progress(&mut self) {
+        let should_show_progress = self.config.tui_terminal_progress_bar && self.agent_turn_running;
+        if self.managed_terminal_progress_active == should_show_progress {
+            return;
+        }
+
+        let progress_update = if should_show_progress {
+            show_terminal_progress_indeterminate()
+        } else {
+            clear_terminal_progress()
+        };
+
+        match progress_update {
+            Ok(()) => {
+                self.managed_terminal_progress_active = should_show_progress;
+            }
+            Err(err) => {
+                tracing::debug!(error = %err, "failed to update terminal progress bar");
+            }
+        }
+    }
+
+    /// Transfer live Ghostty progress ownership away from this widget without clearing it.
+    ///
+    /// Thread switches rebuild the whole `ChatWidget`. If the destination thread is also running,
+    /// clearing OSC 9;4 during the old widget's drop and immediately showing it again from the new
+    /// widget creates a tiny tab-bar/progress flicker. The app can move ownership across that swap
+    /// instead when it already knows the destination should keep the bar visible.
+    pub(crate) fn take_managed_terminal_progress(&mut self) -> bool {
+        std::mem::take(&mut self.managed_terminal_progress_active)
+    }
+
+    /// Reuse an already-visible Ghostty progress bar after a thread-widget replacement.
+    pub(crate) fn inherit_managed_terminal_progress(&mut self, progress_active: bool) {
+        self.managed_terminal_progress_active = progress_active;
+    }
+
+    pub(crate) fn clear_managed_terminal_progress(&mut self) -> std::io::Result<()> {
+        if self.managed_terminal_progress_active {
+            clear_terminal_progress()?;
+            self.managed_terminal_progress_active = false;
+        }
+
+        Ok(())
     }
 
     fn restore_reasoning_status_header(&mut self) {
@@ -5030,6 +5081,7 @@ impl ChatWidget {
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
+            managed_terminal_progress_active: false,
             mcp_startup_status: None,
             last_agent_markdown: None,
             agent_turn_markdowns: Vec::new(),
@@ -11238,6 +11290,9 @@ fn has_timing_metrics(summary: RuntimeMetricsSummary) -> bool {
 
 impl Drop for ChatWidget {
     fn drop(&mut self) {
+        if let Err(err) = self.clear_managed_terminal_progress() {
+            tracing::debug!(error = %err, "failed to clear terminal progress bar on widget drop");
+        }
         self.reset_realtime_conversation_state();
         self.stop_rate_limit_poller();
     }

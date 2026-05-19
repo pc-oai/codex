@@ -3140,3 +3140,19 @@ async fn chatwidget_tall() {
         normalize_snapshot_paths(term.backend().vt100().screen().contents())
     );
 }
+
+#[tokio::test]
+async fn terminal_progress_ownership_can_move_without_clearing_terminal_state() {
+    let (mut old_chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    old_chat.managed_terminal_progress_active = true;
+
+    let transferred = old_chat.take_managed_terminal_progress();
+
+    assert!(transferred);
+    assert!(!old_chat.managed_terminal_progress_active);
+
+    let (mut new_chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    new_chat.inherit_managed_terminal_progress(transferred);
+
+    assert!(new_chat.managed_terminal_progress_active);
+}
