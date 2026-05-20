@@ -132,6 +132,15 @@ impl App {
         {
             return;
         }
+        if self.overlay.is_none()
+            && self.chat_widget.no_modal_or_popup_active()
+            && self.chat_widget.composer_text_with_pending().is_empty()
+            && spawn_subagent_shortcut_matches(key_event)
+        {
+            self.chat_widget
+                .set_composer_text("/subagent ".to_string(), Vec::new(), Vec::new());
+            return;
+        }
 
         let app_keymap_shortcuts_available = self.app_keymap_shortcuts_available();
 

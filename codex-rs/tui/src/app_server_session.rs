@@ -89,6 +89,8 @@ use codex_app_server_protocol::ThreadSetNameResponse;
 use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadShellCommandResponse;
 use codex_app_server_protocol::ThreadSource;
+use codex_app_server_protocol::ThreadSpawnParams;
+use codex_app_server_protocol::ThreadSpawnResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartSource;
@@ -425,6 +427,30 @@ impl AppServerSession {
             started_thread_from_fork_response(response, &config, self.thread_params_mode()).await?;
         started.session.fork_parent_title = fork_parent_title;
         Ok(started)
+    }
+
+    pub(crate) async fn spawn_subagent(
+        &mut self,
+        parent_thread_id: ThreadId,
+        prompt: String,
+    ) -> Result<Thread> {
+        let request_id = self.next_request_id();
+        let response: ThreadSpawnResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadSpawn {
+                request_id,
+                params: ThreadSpawnParams {
+                    thread_id: parent_thread_id.to_string(),
+                    input: vec![UserInput::Text {
+                        text: prompt,
+                        text_elements: Vec::new(),
+                    }],
+                    task_name: None,
+                },
+            })
+            .await
+            .map_err(|err| bootstrap_request_error("thread/spawn failed", err))?;
+        Ok(response.thread)
     }
 
     fn thread_params_mode(&self) -> ThreadParamsMode {

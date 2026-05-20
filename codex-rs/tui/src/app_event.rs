@@ -146,6 +146,12 @@ pub(crate) enum AppEvent {
         user_message: Option<UserMessage>,
     },
 
+    /// Spawn a child agent from the active thread without switching focus.
+    StartSubagent {
+        parent_thread_id: ThreadId,
+        prompt: String,
+    },
+
     /// Submit an op to the specified thread, regardless of current focus.
     SubmitThreadOp {
         thread_id: ThreadId,

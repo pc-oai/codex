@@ -1701,6 +1701,13 @@ impl App {
                     .handle_start_side(tui, app_server, parent_thread_id, user_message)
                     .await;
             }
+            AppEvent::StartSubagent {
+                parent_thread_id,
+                prompt,
+            } => {
+                self.handle_start_subagent(app_server, parent_thread_id, prompt)
+                    .await;
+            }
             AppEvent::OpenSkillsList => {
                 self.chat_widget.open_skills_list();
             }

@@ -102,6 +102,10 @@ pub(crate) fn open_agent_picker_shortcut() -> crate::key_hint::KeyBinding {
     crate::key_hint::ctrl(KeyCode::Char('a'))
 }
 
+pub(crate) fn spawn_subagent_shortcut() -> crate::key_hint::KeyBinding {
+    crate::key_hint::alt(KeyCode::Char('\\'))
+}
+
 pub(crate) fn previous_agent_shortcut_matches(key_event: KeyEvent) -> bool {
     previous_agent_shortcut().is_press(key_event)
 }
@@ -116,6 +120,10 @@ pub(crate) fn rotate_agent_shortcut_matches(key_event: KeyEvent) -> bool {
 
 pub(crate) fn open_agent_picker_shortcut_matches(key_event: KeyEvent) -> bool {
     open_agent_picker_shortcut().is_press(key_event)
+}
+
+pub(crate) fn spawn_subagent_shortcut_matches(key_event: KeyEvent) -> bool {
+    spawn_subagent_shortcut().is_press(key_event)
 }
 
 pub(crate) fn spawn_request_summary(item: &ThreadItem) -> Option<SpawnRequestSummary> {
@@ -695,6 +703,10 @@ mod tests {
             KeyCode::Char('a'),
             KeyModifiers::CONTROL,
         )));
+        assert!(spawn_subagent_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('\\'),
+            KeyModifiers::ALT,
+        )));
         assert!(!previous_agent_shortcut_matches(KeyEvent::new(
             KeyCode::Left,
             KeyModifiers::ALT
@@ -710,6 +722,10 @@ mod tests {
         assert!(!open_agent_picker_shortcut_matches(KeyEvent::new(
             KeyCode::Char('a'),
             KeyModifiers::ALT,
+        )));
+        assert!(!spawn_subagent_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('\\'),
+            KeyModifiers::NONE,
         )));
     }
 

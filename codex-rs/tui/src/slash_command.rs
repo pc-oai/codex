@@ -69,6 +69,7 @@ pub enum SlashCommand {
     TestApproval,
     #[strum(serialize = "subagents")]
     MultiAgents,
+    Subagent,
     // Debugging commands.
     #[strum(serialize = "debug-m-drop")]
     MemoryDrop,
@@ -117,6 +118,7 @@ impl SlashCommand {
             SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Goal => "set or view the goal for a long-running task",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
+            SlashCommand::Subagent => "spawn a child agent from this thread",
             SlashCommand::Side => "start a side conversation in an ephemeral fork",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
             SlashCommand::Keymap => "remap TUI shortcuts",
@@ -157,6 +159,7 @@ impl SlashCommand {
                 | SlashCommand::Raw
                 | SlashCommand::Pets
                 | SlashCommand::Side
+                | SlashCommand::Subagent
                 | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
         )
@@ -226,7 +229,7 @@ impl SlashCommand {
             SlashCommand::TestApproval => true,
             SlashCommand::Realtime => true,
             SlashCommand::Settings => true,
-            SlashCommand::Agent | SlashCommand::MultiAgents => true,
+            SlashCommand::Agent | SlashCommand::MultiAgents | SlashCommand::Subagent => true,
             SlashCommand::Theme | SlashCommand::Pets => false,
         }
     }

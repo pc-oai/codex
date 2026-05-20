@@ -2301,6 +2301,34 @@ async fn slash_fork_requests_current_fork() {
 }
 
 #[tokio::test]
+async fn slash_subagent_requests_child_spawn_while_task_running() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let parent_thread_id = ThreadId::new();
+    chat.thread_id = Some(parent_thread_id);
+    chat.on_task_started();
+    chat.bottom_pane.set_composer_text(
+        "/subagent check parser tests".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::StartSubagent {
+            parent_thread_id: emitted_parent_thread_id,
+            prompt,
+        }) if emitted_parent_thread_id == parent_thread_id
+            && prompt == "check parser tests"
+    );
+    assert!(
+        op_rx.try_recv().is_err(),
+        "expected no op on the parent thread"
+    );
+}
+
+#[tokio::test]
 async fn slash_rollout_displays_current_path() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let rollout_path = PathBuf::from("/tmp/codex-test-rollout.jsonl");
