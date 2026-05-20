@@ -56,8 +56,9 @@ impl App {
         prompt: String,
         current_name: Option<String>,
     ) {
-        self.refresh_in_memory_config_from_disk_best_effort("generating a thread title")
-            .await;
+        // Title suggestions are metadata-only hidden forks. Reuse the live in-memory config
+        // instead of rebuilding config from disk here; that keeps retitling decoupled from
+        // unrelated config reload failures.
         let fork_config = self.thread_name_suggestion_fork_config();
         let forked = match app_server.fork_thread(fork_config, parent_thread_id).await {
             Ok(forked) => forked,
