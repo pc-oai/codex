@@ -30,6 +30,7 @@ pub enum SlashCommand {
     Memories,
     Skills,
     Hooks,
+    #[strum(to_string = "review", serialize = "rev")]
     Review,
     Rename,
     Park,
@@ -46,6 +47,7 @@ pub enum SlashCommand {
     Reload,
     Fork,
     Init,
+    #[strum(to_string = "compact", serialize = "c")]
     Compact,
     Condensed,
     Plan,
@@ -61,6 +63,7 @@ pub enum SlashCommand {
     Mention,
     Status,
     DebugConfig,
+    #[strum(to_string = "title", serialize = "t")]
     Title,
     Statusline,
     Theme,
@@ -169,6 +172,22 @@ impl SlashCommand {
     /// existing code that expects a method named `command()`.
     pub fn command(self) -> &'static str {
         self.into()
+    }
+
+    /// Short spellings that should appear in slash autocomplete.
+    pub fn completion_aliases(self) -> &'static [&'static str] {
+        match self {
+            SlashCommand::Model => &["m"],
+            SlashCommand::Effort => &["e"],
+            SlashCommand::Reload => &["r"],
+            SlashCommand::Compact => &["c"],
+            SlashCommand::Id => &["i"],
+            SlashCommand::Review => &["rev"],
+            SlashCommand::Title => &["t"],
+            SlashCommand::Retitle => &["rt"],
+            SlashCommand::Emoji => &["em"],
+            _ => &[],
+        }
     }
 
     /// Whether this command supports inline args (for example `/review ...`).

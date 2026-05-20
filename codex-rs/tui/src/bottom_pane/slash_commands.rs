@@ -149,7 +149,17 @@ pub(crate) fn has_slash_command_prefix(
 ) -> bool {
     commands_for_input(flags, service_tier_commands)
         .into_iter()
-        .any(|command| fuzzy_match(command.command(), name).is_some())
+        .any(|command| {
+            fuzzy_match(command.command(), name).is_some()
+                || matches!(
+                    command,
+                    SlashCommandItem::Builtin(cmd)
+                        if cmd
+                            .completion_aliases()
+                            .iter()
+                            .any(|alias| fuzzy_match(alias, name).is_some())
+                )
+        })
 }
 
 #[cfg(test)]
@@ -292,7 +302,9 @@ mod tests {
             commands,
             vec![
                 SlashCommand::Ide,
+                SlashCommand::Id,
                 SlashCommand::Copy,
+                SlashCommand::CopyLastRequest,
                 SlashCommand::Raw,
                 SlashCommand::Diff,
                 SlashCommand::Mention,

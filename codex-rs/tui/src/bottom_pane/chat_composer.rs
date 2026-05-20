@@ -1802,6 +1802,9 @@ impl ChatComposer {
                     return (
                         match sel {
                             CommandItem::Builtin(cmd) => InputResult::Command(cmd),
+                            CommandItem::BuiltinAlias { command, .. } => {
+                                InputResult::Command(command)
+                            }
                             CommandItem::ServiceTier(command) => {
                                 InputResult::ServiceTierCommand(command)
                             }
@@ -7624,6 +7627,9 @@ mod tests {
                 Some(CommandItem::Builtin(cmd)) => {
                     assert_eq!(cmd.command(), "model")
                 }
+                Some(CommandItem::BuiltinAlias { name, .. }) => {
+                    panic!("expected model command, got alias {name}")
+                }
                 Some(CommandItem::ServiceTier(command)) => {
                     panic!("expected model command, got service tier {command:?}")
                 }
@@ -7680,6 +7686,9 @@ mod tests {
                 Some(CommandItem::Builtin(cmd)) => {
                     assert_eq!(cmd.command(), "resume")
                 }
+                Some(CommandItem::BuiltinAlias { name, .. }) => {
+                    panic!("expected resume command, got alias {name}")
+                }
                 Some(CommandItem::ServiceTier(command)) => {
                     panic!("expected resume command, got service tier {command:?}")
                 }
@@ -7733,6 +7742,9 @@ mod tests {
             ActivePopup::Command(popup) => match popup.selected_item() {
                 Some(CommandItem::Builtin(cmd)) => {
                     assert_eq!(cmd.command(), "pets")
+                }
+                Some(CommandItem::BuiltinAlias { name, .. }) => {
+                    panic!("expected pets command, got alias {name}")
                 }
                 Some(CommandItem::ServiceTier(command)) => {
                     panic!("expected pets command, got service tier {command:?}")
