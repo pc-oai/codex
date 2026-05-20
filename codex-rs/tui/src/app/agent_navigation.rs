@@ -20,16 +20,9 @@
 
 use crate::multi_agents::AgentPickerThreadEntry;
 use crate::multi_agents::format_agent_picker_item_name;
-#[cfg(test)]
 use crate::multi_agents::next_agent_shortcut;
-#[cfg(test)]
 use crate::multi_agents::previous_agent_shortcut;
-#[cfg(test)]
-use crate::multi_agents::rotate_agent_shortcut;
 use codex_protocol::ThreadId;
-use ratatui::style::Stylize;
-use ratatui::text::Line;
-#[cfg(test)]
 use ratatui::text::Span;
 use std::collections::HashMap;
 
@@ -213,115 +206,41 @@ impl AgentNavigationState {
         &self,
         current_displayed_thread_id: Option<ThreadId>,
         primary_thread_id: Option<ThreadId>,
-        working_subagents: usize,
     ) -> Option<String> {
-        let ordered_threads = self.ordered_threads();
-        if ordered_threads.len() <= 1 {
+        if self.threads.len() <= 1 {
             return None;
         }
 
         let thread_id = current_displayed_thread_id?;
         let is_primary = primary_thread_id == Some(thread_id);
-        let position = ordered_threads
-            .iter()
-            .position(|(candidate, _)| *candidate == thread_id)
-            .map(|idx| idx + 1)?;
-        let label = self
-            .threads
-            .get(&thread_id)
-            .map(|entry| {
-                format_agent_picker_item_name(
-                    entry.agent_nickname.as_deref(),
-                    entry.agent_role.as_deref(),
-                    is_primary,
-                )
-            })
-            .unwrap_or_else(|| {
-                format_agent_picker_item_name(
-                    /*agent_nickname*/ None, /*agent_role*/ None, is_primary,
-                )
-            });
-        let working_suffix = (working_subagents > 0).then(|| format!(" · ⚙{working_subagents}"));
-        Some(format!(
-            "{label} · {position}/{}{}",
-            ordered_threads.len(),
-            working_suffix.unwrap_or_default()
-        ))
-    }
-
-    pub(crate) fn switching_agent_label(
-        &self,
-        target_thread_id: ThreadId,
-        primary_thread_id: Option<ThreadId>,
-    ) -> String {
-        let is_primary = primary_thread_id == Some(target_thread_id);
-        self.threads
-            .get(&target_thread_id)
-            .map(|entry| {
-                format_agent_picker_item_name(
-                    entry.agent_nickname.as_deref(),
-                    entry.agent_role.as_deref(),
-                    is_primary,
-                )
-            })
-            .unwrap_or_else(|| {
-                format_agent_picker_item_name(
-                    /*agent_nickname*/ None, /*agent_role*/ None, is_primary,
-                )
-            })
-    }
-
-    pub(crate) fn agent_neighbor_strip(
-        &self,
-        current_displayed_thread_id: Option<ThreadId>,
-        primary_thread_id: Option<ThreadId>,
-        highlighted_thread_id: Option<ThreadId>,
-    ) -> Option<Line<'static>> {
-        let ordered_threads = self.ordered_threads();
-        if ordered_threads.len() < 2 {
-            return None;
-        }
-        let current_thread_id = current_displayed_thread_id?;
-        let current_idx = ordered_threads
-            .iter()
-            .position(|(thread_id, _)| *thread_id == current_thread_id)?;
-        let previous_idx = if current_idx == 0 {
-            ordered_threads.len() - 1
-        } else {
-            current_idx - 1
-        };
-        let next_idx = (current_idx + 1) % ordered_threads.len();
-        let label_for = |thread_id| {
-            let label = self.switching_agent_label(thread_id, primary_thread_id);
-            if highlighted_thread_id == Some(thread_id) {
-                label.cyan().bold()
-            } else {
-                label.dim()
-            }
-        };
-        Some(Line::from(vec![
-            "‹ ".dim(),
-            label_for(ordered_threads[previous_idx].0),
-            " | ".dim(),
-            label_for(current_thread_id),
-            " | ".dim(),
-            label_for(ordered_threads[next_idx].0),
-            " ›".dim(),
-        ]))
+        Some(
+            self.threads
+                .get(&thread_id)
+                .map(|entry| {
+                    format_agent_picker_item_name(
+                        entry.agent_nickname.as_deref(),
+                        entry.agent_role.as_deref(),
+                        is_primary,
+                    )
+                })
+                .unwrap_or_else(|| {
+                    format_agent_picker_item_name(
+                        /*agent_nickname*/ None, /*agent_role*/ None, is_primary,
+                    )
+                }),
+        )
     }
 
     /// Builds the `/agent` picker subtitle from the same canonical bindings used by key handling.
     ///
     /// Keeping this text derived from the actual shortcut helpers prevents the picker copy from
     /// drifting if the bindings ever change on one platform.
-    #[cfg(test)]
     pub(crate) fn picker_subtitle() -> String {
         let previous: Span<'static> = previous_agent_shortcut().into();
         let next: Span<'static> = next_agent_shortcut().into();
-        let rotate: Span<'static> = rotate_agent_shortcut().into();
         format!(
-            "Select an agent to watch. {} previous, {} next, {} rotate.",
-            previous.content, next.content, rotate.content
+            "Select an agent to watch. {} previous, {} next.",
+            previous.content, next.content
         )
     }
 
@@ -413,39 +332,23 @@ mod tests {
     fn picker_subtitle_mentions_shortcuts() {
         let previous: Span<'static> = previous_agent_shortcut().into();
         let next: Span<'static> = next_agent_shortcut().into();
-        let rotate: Span<'static> = rotate_agent_shortcut().into();
         let subtitle = AgentNavigationState::picker_subtitle();
 
         assert!(subtitle.contains(previous.content.as_ref()));
         assert!(subtitle.contains(next.content.as_ref()));
-        assert!(subtitle.contains(rotate.content.as_ref()));
     }
 
     #[test]
     fn active_agent_label_tracks_current_thread() {
-        let (state, main_thread_id, first_agent_id, second_agent_id) = populated_state();
+        let (state, main_thread_id, first_agent_id, _) = populated_state();
 
         assert_eq!(
-            state.active_agent_label(
-                Some(first_agent_id),
-                Some(main_thread_id),
-                /*working_subagents*/ 0,
-            ),
-            Some("Robie [explorer] · 2/3".to_string())
+            state.active_agent_label(Some(first_agent_id), Some(main_thread_id)),
+            Some("Robie [explorer]".to_string())
         );
         assert_eq!(
-            state.active_agent_label(Some(main_thread_id), Some(main_thread_id), 2),
-            Some("Main [default] · 1/3 · ⚙2".to_string())
-        );
-        assert_eq!(
-            state
-                .agent_neighbor_strip(
-                    Some(first_agent_id),
-                    Some(main_thread_id),
-                    Some(second_agent_id),
-                )
-                .map(|line| line.to_string()),
-            Some("‹ Main [default] | Robie [explorer] | Bob [worker] ›".to_string())
+            state.active_agent_label(Some(main_thread_id), Some(main_thread_id)),
+            Some("Main [default]".to_string())
         );
     }
 }

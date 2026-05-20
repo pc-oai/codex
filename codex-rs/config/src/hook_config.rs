@@ -25,6 +25,8 @@ pub struct HooksToml {
 pub struct HookStateToml {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trusted_hash: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -35,10 +37,16 @@ pub struct HookEventsToml {
     pub permission_request: Vec<MatcherGroup>,
     #[serde(rename = "PostToolUse", default)]
     pub post_tool_use: Vec<MatcherGroup>,
+    #[serde(rename = "PreCompact", default)]
+    pub pre_compact: Vec<MatcherGroup>,
+    #[serde(rename = "PostCompact", default)]
+    pub post_compact: Vec<MatcherGroup>,
     #[serde(rename = "SessionStart", default)]
     pub session_start: Vec<MatcherGroup>,
     #[serde(rename = "UserPromptSubmit", default)]
     pub user_prompt_submit: Vec<MatcherGroup>,
+    #[serde(rename = "SubagentStart", default)]
+    pub subagent_start: Vec<MatcherGroup>,
     #[serde(rename = "Stop", default)]
     pub stop: Vec<MatcherGroup>,
 }
@@ -49,15 +57,21 @@ impl HookEventsToml {
             pre_tool_use,
             permission_request,
             post_tool_use,
+            pre_compact,
+            post_compact,
             session_start,
             user_prompt_submit,
+            subagent_start,
             stop,
         } = self;
         pre_tool_use.is_empty()
             && permission_request.is_empty()
             && post_tool_use.is_empty()
+            && pre_compact.is_empty()
+            && post_compact.is_empty()
             && session_start.is_empty()
             && user_prompt_submit.is_empty()
+            && subagent_start.is_empty()
             && stop.is_empty()
     }
 
@@ -66,16 +80,22 @@ impl HookEventsToml {
             pre_tool_use,
             permission_request,
             post_tool_use,
+            pre_compact,
+            post_compact,
             session_start,
             user_prompt_submit,
+            subagent_start,
             stop,
         } = self;
         [
             pre_tool_use,
             permission_request,
             post_tool_use,
+            pre_compact,
+            post_compact,
             session_start,
             user_prompt_submit,
+            subagent_start,
             stop,
         ]
         .into_iter()
@@ -84,13 +104,16 @@ impl HookEventsToml {
         .sum()
     }
 
-    pub fn into_matcher_groups(self) -> [(HookEventName, Vec<MatcherGroup>); 6] {
+    pub fn into_matcher_groups(self) -> [(HookEventName, Vec<MatcherGroup>); 9] {
         [
             (HookEventName::PreToolUse, self.pre_tool_use),
             (HookEventName::PermissionRequest, self.permission_request),
             (HookEventName::PostToolUse, self.post_tool_use),
+            (HookEventName::PreCompact, self.pre_compact),
+            (HookEventName::PostCompact, self.post_compact),
             (HookEventName::SessionStart, self.session_start),
             (HookEventName::UserPromptSubmit, self.user_prompt_submit),
+            (HookEventName::SubagentStart, self.subagent_start),
             (HookEventName::Stop, self.stop),
         ]
     }
@@ -110,6 +133,8 @@ pub enum HookHandlerConfig {
     #[serde(rename = "command")]
     Command {
         command: String,
+        #[serde(default, rename = "commandWindows", alias = "command_windows")]
+        command_windows: Option<String>,
         #[serde(default, rename = "timeout")]
         timeout_sec: Option<u64>,
         #[serde(default)]

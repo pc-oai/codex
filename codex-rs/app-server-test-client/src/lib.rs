@@ -1552,6 +1552,7 @@ impl CodexClient {
                 },
                 capabilities: Some(InitializeCapabilities {
                     experimental_api,
+                    request_attestation: false,
                     opt_out_notification_methods: Some(
                         NOTIFICATIONS_TO_OPT_OUT
                             .iter()
@@ -1946,6 +1947,7 @@ impl CodexClient {
             thread_id,
             turn_id,
             item_id,
+            started_at_ms: _,
             approval_id,
             reason,
             network_approval_context,
@@ -2021,6 +2023,7 @@ impl CodexClient {
             thread_id,
             turn_id,
             item_id,
+            started_at_ms: _,
             reason,
             grant_root,
         } = params;

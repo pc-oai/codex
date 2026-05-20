@@ -22,8 +22,18 @@ impl App {
         width: u16,
         version: &'static str,
     ) -> Vec<Line<'static>> {
-        let _ = (width, version);
-        vec![Line::from("")]
+        history_cell::SessionHeaderHistoryCell::new(
+            self.chat_widget.current_model().to_string(),
+            self.chat_widget.current_reasoning_effort(),
+            self.chat_widget.should_show_fast_status(
+                self.chat_widget.current_model(),
+                self.chat_widget.current_service_tier(),
+            ),
+            self.config.cwd.to_path_buf(),
+            version,
+        )
+        .with_yolo_mode(history_cell::is_yolo_mode(&self.config))
+        .display_lines(width)
     }
 
     pub(super) fn clear_ui_header_lines(&self, width: u16) -> Vec<Line<'static>> {
@@ -31,7 +41,9 @@ impl App {
     }
 
     pub(super) fn queue_clear_ui_header(&mut self, tui: &mut tui::Tui) {
-        let width = tui.terminal.last_known_screen_size.width;
+        let width = self
+            .chat_widget
+            .history_wrap_width(tui.terminal.last_known_screen_size.width);
         let header_lines = self.clear_ui_header_lines(width);
         if !header_lines.is_empty() {
             tui.insert_history_lines(header_lines);
@@ -59,7 +71,8 @@ impl App {
 
         let mut area = tui.terminal.viewport_area;
         if area.y > 0 {
-            // After a full clear, anchor the inline viewport at the top.
+            // After a full clear, anchor the inline viewport at the top and redraw a fresh header
+            // box. `insert_history_lines()` will shift the viewport down by the rendered height.
             area.y = 0;
             tui.terminal.set_viewport_area(area);
         }
@@ -83,27 +96,6 @@ impl App {
         self.transcript_reflow.clear();
         self.initial_history_replay_buffer = None;
         self.backtrack = BacktrackState::default();
-        self.chat_widget.clear_edit_last_message_hint();
         self.backtrack_render_pending = false;
-    }
-
-    /// Toggle native main-view scrollback between full and message-only transcript projections.
-    ///
-    /// The canonical `transcript_cells` collection remains untouched. We clear the terminal's
-    /// rendered scrollback, flip the projection bit, and replay the current thread into ordinary
-    /// terminal history so native scrolling resumes immediately afterward.
-    pub(super) fn toggle_condensed_transcript_view(&mut self, tui: &mut tui::Tui) -> Result<()> {
-        self.condensed_transcript_view = !self.condensed_transcript_view;
-        self.chat_widget
-            .set_condensed_transcript_view(self.condensed_transcript_view);
-        self.deferred_history_lines.clear();
-        self.initial_history_replay_buffer = None;
-        // The toggle performs its own authoritative clear + replay. Drop any older resize-reflow
-        // repaint request so it cannot immediately replace the freshly restored projection with a
-        // stale/capped replay scheduled before the mode switch.
-        self.transcript_reflow.clear();
-        self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
-        self.render_transcript_once(tui);
-        Ok(())
     }
 }

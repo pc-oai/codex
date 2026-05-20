@@ -8,7 +8,6 @@ use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::ThreadRealtimeAudioChunk;
 use codex_app_server_protocol::ThreadRealtimeStartTransport;
-use codex_app_server_protocol::ThreadUserState;
 use codex_app_server_protocol::ToolRequestUserInputResponse;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::ApprovalsReviewer;
@@ -16,9 +15,8 @@ use codex_protocol::approvals::GuardianAssessmentEvent;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use serde::Serialize;
@@ -40,15 +38,14 @@ pub(crate) enum AppCommand {
     },
     UserTurn {
         items: Vec<UserInput>,
-        rollback_num_turns: Option<u32>,
         cwd: PathBuf,
         approval_policy: AskForApproval,
         approvals_reviewer: Option<ApprovalsReviewer>,
-        permission_profile: PermissionProfile,
+        active_permission_profile: Option<ActivePermissionProfile>,
         model: String,
         effort: Option<ReasoningEffortConfig>,
         summary: Option<ReasoningSummaryConfig>,
-        service_tier: Option<Option<ServiceTier>>,
+        service_tier: Option<Option<String>>,
         final_output_json_schema: Option<Value>,
         collaboration_mode: Option<CollaborationMode>,
         personality: Option<Personality>,
@@ -57,12 +54,12 @@ pub(crate) enum AppCommand {
         cwd: Option<PathBuf>,
         approval_policy: Option<AskForApproval>,
         approvals_reviewer: Option<ApprovalsReviewer>,
-        permission_profile: Option<PermissionProfile>,
+        active_permission_profile: Option<ActivePermissionProfile>,
         windows_sandbox_level: Option<WindowsSandboxLevel>,
         model: Option<String>,
         effort: Option<Option<ReasoningEffortConfig>>,
         summary: Option<ReasoningSummaryConfig>,
-        service_tier: Option<Option<ServiceTier>>,
+        service_tier: Option<Option<String>>,
         collaboration_mode: Option<CollaborationMode>,
         personality: Option<Personality>,
     },
@@ -99,22 +96,12 @@ pub(crate) enum AppCommand {
     SetThreadName {
         name: String,
     },
-    SetThreadUserState {
-        user_state: ThreadUserState,
-    },
     Shutdown,
     ThreadRollback {
         num_turns: u32,
     },
     Review {
         target: ReviewTarget,
-    },
-    AddToHistory {
-        text: String,
-    },
-    GetHistoryEntryRequest {
-        offset: usize,
-        log_id: u64,
     },
     ApproveGuardianDeniedAction {
         event: GuardianAssessmentEvent,
@@ -155,22 +142,21 @@ impl AppCommand {
         items: Vec<UserInput>,
         cwd: PathBuf,
         approval_policy: AskForApproval,
-        permission_profile: PermissionProfile,
+        active_permission_profile: Option<ActivePermissionProfile>,
         model: String,
         effort: Option<ReasoningEffortConfig>,
         summary: Option<ReasoningSummaryConfig>,
-        service_tier: Option<Option<ServiceTier>>,
+        service_tier: Option<Option<String>>,
         final_output_json_schema: Option<Value>,
         collaboration_mode: Option<CollaborationMode>,
         personality: Option<Personality>,
     ) -> Self {
         Self::UserTurn {
             items,
-            rollback_num_turns: None,
             cwd,
             approval_policy,
             approvals_reviewer: None,
-            permission_profile,
+            active_permission_profile,
             model,
             effort,
             summary,
@@ -181,52 +167,17 @@ impl AppCommand {
         }
     }
 
-    pub(crate) fn with_rollback_num_turns(self, rollback_num_turns: u32) -> Self {
-        match self {
-            Self::UserTurn {
-                items,
-                cwd,
-                approval_policy,
-                approvals_reviewer,
-                permission_profile,
-                model,
-                effort,
-                summary,
-                service_tier,
-                final_output_json_schema,
-                collaboration_mode,
-                personality,
-                ..
-            } => Self::UserTurn {
-                items,
-                rollback_num_turns: Some(rollback_num_turns),
-                cwd,
-                approval_policy,
-                approvals_reviewer,
-                permission_profile,
-                model,
-                effort,
-                summary,
-                service_tier,
-                final_output_json_schema,
-                collaboration_mode,
-                personality,
-            },
-            other => other,
-        }
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn override_turn_context(
         cwd: Option<PathBuf>,
         approval_policy: Option<AskForApproval>,
         approvals_reviewer: Option<ApprovalsReviewer>,
-        permission_profile: Option<PermissionProfile>,
+        active_permission_profile: Option<ActivePermissionProfile>,
         windows_sandbox_level: Option<WindowsSandboxLevel>,
         model: Option<String>,
         effort: Option<Option<ReasoningEffortConfig>>,
         summary: Option<ReasoningSummaryConfig>,
-        service_tier: Option<Option<ServiceTier>>,
+        service_tier: Option<Option<String>>,
         collaboration_mode: Option<CollaborationMode>,
         personality: Option<Personality>,
     ) -> Self {
@@ -234,7 +185,7 @@ impl AppCommand {
             cwd,
             approval_policy,
             approvals_reviewer,
-            permission_profile,
+            active_permission_profile,
             windows_sandbox_level,
             model,
             effort,
@@ -304,10 +255,6 @@ impl AppCommand {
         Self::SetThreadName { name }
     }
 
-    pub(crate) fn set_thread_user_state(user_state: ThreadUserState) -> Self {
-        Self::SetThreadUserState { user_state }
-    }
-
     #[allow(dead_code)]
     pub(crate) fn shutdown() -> Self {
         Self::Shutdown
@@ -319,14 +266,6 @@ impl AppCommand {
 
     pub(crate) fn review(target: ReviewTarget) -> Self {
         Self::Review { target }
-    }
-
-    pub(crate) fn add_to_history(text: String) -> Self {
-        Self::AddToHistory { text }
-    }
-
-    pub(crate) fn history_lookup(offset: usize, log_id: u64) -> Self {
-        Self::GetHistoryEntryRequest { offset, log_id }
     }
 
     pub(crate) fn approve_guardian_denied_action(event: GuardianAssessmentEvent) -> Self {

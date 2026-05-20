@@ -13,7 +13,21 @@ pub(crate) struct TurnRequestProcessor {
     thread_state_manager: ThreadStateManager,
     thread_watch_manager: ThreadWatchManager,
     thread_list_state_permit: Arc<Semaphore>,
-    state_db: Option<StateDbHandle>,
+    skills_watcher: Arc<SkillsWatcher>,
+}
+
+fn resolve_runtime_workspace_roots(
+    workspace_roots: Vec<PathBuf>,
+    base_cwd: &AbsolutePathBuf,
+) -> Vec<AbsolutePathBuf> {
+    let mut resolved_roots = Vec::new();
+    for path in workspace_roots {
+        let root = AbsolutePathBuf::resolve_path_against_base(path, base_cwd.as_path());
+        if !resolved_roots.iter().any(|existing| existing == &root) {
+            resolved_roots.push(root);
+        }
+    }
+    resolved_roots
 }
 
 impl TurnRequestProcessor {
@@ -30,7 +44,7 @@ impl TurnRequestProcessor {
         thread_state_manager: ThreadStateManager,
         thread_watch_manager: ThreadWatchManager,
         thread_list_state_permit: Arc<Semaphore>,
-        state_db: Option<StateDbHandle>,
+        skills_watcher: Arc<SkillsWatcher>,
     ) -> Self {
         Self {
             auth_manager,
@@ -44,7 +58,7 @@ impl TurnRequestProcessor {
             thread_state_manager,
             thread_watch_manager,
             thread_list_state_permit,
-            state_db,
+            skills_watcher,
         }
     }
 
@@ -174,21 +188,14 @@ impl TurnRequestProcessor {
         thread_id: &str,
     ) -> Result<(ThreadId, Arc<CodexThread>), JSONRPCErrorError> {
         // Resolve the core conversation handle from a v2 thread id string.
-        let thread_id = ThreadId::from_string(thread_id).map_err(|err| JSONRPCErrorError {
-            code: INVALID_REQUEST_ERROR_CODE,
-            message: format!("invalid thread id: {err}"),
-            data: None,
-        })?;
+        let thread_id = ThreadId::from_string(thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
         let thread = self
             .thread_manager
             .get_thread(thread_id)
             .await
-            .map_err(|_| JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("thread not found: {thread_id}"),
-                data: None,
-            })?;
+            .map_err(|_| invalid_request(format!("thread not found: {thread_id}")))?;
 
         Ok((thread_id, thread))
     }
@@ -212,14 +219,6 @@ impl TurnRequestProcessor {
     fn review_request_from_target(
         target: ApiReviewTarget,
     ) -> Result<(ReviewRequest, String), JSONRPCErrorError> {
-        fn invalid_request(message: String) -> JSONRPCErrorError {
-            JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message,
-                data: None,
-            }
-        }
-
         let cleaned_target = match target {
             ApiReviewTarget::UncommittedChanges => ApiReviewTarget::UncommittedChanges,
             ApiReviewTarget::BaseBranch { branch } => {
@@ -308,17 +307,15 @@ impl TurnRequestProcessor {
     }
 
     fn input_too_large_error(actual_chars: usize) -> JSONRPCErrorError {
-        JSONRPCErrorError {
-            code: INVALID_PARAMS_ERROR_CODE,
-            message: format!(
-                "Input exceeds the maximum length of {MAX_USER_INPUT_TEXT_CHARS} characters."
-            ),
-            data: Some(serde_json::json!({
-                "input_error_code": INPUT_TOO_LARGE_ERROR_CODE,
-                "max_chars": MAX_USER_INPUT_TEXT_CHARS,
-                "actual_chars": actual_chars,
-            })),
-        }
+        let mut error = invalid_params(format!(
+            "Input exceeds the maximum length of {MAX_USER_INPUT_TEXT_CHARS} characters."
+        ));
+        error.data = Some(serde_json::json!({
+            "input_error_code": INPUT_TOO_LARGE_ERROR_CODE,
+            "max_chars": MAX_USER_INPUT_TEXT_CHARS,
+            "actual_chars": actual_chars,
+        }));
+        error
     }
 
     fn validate_v2_input_limit(items: &[V2UserInput]) -> Result<(), JSONRPCErrorError> {
@@ -375,8 +372,16 @@ impl TurnRequestProcessor {
             .map(V2UserInput::into_core)
             .collect();
         let turn_has_input = !mapped_items.is_empty();
+        let runtime_workspace_roots_request = params.runtime_workspace_roots.clone();
+        let snapshot = if params.permissions.is_some() || runtime_workspace_roots_request.is_some()
+        {
+            Some(thread.config_snapshot().await)
+        } else {
+            None
+        };
 
         let has_any_overrides = params.cwd.is_some()
+            || runtime_workspace_roots_request.is_some()
             || params.approval_policy.is_some()
             || params.approvals_reviewer.is_some()
             || params.sandbox_policy.is_some()
@@ -395,24 +400,50 @@ impl TurnRequestProcessor {
         }
 
         let cwd = params.cwd;
+        let runtime_workspace_roots = if let Some(workspace_roots) =
+            runtime_workspace_roots_request.clone()
+        {
+            let Some(snapshot) = snapshot.as_ref() else {
+                return Err(internal_error(
+                    "turn/start runtime workspace roots missing thread snapshot",
+                ));
+            };
+            let base_cwd = cwd
+                .as_ref()
+                .map(|cwd| AbsolutePathBuf::resolve_path_against_base(cwd, snapshot.cwd.as_path()))
+                .unwrap_or_else(|| snapshot.cwd.clone());
+            Some(resolve_runtime_workspace_roots(workspace_roots, &base_cwd))
+        } else {
+            None
+        };
         let approval_policy = params.approval_policy.map(AskForApproval::to_core);
         let approvals_reviewer = params
             .approvals_reviewer
             .map(codex_app_server_protocol::ApprovalsReviewer::to_core);
         let sandbox_policy = params.sandbox_policy.map(|p| p.to_core());
-        let (permission_profile, active_permission_profile) =
+        let (permission_profile, active_permission_profile, profile_workspace_roots) =
             if let Some(permissions) = params.permissions {
-                let snapshot = thread.config_snapshot().await;
-                let mut overrides = ConfigOverrides {
+                let Some(snapshot) = snapshot.as_ref() else {
+                    return Err(internal_error(
+                        "turn/start permission selection missing thread snapshot",
+                    ));
+                };
+                let overrides = ConfigOverrides {
                     cwd: cwd.clone(),
+                    workspace_roots: Some(runtime_workspace_roots_request.clone().unwrap_or_else(
+                        || {
+                            snapshot
+                                .workspace_roots
+                                .iter()
+                                .map(AbsolutePathBuf::to_path_buf)
+                                .collect()
+                        },
+                    )),
+                    default_permissions: Some(permissions),
                     codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
                     main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
                     ..Default::default()
                 };
-                apply_permission_profile_selection_to_config_overrides(
-                    &mut overrides,
-                    Some(permissions),
-                );
                 let config = self
                     .config_manager
                     .load_for_cwd(
@@ -429,15 +460,16 @@ impl TurnRequestProcessor {
                     warning.contains("Configured value for `permission_profile` is disallowed")
                 }) {
                     return Err(invalid_request(format!(
-                        "invalid turn context override: {warning}"
+                        "invalid thread settings override: {warning}"
                     )));
                 }
                 (
-                    Some(config.permissions.permission_profile()),
+                    Some(config.permissions.permission_profile().clone()),
                     config.permissions.active_permission_profile(),
+                    Some(config.permissions.profile_workspace_roots().to_vec()),
                 )
             } else {
-                (None, None)
+                (None, None, None)
             };
         let model = params.model;
         let effort = params.effort.map(Some);
@@ -450,53 +482,54 @@ impl TurnRequestProcessor {
         // still queued together with the input below to preserve submission order.
         if has_any_overrides {
             thread
-                .validate_turn_context_overrides(CodexThreadTurnContextOverrides {
+                .preview_thread_settings_overrides(CodexThreadSettingsOverrides {
                     cwd: cwd.clone(),
+                    workspace_roots: runtime_workspace_roots.clone(),
                     approval_policy,
                     approvals_reviewer,
                     sandbox_policy: sandbox_policy.clone(),
                     permission_profile: permission_profile.clone(),
                     active_permission_profile: active_permission_profile.clone(),
+                    profile_workspace_roots: profile_workspace_roots.clone(),
                     windows_sandbox_level: None,
                     model: model.clone(),
                     effort,
                     summary,
-                    service_tier,
+                    service_tier: service_tier.clone(),
                     collaboration_mode: collaboration_mode.clone(),
                     personality,
                 })
                 .await
-                .map_err(|err| invalid_request(format!("invalid turn context override: {err}")))?;
+                .map_err(|err| {
+                    invalid_request(format!("invalid thread settings override: {err}"))
+                })?;
         }
 
+        let thread_settings = codex_protocol::protocol::ThreadSettingsOverrides {
+            cwd,
+            workspace_roots: runtime_workspace_roots,
+            profile_workspace_roots,
+            approval_policy,
+            approvals_reviewer,
+            sandbox_policy,
+            permission_profile,
+            active_permission_profile,
+            windows_sandbox_level: None,
+            model,
+            effort,
+            summary,
+            service_tier,
+            collaboration_mode,
+            personality,
+        };
+
         // Start the turn by submitting the user input. Return its submission id as turn_id.
-        let turn_op = if has_any_overrides {
-            Op::UserInputWithTurnContext {
-                items: mapped_items,
-                environments: environment_selections,
-                final_output_json_schema: params.output_schema,
-                responsesapi_client_metadata: params.responsesapi_client_metadata,
-                cwd,
-                approval_policy,
-                approvals_reviewer,
-                sandbox_policy,
-                permission_profile,
-                active_permission_profile,
-                windows_sandbox_level: None,
-                model,
-                effort,
-                summary,
-                service_tier,
-                collaboration_mode,
-                personality,
-            }
-        } else {
-            Op::UserInput {
-                items: mapped_items,
-                environments: environment_selections,
-                final_output_json_schema: params.output_schema,
-                responsesapi_client_metadata: params.responsesapi_client_metadata,
-            }
+        let turn_op = Op::UserInput {
+            items: mapped_items,
+            environments: environment_selections,
+            final_output_json_schema: params.output_schema,
+            responsesapi_client_metadata: params.responsesapi_client_metadata,
+            thread_settings,
         };
         let turn_op = match params.rollback_num_turns {
             Some(num_turns) => Op::ThreadRollbackThenUserInput {
@@ -532,6 +565,7 @@ impl TurnRequestProcessor {
         let turn = Turn {
             id: turn_id,
             items: vec![],
+            items_view: TurnItemsView::NotLoaded,
             error: None,
             status: TurnStatus::InProgress,
             started_at: None,
@@ -574,14 +608,18 @@ impl TurnRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
     ) -> Result<(), JSONRPCErrorError> {
+        let mcp_elicitations_auto_deny = xcode_26_4_mcp_elicitations_auto_deny(
+            app_server_client_name.as_deref(),
+            app_server_client_version.as_deref(),
+        );
         thread
-            .set_app_server_client_info(app_server_client_name, app_server_client_version)
+            .set_app_server_client_info(
+                app_server_client_name,
+                app_server_client_version,
+                mcp_elicitations_auto_deny,
+            )
             .await
-            .map_err(|err| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to set app server client info: {err}"),
-                data: None,
-            })
+            .map_err(|err| internal_error(format!("failed to set app server client info: {err}")))
     }
 
     async fn turn_steer_inner(
@@ -625,9 +663,8 @@ impl TurnRequestProcessor {
             )
             .await
             .map_err(|err| {
-                let (code, message, data, error_type) = match err {
+                let (message, data, error_type) = match err {
                     SteerInputError::NoActiveTurn(_) => (
-                        INVALID_REQUEST_ERROR_CODE,
                         "no active turn to steer".to_string(),
                         None,
                         Some(AnalyticsJsonRpcError::TurnSteer(
@@ -635,7 +672,6 @@ impl TurnRequestProcessor {
                         )),
                     ),
                     SteerInputError::ExpectedTurnMismatch { expected, actual } => (
-                        INVALID_REQUEST_ERROR_CODE,
                         format!("expected active turn id `{expected}` but found `{actual}`"),
                         None,
                         Some(AnalyticsJsonRpcError::TurnSteer(
@@ -671,24 +707,19 @@ impl TurnRequestProcessor {
                             }
                         };
                         (
-                            INVALID_REQUEST_ERROR_CODE,
                             message,
                             data,
                             Some(AnalyticsJsonRpcError::TurnSteer(turn_steer_error)),
                         )
                     }
                     SteerInputError::EmptyInput => (
-                        INVALID_REQUEST_ERROR_CODE,
                         "input must not be empty".to_string(),
                         None,
                         Some(AnalyticsJsonRpcError::Input(InputError::Empty)),
                     ),
                 };
-                let error = JSONRPCErrorError {
-                    code,
-                    message,
-                    data,
-                };
+                let mut error = invalid_request(message);
+                error.data = data;
                 self.track_error_response(request_id, &error, error_type);
                 error
             })?;
@@ -848,6 +879,7 @@ impl TurnRequestProcessor {
         Turn {
             id: turn_id,
             items,
+            items_view: TurnItemsView::NotLoaded,
             error: None,
             status: TurnStatus::InProgress,
             started_at: None,
@@ -901,24 +933,20 @@ impl TurnRequestProcessor {
         review_request: ReviewRequest,
         display_text: &str,
     ) -> std::result::Result<(), JSONRPCErrorError> {
-        let rollout_path = if let Some(path) = parent_thread.rollout_path() {
-            path
-        } else {
-            find_thread_path_by_id_str(
-                &self.config.codex_home,
-                &parent_thread_id.to_string(),
-                self.state_db.as_deref(),
-            )
+        parent_thread.ensure_rollout_materialized().await;
+        parent_thread.flush_rollout().await.map_err(|err| {
+            internal_error(format!(
+                "failed to flush parent thread {parent_thread_id}: {err}"
+            ))
+        })?;
+        let parent_history = parent_thread
+            .load_history(/*include_archived*/ true)
             .await
             .map_err(|err| {
                 internal_error(format!(
-                    "failed to locate thread id {parent_thread_id}: {err}"
+                    "failed to load parent thread {parent_thread_id}: {err}"
                 ))
-            })?
-            .ok_or_else(|| {
-                invalid_request(format!("no rollout found for thread id {parent_thread_id}"))
-            })?
-        };
+            })?;
 
         let mut config = self.config.as_ref().clone();
         if let Some(review_model) = &config.review_model {
@@ -928,14 +956,18 @@ impl TurnRequestProcessor {
         let NewThread {
             thread_id,
             thread: review_thread,
-            session_configured,
             ..
         } = self
             .thread_manager
-            .fork_thread(
+            .fork_thread_from_history(
                 ForkSnapshot::Interrupted,
                 config.clone(),
-                rollout_path,
+                InitialHistory::Resumed(ResumedHistory {
+                    conversation_id: parent_thread_id,
+                    history: parent_history.items,
+                    rollout_path: parent_thread.rollout_path(),
+                }),
+                /*thread_source*/ None,
                 /*persist_extended_history*/ false,
                 self.request_trace_context(request_id).await,
             )
@@ -957,37 +989,33 @@ impl TurnRequestProcessor {
         );
 
         let fallback_provider = self.config.model_provider_id.as_str();
-        if let Some(rollout_path) = review_thread.rollout_path() {
-            match read_summary_from_rollout(rollout_path.as_path(), fallback_provider).await {
-                Ok(summary) => {
-                    let mut thread = summary_to_thread(summary, &self.config.cwd);
+        match review_thread
+            .read_thread(
+                /*include_archived*/ true, /*include_history*/ false,
+            )
+            .await
+        {
+            Ok(stored_thread) => {
+                let (mut thread, _) =
+                    thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
+                thread.session_id = review_thread.session_configured().session_id.to_string();
+                self.thread_watch_manager
+                    .upsert_thread_silently(thread.clone())
+                    .await;
+                thread.status = resolve_thread_status(
                     self.thread_watch_manager
-                        .upsert_thread_silently(thread.clone())
-                        .await;
-                    thread.status = resolve_thread_status(
-                        self.thread_watch_manager
-                            .loaded_status_for_thread(&thread.id)
-                            .await,
-                        /*has_in_progress_turn*/ false,
-                    );
-                    let notif = thread_started_notification(thread);
-                    self.outgoing
-                        .send_server_notification(ServerNotification::ThreadStarted(notif))
-                        .await;
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        "failed to load summary for review thread {}: {}",
-                        session_configured.session_id,
-                        err
-                    );
-                }
+                        .loaded_status_for_thread(&thread.id)
+                        .await,
+                    /*has_in_progress_turn*/ false,
+                );
+                let notif = thread_started_notification(thread);
+                self.outgoing
+                    .send_server_notification(ServerNotification::ThreadStarted(notif))
+                    .await;
             }
-        } else {
-            tracing::warn!(
-                "review thread {} has no rollout path",
-                session_configured.session_id
-            );
+            Err(err) => {
+                tracing::warn!("failed to load summary for review thread {thread_id}: {err}");
+            }
         }
 
         let turn_id = self
@@ -1028,7 +1056,7 @@ impl TurnRequestProcessor {
                     request_id,
                     parent_thread,
                     review_request,
-                    display_text.as_str(),
+                    &display_text,
                     thread_id,
                 )
                 .await?;
@@ -1039,7 +1067,7 @@ impl TurnRequestProcessor {
                     parent_thread_id,
                     parent_thread,
                     review_request,
-                    display_text.as_str(),
+                    &display_text,
                 )
                 .await?;
             }
@@ -1118,11 +1146,11 @@ impl TurnRequestProcessor {
             thread_state_manager: self.thread_state_manager.clone(),
             outgoing: Arc::clone(&self.outgoing),
             pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
-            analytics_events_client: self.analytics_events_client.clone(),
             thread_watch_manager: self.thread_watch_manager.clone(),
             thread_list_state_permit: self.thread_list_state_permit.clone(),
             fallback_model_provider: self.config.model_provider_id.clone(),
             codex_home: self.config.codex_home.to_path_buf(),
+            skills_watcher: Arc::clone(&self.skills_watcher),
         }
     }
 
@@ -1140,4 +1168,15 @@ impl TurnRequestProcessor {
         )
         .await
     }
+}
+
+fn xcode_26_4_mcp_elicitations_auto_deny(
+    client_name: Option<&str>,
+    client_version: Option<&str>,
+) -> bool {
+    // Xcode 26.4 shipped before app-server MCP elicitation requests were
+    // client-visible. Keep elicitations auto-denied for that client line.
+    // TODO: Remove this compatibility hack once Xcode 26.4 ages out.
+    client_name == Some("Xcode")
+        && client_version.is_some_and(|version| version.starts_with("26.4"))
 }

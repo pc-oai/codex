@@ -31,13 +31,11 @@ use std::sync::Arc;
 use crate::app::App;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
-use crate::chatwidget::UserMessage;
 #[cfg(test)]
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::SessionInfoCell;
 use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::Overlay;
-use crate::reload_handoff::ReloadDraft;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_protocol::ThreadId;
@@ -46,7 +44,6 @@ use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
-use ratatui::text::Line;
 
 const NO_PREVIOUS_MESSAGE_TO_EDIT: &str = "No previous message to edit.";
 
@@ -71,13 +68,6 @@ pub(crate) struct BacktrackState {
     /// This acts as a guardrail: once we request a rollback, we block additional backtrack
     /// submissions until core responds with either a success or failure event.
     pub(crate) pending_rollback: Option<PendingBacktrackRollback>,
-    /// Reversible edit mode entered by the direct "edit last message" shortcut.
-    ///
-    /// While this is present, the selected prior user message is only copied into the composer;
-    /// the thread itself is untouched until Enter commits the edit.
-    pub(crate) edit_preview: Option<BacktrackEditPreview>,
-    /// Thread that should enter direct-edit mode after Ctrl-E interrupts its live turn.
-    pub(crate) edit_after_interrupt_thread_id: Option<ThreadId>,
 }
 
 /// A user-visible backtrack choice that can be confirmed into a rollback request.
@@ -109,19 +99,6 @@ pub(crate) struct BacktrackSelection {
 pub(crate) struct PendingBacktrackRollback {
     pub(crate) selection: BacktrackSelection,
     pub(crate) thread_id: Option<ThreadId>,
-    pub(crate) edited_user_message: Option<UserMessage>,
-    pub(crate) submission_already_started: bool,
-}
-
-/// A direct-edit preview that has not yet mutated thread history.
-#[derive(Debug, Clone)]
-pub(crate) struct BacktrackEditPreview {
-    pub(crate) selection: BacktrackSelection,
-    pub(crate) thread_id: Option<ThreadId>,
-    /// Composer draft displaced when direct-edit mode first opened.
-    ///
-    /// If the user cancels edit mode, this draft is restored exactly as it was.
-    pub(crate) replaced_draft: Option<ReloadDraft>,
 }
 
 impl App {
@@ -213,14 +190,6 @@ impl App {
     /// The composer prefill is applied immediately as a UX convenience; it does not imply that
     /// core has accepted the rollback.
     pub(crate) fn apply_backtrack_rollback(&mut self, selection: BacktrackSelection) {
-        self.apply_backtrack_rollback_with_submission(selection, /*edited_user_message*/ None);
-    }
-
-    fn apply_backtrack_rollback_with_submission(
-        &mut self,
-        selection: BacktrackSelection,
-        edited_user_message: Option<UserMessage>,
-    ) {
         let user_total = user_count(&self.transcript_cells);
         if user_total == 0 {
             return;
@@ -232,8 +201,7 @@ impl App {
             return;
         }
 
-        let rollback_turns = rollback_depth(user_total, selection.nth_user_message);
-        let num_turns = rollback_turns;
+        let num_turns = user_total.saturating_sub(selection.nth_user_message);
         let num_turns = u32::try_from(num_turns).unwrap_or(u32::MAX);
         if num_turns == 0 {
             return;
@@ -244,29 +212,20 @@ impl App {
         let local_image_paths = selection.local_image_paths.clone();
         let remote_image_urls = selection.remote_image_urls.clone();
         let has_remote_image_urls = !remote_image_urls.is_empty();
-        let is_edit_submission = edited_user_message.is_some();
         self.backtrack.pending_rollback = Some(PendingBacktrackRollback {
             selection,
             thread_id: self.chat_widget.thread_id(),
-            edited_user_message,
-            submission_already_started: false,
         });
-        if is_edit_submission {
-            self.chat_widget
-                .show_edit_last_message_pending_hint(edit_last_message_hint_target(rollback_turns));
-        }
         self.chat_widget
             .submit_op(AppCommand::thread_rollback(num_turns));
-        if self.backtrack.edit_preview.is_none() {
-            self.chat_widget.set_remote_image_urls(remote_image_urls);
-            if !prefill.is_empty()
-                || !text_elements.is_empty()
-                || !local_image_paths.is_empty()
-                || has_remote_image_urls
-            {
-                self.chat_widget
-                    .set_composer_text(prefill, text_elements, local_image_paths);
-            }
+        self.chat_widget.set_remote_image_urls(remote_image_urls);
+        if !prefill.is_empty()
+            || !text_elements.is_empty()
+            || !local_image_paths.is_empty()
+            || has_remote_image_urls
+        {
+            self.chat_widget
+                .set_composer_text(prefill, text_elements, local_image_paths);
         }
     }
 
@@ -286,7 +245,7 @@ impl App {
         let was_backtrack = self.backtrack.overlay_preview_active;
         if !self.deferred_history_lines.is_empty() {
             let lines = std::mem::take(&mut self.deferred_history_lines);
-            tui.insert_history_lines(lines);
+            tui.insert_history_lines_with_wrap_policy(lines, self.history_line_wrap_policy());
         }
         self.overlay = None;
         self.backtrack.overlay_preview_active = false;
@@ -299,24 +258,17 @@ impl App {
     /// Re-render the full transcript into the terminal scrollback in one call.
     /// Useful when switching sessions to ensure prior history remains visible.
     pub(crate) fn render_transcript_once(&mut self, tui: &mut tui::Tui) {
-        let width = tui.terminal.last_known_screen_size.width;
-        let lines = self.render_transcript_lines_for_scrollback_replay(width);
-        if !lines.is_empty() {
-            tui.insert_history_lines(lines);
+        if !self.transcript_cells.is_empty() {
+            let width = self
+                .chat_widget
+                .history_wrap_width(tui.terminal.last_known_screen_size.width);
+            for cell in &self.transcript_cells {
+                tui.insert_history_lines_with_wrap_policy(
+                    cell.display_lines_for_mode(width, self.chat_widget.history_render_mode()),
+                    self.history_line_wrap_policy(),
+                );
+            }
         }
-    }
-
-    /// Render the current main-view transcript projection with normal inter-cell spacing.
-    pub(super) fn render_transcript_lines_for_scrollback_replay(
-        &mut self,
-        width: u16,
-    ) -> Vec<Line<'static>> {
-        self.reset_history_emission_state();
-        let transcript_cells = self.transcript_cells.clone();
-        transcript_cells
-            .into_iter()
-            .flat_map(|cell| self.display_lines_for_history_insert(cell.as_ref(), width))
-            .collect()
     }
 
     /// Initialize backtrack state and show composer hint.
@@ -511,198 +463,6 @@ impl App {
         Ok(())
     }
 
-    /// Prefill the latest user message for reversible editing.
-    ///
-    /// This is the direct, non-visual equivalent of selecting the latest backtrack target, but it
-    /// intentionally does not mutate the thread until the edited draft is submitted.
-    pub(crate) fn edit_last_message_from_command(&mut self) -> bool {
-        if !has_backtrack_target(&self.transcript_cells) {
-            self.chat_widget
-                .add_info_message(NO_PREVIOUS_MESSAGE_TO_EDIT.to_string(), /*hint*/ None);
-            return false;
-        }
-
-        self.prime_backtrack();
-        self.backtrack.nth_user_message = user_count(&self.transcript_cells).saturating_sub(1);
-        let Some(selection) = self.confirm_backtrack_from_main() else {
-            return false;
-        };
-        self.begin_backtrack_edit_preview(selection);
-        true
-    }
-
-    /// Stop the current turn so Ctrl-E can become "edit the last request" once the UI is idle.
-    pub(crate) fn interrupt_turn_then_edit_last_message(&mut self) -> bool {
-        if !self.chat_widget.is_task_running() || self.chat_widget.has_queued_follow_up_messages() {
-            return false;
-        }
-
-        let thread_id = self.chat_widget.thread_id();
-        if self.chat_widget.submit_op(AppCommand::interrupt()) {
-            self.backtrack.edit_after_interrupt_thread_id = thread_id;
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Enter direct-edit mode after a Ctrl-E-triggered interrupt completes.
-    pub(crate) fn maybe_edit_last_message_after_interrupt(&mut self) -> bool {
-        let Some(thread_id) = self.backtrack.edit_after_interrupt_thread_id.take() else {
-            return false;
-        };
-        if self.chat_widget.thread_id() != Some(thread_id) || self.chat_widget.is_task_running() {
-            return false;
-        }
-
-        self.edit_last_message_from_command()
-    }
-
-    /// Return recent visible user request text from the transcript, newest first.
-    pub(crate) fn recent_user_request_texts(&self, limit: usize) -> Vec<String> {
-        self.transcript_cells
-            .iter()
-            .rev()
-            .filter_map(|cell| {
-                cell.as_any()
-                    .downcast_ref::<UserHistoryCell>()
-                    .map(|cell| cell.message.clone())
-            })
-            .filter(|message| !message.is_empty())
-            .take(limit)
-            .collect()
-    }
-
-    /// Return the latest visible user request text from the transcript.
-    pub(crate) fn latest_user_request_text(&self) -> Option<String> {
-        self.recent_user_request_texts(1).into_iter().next()
-    }
-
-    /// Start direct-edit preview without mutating thread history.
-    pub(crate) fn begin_backtrack_edit_preview(&mut self, selection: BacktrackSelection) {
-        let replaced_draft = if let Some(preview) = self.backtrack.edit_preview.as_ref() {
-            preview.replaced_draft.clone()
-        } else {
-            self.chat_widget.capture_reload_draft()
-        };
-        let edit_depth = rollback_depth(
-            user_count(&self.transcript_cells),
-            selection.nth_user_message,
-        );
-        self.chat_widget
-            .set_remote_image_urls(selection.remote_image_urls.clone());
-        self.chat_widget.set_composer_text(
-            selection.prefill.clone(),
-            selection.text_elements.clone(),
-            selection.local_image_paths.clone(),
-        );
-        self.chat_widget
-            .show_edit_last_message_hint(edit_last_message_hint_target(edit_depth));
-        self.backtrack.edit_preview = Some(BacktrackEditPreview {
-            selection,
-            thread_id: self.chat_widget.thread_id(),
-            replaced_draft,
-        });
-    }
-
-    /// Move a direct-edit preview to the next older user message.
-    ///
-    /// The shortcut is intentionally consumed even when already at the oldest message so repeated
-    /// presses never leak through to ordinary composer editing while preview mode is active.
-    pub(crate) fn step_backtrack_edit_preview_older(&mut self) -> bool {
-        let Some(preview) = self.backtrack.edit_preview.clone() else {
-            return false;
-        };
-        if preview.thread_id != self.chat_widget.thread_id() {
-            self.backtrack.edit_preview = None;
-            self.chat_widget.clear_composer_draft();
-            self.chat_widget.clear_edit_last_message_hint();
-            return true;
-        }
-        let Some(older_nth_user_message) = preview.selection.nth_user_message.checked_sub(1) else {
-            return true;
-        };
-        let Some(thread_id) = preview.thread_id else {
-            return true;
-        };
-        let Some(selection) =
-            self.backtrack_selection_for_thread(thread_id, older_nth_user_message)
-        else {
-            return true;
-        };
-        self.begin_backtrack_edit_preview(selection);
-        true
-    }
-
-    /// Leave direct-edit preview mode without touching thread history.
-    pub(crate) fn cancel_backtrack_edit_preview(&mut self) -> bool {
-        let Some(preview) = self.backtrack.edit_preview.take() else {
-            return false;
-        };
-        if let Some(draft) = preview.replaced_draft {
-            self.chat_widget.restore_reload_draft(draft);
-        } else {
-            self.chat_widget.clear_composer_draft();
-        }
-        self.chat_widget.clear_edit_last_message_hint();
-        true
-    }
-
-    /// Commit a direct-edit preview by rolling the thread back before starting the edit turn.
-    pub(crate) fn commit_backtrack_edit_preview(&mut self) -> bool {
-        if self.backtrack.pending_rollback.is_some() {
-            return true;
-        }
-        let Some(preview) = self.backtrack.edit_preview.clone() else {
-            return false;
-        };
-        if preview.thread_id != self.chat_widget.thread_id() {
-            self.backtrack.edit_preview = None;
-            self.chat_widget.clear_composer_draft();
-            self.chat_widget.clear_edit_last_message_hint();
-            return true;
-        }
-        let Some(edited_user_message) = self.chat_widget.take_composer_user_message() else {
-            return true;
-        };
-        let rollback_turns = rollback_depth(
-            user_count(&self.transcript_cells),
-            preview.selection.nth_user_message,
-        );
-        let rollback_turns = u32::try_from(rollback_turns).unwrap_or(u32::MAX);
-        if rollback_turns == 0 {
-            return true;
-        }
-        self.backtrack.pending_rollback = Some(PendingBacktrackRollback {
-            selection: preview.selection,
-            thread_id: preview.thread_id,
-            edited_user_message: Some(edited_user_message.clone()),
-            submission_already_started: true,
-        });
-        self.chat_widget
-            .show_edit_last_message_pending_hint(edit_last_message_hint_target(
-                usize::try_from(rollback_turns).unwrap_or(usize::MAX),
-            ));
-        if !self
-            .chat_widget
-            .submit_user_message_from_backtrack_edit(edited_user_message, Some(rollback_turns))
-        {
-            self.handle_backtrack_rollback_failed();
-        }
-        true
-    }
-
-    pub(crate) fn backtrack_edit_preview_active(&self) -> bool {
-        self.backtrack.edit_preview.is_some()
-    }
-
-    pub(crate) fn pending_combined_edit_rollback_active(&self) -> bool {
-        self.backtrack
-            .pending_rollback
-            .as_ref()
-            .is_some_and(|pending| pending.submission_already_started)
-    }
-
     /// Confirm a primed backtrack from the main view (no overlay visible).
     /// Computes the prefill from the selected user message for rollback.
     pub(crate) fn confirm_backtrack_from_main(&mut self) -> Option<BacktrackSelection> {
@@ -739,19 +499,7 @@ impl App {
     }
 
     pub(crate) fn handle_backtrack_rollback_failed(&mut self) {
-        if let Some(pending) = self.backtrack.pending_rollback.take()
-            && pending.thread_id == self.chat_widget.thread_id()
-            && let Some(edited_user_message) = pending.edited_user_message
-        {
-            self.chat_widget
-                .restore_user_message_to_composer(edited_user_message);
-            let edit_depth = rollback_depth(
-                user_count(&self.transcript_cells),
-                pending.selection.nth_user_message,
-            );
-            self.chat_widget
-                .show_edit_last_message_hint(edit_last_message_hint_target(edit_depth));
-        }
+        self.backtrack.pending_rollback = None;
     }
 
     /// Apply rollback semantics for a confirmed rollback where this TUI does
@@ -790,32 +538,11 @@ impl App {
             self.sync_overlay_after_transcript_trim();
             self.backtrack_render_pending = true;
         }
-        if let Some(edited_user_message) = pending.edited_user_message {
-            self.backtrack.edit_preview = None;
-            self.chat_widget.clear_edit_last_message_hint();
-            if pending.submission_already_started {
-                self.chat_widget
-                    .confirm_backtrack_edit_submission(&edited_user_message);
-            } else {
-                self.chat_widget.submit_user_message_from_backtrack_edit(
-                    edited_user_message,
-                    /*rollback_num_turns*/ None,
-                );
-            }
-        }
     }
 
     fn backtrack_selection(&self, nth_user_message: usize) -> Option<BacktrackSelection> {
         let base_id = self.backtrack.base_id?;
-        self.backtrack_selection_for_thread(base_id, nth_user_message)
-    }
-
-    fn backtrack_selection_for_thread(
-        &self,
-        thread_id: ThreadId,
-        nth_user_message: usize,
-    ) -> Option<BacktrackSelection> {
-        if self.chat_widget.thread_id() != Some(thread_id) {
+        if self.chat_widget.thread_id() != Some(base_id) {
             return None;
         }
 
@@ -912,17 +639,6 @@ pub(crate) fn trim_transcript_cells_drop_last_n_user_turns(
 
 pub(crate) fn user_count(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> usize {
     user_positions_iter(cells).count()
-}
-
-fn rollback_depth(user_total: usize, nth_user_message: usize) -> usize {
-    user_total.saturating_sub(nth_user_message)
-}
-
-fn edit_last_message_hint_target(edit_depth: usize) -> String {
-    match edit_depth {
-        0 | 1 => "previous message".to_string(),
-        edit_depth => format!("{edit_depth} messages back"),
-    }
 }
 
 fn has_backtrack_target(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> bool {

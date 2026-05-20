@@ -829,6 +829,7 @@ mod tests {
     use super::*;
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use codex_config::AppToolApproval;
     use codex_config::types::AuthCredentialsStoreMode;
     use codex_login::auth::AgentIdentityAuth;
     use codex_login::auth::AgentIdentityAuthRecord;
@@ -1203,6 +1204,8 @@ mod tests {
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                computer_use: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -1285,6 +1288,8 @@ mod tests {
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                computer_use: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -1318,6 +1323,8 @@ mod tests {
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                computer_use: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -1368,6 +1375,8 @@ mod tests {
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                computer_use: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -1399,6 +1408,40 @@ enabled = false
                         "connector_5f3c8c41a1e54ad7a76272c89e2554fa".to_string(),
                         codex_config::AppRequirementToml {
                             enabled: Some(false),
+                            tools: None,
+                        },
+                    )]),
+                }),
+                ..Default::default()
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_cloud_requirements_parses_apps_tool_requirements_toml() {
+        let result = parse_for_fetch(Some(
+            r#"
+[apps.connector_5f3c8c41a1e54ad7a76272c89e2554fa.tools."calendar/list_events"]
+approval_mode = "approve"
+"#,
+        ));
+
+        assert_eq!(
+            result,
+            Some(ConfigRequirementsToml {
+                apps: Some(codex_config::AppsRequirementsToml {
+                    apps: BTreeMap::from([(
+                        "connector_5f3c8c41a1e54ad7a76272c89e2554fa".to_string(),
+                        codex_config::AppRequirementToml {
+                            enabled: None,
+                            tools: Some(codex_config::AppToolsRequirementsToml {
+                                tools: BTreeMap::from([(
+                                    "calendar/list_events".to_string(),
+                                    codex_config::AppToolRequirementToml {
+                                        approval_mode: Some(AppToolApproval::Approve),
+                                    },
+                                )]),
+                            }),
                         },
                     )]),
                 }),
@@ -1484,6 +1527,8 @@ command = "sample-mcp"
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                computer_use: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -1564,6 +1609,8 @@ command = "sample-mcp"
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                computer_use: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -1642,6 +1689,8 @@ command = "sample-mcp"
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                computer_use: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -1848,6 +1897,8 @@ command = "sample-mcp"
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                computer_use: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -1888,6 +1939,8 @@ command = "sample-mcp"
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                computer_use: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -1948,6 +2001,8 @@ command = "sample-mcp"
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                computer_use: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -2004,6 +2059,8 @@ command = "sample-mcp"
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                computer_use: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -2062,6 +2119,8 @@ command = "sample-mcp"
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                computer_use: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -2121,6 +2180,8 @@ command = "sample-mcp"
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                computer_use: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -2180,6 +2241,8 @@ command = "sample-mcp"
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                computer_use: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -2269,6 +2332,8 @@ command = "sample-mcp"
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                computer_use: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -2300,6 +2365,8 @@ command = "sample-mcp"
                 allowed_sandbox_modes: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                computer_use: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,

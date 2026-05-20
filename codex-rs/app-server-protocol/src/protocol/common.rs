@@ -77,6 +77,7 @@ macro_rules! experimental_type_entry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientRequestSerializationScope {
     Global(&'static str),
+    GlobalSharedRead(&'static str),
     Thread { thread_id: String },
     ThreadPath { path: PathBuf },
     CommandExecProcess { process_id: String },
@@ -92,6 +93,9 @@ macro_rules! serialization_scope_expr {
     };
     ($actual_params:ident, global($key:literal)) => {
         Some(ClientRequestSerializationScope::Global($key))
+    };
+    ($actual_params:ident, global_shared_read($key:literal)) => {
+        Some(ClientRequestSerializationScope::GlobalSharedRead($key))
     };
     ($actual_params:ident, thread_id($params:ident . $field:ident)) => {
         Some(ClientRequestSerializationScope::Thread {
@@ -219,6 +223,7 @@ macro_rules! client_request_definitions {
 
         /// Typed response from the server to the client.
         #[derive(Serialize, Deserialize, Debug, Clone)]
+        #[allow(clippy::large_enum_variant)]
         #[serde(tag = "method", rename_all = "camelCase")]
         pub enum ClientResponse {
             $(
@@ -582,6 +587,13 @@ client_request_definitions! {
         serialization: None,
         response: v2::ThreadTurnsListResponse,
     },
+    #[experimental("thread/turns/items/list")]
+    ThreadTurnsItemsList => "thread/turns/items/list" {
+        params: v2::ThreadTurnsItemsListParams,
+        // Explicitly concurrent: this primarily reads append-only rollout storage.
+        serialization: None,
+        response: v2::ThreadTurnsItemsListResponse,
+    },
     /// Append raw Responses API items to the thread history without starting a user turn.
     ThreadInjectItems => "thread/inject_items" {
         params: v2::ThreadInjectItemsParams,
@@ -590,7 +602,7 @@ client_request_definitions! {
     },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
-        serialization: global("config"),
+        serialization: global_shared_read("config"),
         response: v2::SkillsListResponse,
     },
     HooksList => "hooks/list" {
@@ -615,12 +627,17 @@ client_request_definitions! {
     },
     PluginList => "plugin/list" {
         params: v2::PluginListParams,
-        serialization: global("config"),
+        serialization: None,
         response: v2::PluginListResponse,
+    },
+    PluginInstalled => "plugin/installed" {
+        params: v2::PluginInstalledParams,
+        serialization: None,
+        response: v2::PluginInstalledResponse,
     },
     PluginRead => "plugin/read" {
         params: v2::PluginReadParams,
-        serialization: global("config"),
+        serialization: None,
         response: v2::PluginReadResponse,
     },
     PluginSkillRead => "plugin/skill/read" {
@@ -633,10 +650,20 @@ client_request_definitions! {
         serialization: global("config"),
         response: v2::PluginShareSaveResponse,
     },
+    PluginShareUpdateTargets => "plugin/share/updateTargets" {
+        params: v2::PluginShareUpdateTargetsParams,
+        serialization: global("config"),
+        response: v2::PluginShareUpdateTargetsResponse,
+    },
     PluginShareList => "plugin/share/list" {
         params: v2::PluginShareListParams,
         serialization: global("config"),
         response: v2::PluginShareListResponse,
+    },
+    PluginShareCheckout => "plugin/share/checkout" {
+        params: v2::PluginShareCheckoutParams,
+        serialization: global("config"),
+        response: v2::PluginShareCheckoutResponse,
     },
     PluginShareDelete => "plugin/share/delete" {
         params: v2::PluginShareDeleteParams,
@@ -647,21 +674,6 @@ client_request_definitions! {
         params: v2::AppsListParams,
         serialization: None,
         response: v2::AppsListResponse,
-    },
-    DeviceKeyCreate => "device/key/create" {
-        params: v2::DeviceKeyCreateParams,
-        serialization: global("device-key"),
-        response: v2::DeviceKeyCreateResponse,
-    },
-    DeviceKeyPublic => "device/key/public" {
-        params: v2::DeviceKeyPublicParams,
-        serialization: global("device-key"),
-        response: v2::DeviceKeyPublicResponse,
-    },
-    DeviceKeySign => "device/key/sign" {
-        params: v2::DeviceKeySignParams,
-        serialization: global("device-key"),
-        response: v2::DeviceKeySignResponse,
     },
     // File system requests are intentionally concurrent. Desktop already treats local
     // file system operations as concurrent, and app-server remote fs mirrors that model.
@@ -793,10 +805,33 @@ client_request_definitions! {
         serialization: global("config"),
         response: v2::ExperimentalFeatureListResponse,
     },
+    PermissionProfileList => "permissionProfile/list" {
+        params: v2::PermissionProfileListParams,
+        serialization: global_shared_read("config"),
+        response: v2::PermissionProfileListResponse,
+    },
     ExperimentalFeatureEnablementSet => "experimentalFeature/enablement/set" {
         params: v2::ExperimentalFeatureEnablementSetParams,
         serialization: global("config"),
         response: v2::ExperimentalFeatureEnablementSetResponse,
+    },
+    #[experimental("remoteControl/enable")]
+    RemoteControlEnable => "remoteControl/enable" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global("remote-control"),
+        response: v2::RemoteControlEnableResponse,
+    },
+    #[experimental("remoteControl/disable")]
+    RemoteControlDisable => "remoteControl/disable" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global("remote-control"),
+        response: v2::RemoteControlDisableResponse,
+    },
+    #[experimental("remoteControl/status/read")]
+    RemoteControlStatusRead => "remoteControl/status/read" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global_shared_read("remote-control"),
+        response: v2::RemoteControlStatusReadResponse,
     },
     #[experimental("collaborationMode/list")]
     /// Lists collaboration mode presets.
@@ -811,6 +846,13 @@ client_request_definitions! {
         params: v2::MockExperimentalMethodParams,
         serialization: None,
         response: v2::MockExperimentalMethodResponse,
+    },
+    #[experimental("environment/add")]
+    /// Adds or replaces a remote environment by id for later selection.
+    EnvironmentAdd => "environment/add" {
+        params: v2::EnvironmentAddParams,
+        serialization: global("environment"),
+        response: v2::EnvironmentAddResponse,
     },
 
     McpServerOauthLogin => "mcpServer/oauth/login" {
@@ -847,6 +889,11 @@ client_request_definitions! {
         params: v2::WindowsSandboxSetupStartParams,
         serialization: global("windows-sandbox-setup"),
         response: v2::WindowsSandboxSetupStartResponse,
+    },
+    WindowsSandboxReadiness => "windowsSandbox/readiness" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global("config"),
+        response: v2::WindowsSandboxReadinessResponse,
     },
 
     LoginAccount => "account/login/start" {
@@ -942,7 +989,7 @@ client_request_definitions! {
 
     ConfigRead => "config/read" {
         params: v2::ConfigReadParams,
-        serialization: global("config"),
+        serialization: global_shared_read("config"),
         response: v2::ConfigReadResponse,
     },
     ExternalAgentConfigDetect => "externalAgentConfig/detect" {
@@ -1311,6 +1358,12 @@ server_request_definitions! {
         response: v2::ChatgptAuthTokensRefreshResponse,
     },
 
+    /// Generate a fresh upstream attestation result on demand.
+    AttestationGenerate => "attestation/generate" {
+        params: v2::AttestationGenerateParams,
+        response: v2::AttestationGenerateResponse,
+    },
+
     /// DEPRECATED APIs below
     /// Request to approve a patch.
     /// This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).
@@ -1513,6 +1566,7 @@ mod tests {
     use anyhow::Result;
     use codex_protocol::ThreadId;
     use codex_protocol::account::PlanType;
+    use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
     use codex_protocol::parse_command::ParsedCommand;
     use codex_protocol::protocol::RealtimeConversationVersion;
     use codex_protocol::protocol::RealtimeOutputModality;
@@ -1651,6 +1705,46 @@ mod tests {
             Some(ClientRequestSerializationScope::Global("config"))
         );
 
+        let skills_list = ClientRequest::SkillsList {
+            request_id: request_id(),
+            params: v2::SkillsListParams {
+                cwds: Vec::new(),
+                force_reload: false,
+            },
+        };
+        assert_eq!(
+            skills_list.serialization_scope(),
+            Some(ClientRequestSerializationScope::GlobalSharedRead("config"))
+        );
+
+        let plugin_list = ClientRequest::PluginList {
+            request_id: request_id(),
+            params: v2::PluginListParams {
+                cwds: None,
+                marketplace_kinds: None,
+            },
+        };
+        assert_eq!(plugin_list.serialization_scope(), None);
+
+        let plugin_read = ClientRequest::PluginRead {
+            request_id: request_id(),
+            params: v2::PluginReadParams {
+                marketplace_path: Some(absolute_path("/tmp/marketplace")),
+                remote_marketplace_name: None,
+                plugin_name: "plugin-a".to_string(),
+            },
+        };
+        assert_eq!(plugin_read.serialization_scope(), None);
+
+        let plugin_installed = ClientRequest::PluginInstalled {
+            request_id: request_id(),
+            params: v2::PluginInstalledParams {
+                cwds: None,
+                install_suggestion_plugin_names: None,
+            },
+        };
+        assert_eq!(plugin_installed.serialization_scope(), None);
+
         let plugin_uninstall = ClientRequest::PluginUninstall {
             request_id: request_id(),
             params: v2::PluginUninstallParams {
@@ -1701,7 +1795,7 @@ mod tests {
         };
         assert_eq!(
             config_read.serialization_scope(),
-            Some(ClientRequestSerializationScope::Global("config"))
+            Some(ClientRequestSerializationScope::GlobalSharedRead("config"))
         );
 
         let account_read = ClientRequest::GetAccount {
@@ -1756,19 +1850,6 @@ mod tests {
             Some(ClientRequestSerializationScope::Global("config"))
         );
 
-        let device_key_create = ClientRequest::DeviceKeyCreate {
-            request_id: request_id(),
-            params: v2::DeviceKeyCreateParams {
-                protection_policy: None,
-                account_user_id: "user".to_string(),
-                client_id: "client".to_string(),
-            },
-        };
-        assert_eq!(
-            device_key_create.serialization_scope(),
-            Some(ClientRequestSerializationScope::Global("device-key"))
-        );
-
         let add_credits_nudge = ClientRequest::SendAddCreditsNudgeEmail {
             request_id: request_id(),
             params: v2::SendAddCreditsNudgeEmailParams {
@@ -1778,6 +1859,18 @@ mod tests {
         assert_eq!(
             add_credits_nudge.serialization_scope(),
             Some(ClientRequestSerializationScope::Global("account-auth"))
+        );
+
+        let environment_add = ClientRequest::EnvironmentAdd {
+            request_id: request_id(),
+            params: v2::EnvironmentAddParams {
+                environment_id: "remote-a".to_string(),
+                exec_server_url: "ws://127.0.0.1:8765".to_string(),
+            },
+        };
+        assert_eq!(
+            environment_add.serialization_scope(),
+            Some(ClientRequestSerializationScope::Global("environment"))
         );
     }
 
@@ -1838,9 +1931,22 @@ mod tests {
                 cursor: None,
                 limit: None,
                 sort_direction: None,
+                items_view: None,
             },
         };
         assert_eq!(thread_turns_list.serialization_scope(), None);
+
+        let thread_turns_items_list = ClientRequest::ThreadTurnsItemsList {
+            request_id: request_id(),
+            params: v2::ThreadTurnsItemsListParams {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                cursor: None,
+                limit: None,
+                sort_direction: None,
+            },
+        };
+        assert_eq!(thread_turns_items_list.serialization_scope(), None);
 
         let mcp_resource_read = ClientRequest::McpResourceRead {
             request_id: request_id(),
@@ -1886,6 +1992,7 @@ mod tests {
                 },
                 capabilities: Some(v1::InitializeCapabilities {
                     experimental_api: true,
+                    request_attestation: true,
                     opt_out_notification_methods: Some(vec![
                         "thread/started".to_string(),
                         "item/agentMessage/delta".to_string(),
@@ -1906,6 +2013,7 @@ mod tests {
                     },
                     "capabilities": {
                         "experimentalApi": true,
+                        "requestAttestation": true,
                         "optOutNotificationMethods": [
                             "thread/started",
                             "item/agentMessage/delta"
@@ -1931,6 +2039,7 @@ mod tests {
                 },
                 "capabilities": {
                     "experimentalApi": true,
+                    "requestAttestation": true,
                     "optOutNotificationMethods": [
                         "thread/started",
                         "item/agentMessage/delta"
@@ -1951,6 +2060,7 @@ mod tests {
                     },
                     capabilities: Some(v1::InitializeCapabilities {
                         experimental_api: true,
+                        request_attestation: true,
                         opt_out_notification_methods: Some(vec![
                             "thread/started".to_string(),
                             "item/agentMessage/delta".to_string(),
@@ -2068,6 +2178,28 @@ mod tests {
     }
 
     #[test]
+    fn serialize_attestation_generate_request() -> Result<()> {
+        let params = v2::AttestationGenerateParams {};
+        let request = ServerRequest::AttestationGenerate {
+            request_id: RequestId::Integer(9),
+            params: params.clone(),
+        };
+        assert_eq!(
+            json!({
+                "method": "attestation/generate",
+                "id": 9,
+                "params": {}
+            }),
+            serde_json::to_value(&request)?,
+        );
+
+        let payload = ServerRequestPayload::AttestationGenerate(params);
+        assert_eq!(request.id(), &RequestId::Integer(9));
+        assert_eq!(payload.request_with_id(RequestId::Integer(9)), request);
+        Ok(())
+    }
+
+    #[test]
     fn serialize_server_response() -> Result<()> {
         let response = ServerResponse::CommandExecutionRequestApproval {
             request_id: RequestId::Integer(8),
@@ -2174,6 +2306,7 @@ mod tests {
             response: v2::ThreadStartResponse {
                 thread: v2::Thread {
                     id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
+                    session_id: "67e55044-10b1-426f-9247-bb680e5fe0c7".to_string(),
                     forked_from_id: None,
                     preview: "first prompt".to_string(),
                     ephemeral: true,
@@ -2185,6 +2318,7 @@ mod tests {
                     cwd: cwd.clone(),
                     cli_version: "0.0.0".to_string(),
                     source: v2::SessionSource::Exec,
+                    thread_source: None,
                     agent_nickname: None,
                     agent_role: None,
                     git_info: None,
@@ -2197,11 +2331,11 @@ mod tests {
                 model_provider: "openai".to_string(),
                 service_tier: None,
                 cwd,
+                runtime_workspace_roots: Vec::new(),
                 instruction_sources: vec![absolute_path("/tmp/AGENTS.md")],
                 approval_policy: v2::AskForApproval::OnFailure,
                 approvals_reviewer: v2::ApprovalsReviewer::User,
                 sandbox: v2::SandboxPolicy::DangerFullAccess,
-                permission_profile: None,
                 active_permission_profile: None,
                 reasoning_effort: None,
             },
@@ -2216,6 +2350,7 @@ mod tests {
                 "response": {
                     "thread": {
                         "id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+                        "sessionId": "67e55044-10b1-426f-9247-bb680e5fe0c7",
                         "forkedFromId": null,
                         "preview": "first prompt",
                         "ephemeral": true,
@@ -2229,6 +2364,7 @@ mod tests {
                         "cwd": absolute_path_string("tmp"),
                         "cliVersion": "0.0.0",
                         "source": "exec",
+                        "threadSource": null,
                         "agentNickname": null,
                         "agentRole": null,
                         "gitInfo": null,
@@ -2241,13 +2377,13 @@ mod tests {
                     "modelProvider": "openai",
                     "serviceTier": null,
                     "cwd": absolute_path_string("tmp"),
+                    "runtimeWorkspaceRoots": [],
                     "instructionSources": [absolute_path_string("tmp/AGENTS.md")],
                     "approvalPolicy": "on-failure",
                     "approvalsReviewer": "user",
                     "sandbox": {
                         "type": "dangerFullAccess"
                     },
-                    "permissionProfile": null,
                     "activePermissionProfile": null,
                     "reasoningEffort": null
                 }
@@ -2523,9 +2659,32 @@ mod tests {
     }
 
     #[test]
+    fn serialize_environment_add() -> Result<()> {
+        let request = ClientRequest::EnvironmentAdd {
+            request_id: RequestId::Integer(9),
+            params: v2::EnvironmentAddParams {
+                environment_id: "remote-a".to_string(),
+                exec_server_url: "ws://127.0.0.1:8765".to_string(),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "environment/add",
+                "id": 9,
+                "params": {
+                    "environmentId": "remote-a",
+                    "execServerUrl": "ws://127.0.0.1:8765"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn serialize_fs_get_metadata() -> Result<()> {
         let request = ClientRequest::FsGetMetadata {
-            request_id: RequestId::Integer(9),
+            request_id: RequestId::Integer(10),
             params: v2::FsGetMetadataParams {
                 path: absolute_path("tmp/example"),
             },
@@ -2533,7 +2692,7 @@ mod tests {
         assert_eq!(
             json!({
                 "method": "fs/getMetadata",
-                "id": 9,
+                "id": 10,
                 "params": {
                     "path": absolute_path_string("tmp/example")
                 }
@@ -2578,7 +2737,33 @@ mod tests {
                 "id": 8,
                 "params": {
                     "cursor": null,
-                    "limit": null
+                    "limit": null,
+                    "threadId": null
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_list_experimental_features_with_thread_id() -> Result<()> {
+        let request = ClientRequest::ExperimentalFeatureList {
+            request_id: RequestId::Integer(8),
+            params: v2::ExperimentalFeatureListParams {
+                cursor: Some("3".to_string()),
+                limit: Some(2),
+                thread_id: Some("00000000-0000-4000-8000-000000000001".to_string()),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "experimentalFeature/list",
+                "id": 8,
+                "params": {
+                    "cursor": "3",
+                    "limit": 2,
+                    "threadId": "00000000-0000-4000-8000-000000000001"
                 }
             }),
             serde_json::to_value(&request)?,
@@ -2795,6 +2980,19 @@ mod tests {
     }
 
     #[test]
+    fn environment_add_is_marked_experimental() {
+        let request = ClientRequest::EnvironmentAdd {
+            request_id: RequestId::Integer(1),
+            params: v2::EnvironmentAddParams {
+                environment_id: "remote-a".to_string(),
+                exec_server_url: "ws://127.0.0.1:8765".to_string(),
+            },
+        };
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
+        assert_eq!(reason, Some("environment/add"));
+    }
+
+    #[test]
     fn command_exec_permission_profile_is_marked_experimental() {
         let request = ClientRequest::OneOffCommandExec {
             request_id: RequestId::Integer(1),
@@ -2812,7 +3010,7 @@ mod tests {
                 env: None,
                 size: None,
                 sandbox_policy: None,
-                permission_profile: Some(v2::PermissionProfile::Disabled),
+                permission_profile: Some(BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string()),
             },
         };
 
@@ -2942,6 +3140,7 @@ mod tests {
             thread_id: "thr_123".to_string(),
             turn_id: "turn_123".to_string(),
             item_id: "call_123".to_string(),
+            started_at_ms: 0,
             approval_id: None,
             reason: None,
             network_approval_context: None,

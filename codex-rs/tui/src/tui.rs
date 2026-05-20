@@ -33,7 +33,6 @@ use ratatui::crossterm::terminal::enable_raw_mode;
 use ratatui::layout::Offset;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
-use ratatui::layout::Size;
 use ratatui::text::Line;
 use tokio::sync::broadcast;
 use tokio_stream::Stream;
@@ -41,6 +40,7 @@ use tokio_stream::Stream;
 pub use self::frame_requester::FrameRequester;
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
+use crate::insert_history::HistoryLineWrapPolicy;
 use crate::notifications::DesktopNotificationBackend;
 use crate::notifications::detect_backend;
 use crate::tui::event_stream::EventBroker;
@@ -63,6 +63,11 @@ pub(crate) const TARGET_FRAME_INTERVAL: Duration = frame_rate_limiter::MIN_FRAME
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
 
+pub(crate) struct InitializedTerminal {
+    pub(crate) terminal: Terminal,
+    pub(crate) enhanced_keys_supported: bool,
+}
+
 pub(crate) fn running_in_vscode_terminal() -> bool {
     keyboard_modes::running_in_vscode_terminal()
 }
@@ -74,18 +79,24 @@ fn should_emit_notification(condition: NotificationCondition, terminal_focused: 
     }
 }
 
-fn preserve_viewport_bottom(area: &mut Rect, previous_bottom: u16) {
-    area.y = previous_bottom.saturating_sub(area.height);
+impl Drop for Tui {
+    fn drop(&mut self) {
+        if let Err(err) = self.clear_ambient_pet_image() {
+            tracing::debug!(error = %err, "failed to clear ambient pet image on TUI drop");
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::CustomTerminal;
-    use super::Tui;
-    use super::preserve_viewport_bottom;
+    use std::io::Write as _;
+
+    use super::clear_for_viewport_change;
     use super::should_emit_notification;
+    use crate::custom_terminal::Terminal as CustomTerminal;
     use crate::test_backend::VT100Backend;
     use codex_config::types::NotificationCondition;
+    use ratatui::layout::Position;
     use ratatui::layout::Rect;
 
     #[test]
@@ -113,44 +124,43 @@ mod tests {
     }
 
     #[test]
-    fn thread_switch_clear_bottom_aligns_the_new_viewport_height() {
-        let backend = VT100Backend::new(/*width*/ 80, /*height*/ 24);
-        let mut terminal = CustomTerminal::with_options(backend).expect("terminal");
-        terminal.set_viewport_area(Rect::new(
-            /*x*/ 0, /*y*/ 4, /*width*/ 80, /*height*/ 7,
-        ));
+    fn first_viewport_change_clears_from_new_viewport_when_old_viewport_is_empty() {
+        let width = 12;
+        let height = 4;
+        let backend = VT100Backend::new(width, height);
+        let mut terminal =
+            CustomTerminal::with_options_and_cursor_position(backend, Position { x: 0, y: 1 })
+                .expect("terminal");
+        write!(
+            terminal.backend_mut(),
+            "shell line\r\nstale cells\r\nmore stale"
+        )
+        .expect("prefill terminal");
 
-        Tui::clear_thread_switch_viewport(&mut terminal, /*viewport_height*/ 5)
-            .expect("thread switch clear");
-
-        assert_eq!(
-            terminal.viewport_area,
+        clear_for_viewport_change(
+            &mut terminal,
             Rect::new(
-                /*x*/ 0, /*y*/ 19, /*width*/ 80, /*height*/ 5
-            )
-        );
-    }
+                /*x*/ 0,
+                /*y*/ 1,
+                /*width*/ width,
+                /*height*/ height - 1,
+            ),
+        )
+        .expect("clear transition");
 
-    #[test]
-    fn inline_viewport_bottom_preservation_keeps_input_row_fixed_across_overlay_resize() {
-        let mut area = Rect::new(
-            /*x*/ 0, /*y*/ 10, /*width*/ 80, /*height*/ 7,
+        let rows: Vec<String> = terminal
+            .backend()
+            .vt100()
+            .screen()
+            .rows(/*start*/ 0, width)
+            .collect();
+        assert!(
+            rows[0].contains("shell line"),
+            "expected content before the viewport to remain visible, rows: {rows:?}"
         );
-        preserve_viewport_bottom(&mut area, /*previous_bottom*/ 16);
-        assert_eq!(
-            area,
-            Rect::new(
-                /*x*/ 0, /*y*/ 9, /*width*/ 80, /*height*/ 7
-            )
-        );
-
-        area.height = 6;
-        preserve_viewport_bottom(&mut area, /*previous_bottom*/ 16);
-        assert_eq!(
-            area,
-            Rect::new(
-                /*x*/ 0, /*y*/ 10, /*width*/ 80, /*height*/ 6
-            )
+        assert!(
+            !rows.iter().skip(1).any(|row| row.contains("stale")),
+            "expected stale cells inside the new viewport to be cleared, rows: {rows:?}"
         );
     }
 }
@@ -329,7 +339,7 @@ fn flush_terminal_input_buffer() {
 pub(crate) fn flush_terminal_input_buffer() {}
 
 /// Initialize the terminal (inline viewport; history stays in normal scrollback)
-pub fn init() -> Result<Terminal> {
+pub(crate) fn init() -> Result<InitializedTerminal> {
     if !stdin().is_terminal() {
         return Err(std::io::Error::other("stdin is not a terminal"));
     }
@@ -346,20 +356,57 @@ pub fn init() -> Result<Terminal> {
     let backend = CrosstermBackend::new(stdout());
 
     #[cfg(unix)]
-    let cursor_pos =
-        match crate::terminal_probe::cursor_position(crate::terminal_probe::DEFAULT_TIMEOUT) {
-            Ok(Some(pos)) => pos,
-            Ok(None) => {
-                tracing::warn!("initial cursor position probe timed out; defaulting to origin");
-                Position { x: 0, y: 0 }
+    let startup_probe = {
+        use crate::terminal_probe::StartupKeyboardEnhancementProbe;
+
+        let started_at = std::time::Instant::now();
+        let keyboard_probe = if keyboard_modes::keyboard_enhancement_disabled() {
+            StartupKeyboardEnhancementProbe::Skip
+        } else {
+            StartupKeyboardEnhancementProbe::Query
+        };
+        match crate::terminal_probe::startup(crate::terminal_probe::DEFAULT_TIMEOUT, keyboard_probe)
+        {
+            Ok(probe) => {
+                tracing::info!(
+                    duration_ms = %started_at.elapsed().as_millis(),
+                    cursor_position = probe.cursor_position.is_some(),
+                    default_colors = probe.default_colors.is_some(),
+                    keyboard_enhancement_supported = ?probe.keyboard_enhancement_supported,
+                    "terminal startup probes completed"
+                );
+                probe
             }
             Err(err) => {
                 tracing::warn!(
-                    "failed to read initial cursor position; defaulting to origin: {err}"
+                    duration_ms = %started_at.elapsed().as_millis(),
+                    "terminal startup probes failed: {err}"
                 );
-                Position { x: 0, y: 0 }
+                crate::terminal_probe::StartupProbe {
+                    cursor_position: None,
+                    default_colors: None,
+                    keyboard_enhancement_supported: None,
+                }
             }
-        };
+        }
+    };
+
+    #[cfg(unix)]
+    crate::terminal_palette::set_default_colors_from_startup_probe(startup_probe.default_colors);
+
+    #[cfg(unix)]
+    let cursor_pos = match startup_probe.cursor_position {
+        Some(pos) => pos,
+        None => {
+            tracing::warn!("initial cursor position probe timed out; defaulting to origin");
+            Position { x: 0, y: 0 }
+        }
+    };
+
+    #[cfg(unix)]
+    let enhanced_keys_supported = startup_probe
+        .keyboard_enhancement_supported
+        .unwrap_or(/*default*/ false);
 
     #[cfg(not(unix))]
     let mut backend = CrosstermBackend::new(stdout());
@@ -367,8 +414,15 @@ pub fn init() -> Result<Terminal> {
     #[cfg(not(unix))]
     let cursor_pos = cursor_position_with_crossterm(&mut backend);
 
+    #[cfg(not(unix))]
+    let enhanced_keys_supported =
+        !keyboard_modes::keyboard_enhancement_disabled() && detect_keyboard_enhancement_supported();
+
     let tui = CustomTerminal::with_options_and_cursor_position(backend, cursor_pos)?;
-    Ok(tui)
+    Ok(InitializedTerminal {
+        terminal: tui,
+        enhanced_keys_supported,
+    })
 }
 
 #[cfg(not(unix))]
@@ -377,13 +431,6 @@ fn cursor_position_with_crossterm(backend: &mut CrosstermBackend<Stdout>) -> Pos
         tracing::warn!("failed to read initial cursor position; defaulting to origin: {err}");
         Position { x: 0, y: 0 }
     })
-}
-
-#[cfg(unix)]
-fn detect_keyboard_enhancement_supported() -> bool {
-    crate::terminal_probe::keyboard_enhancement_supported(crate::terminal_probe::DEFAULT_TIMEOUT)
-        .unwrap_or(/*default*/ None)
-        .unwrap_or(/*default*/ false)
 }
 
 #[cfg(not(unix))]
@@ -421,8 +468,9 @@ pub struct Tui {
     draw_tx: broadcast::Sender<()>,
     event_broker: Arc<EventBroker>,
     pub(crate) terminal: Terminal,
-    pending_history_lines: Vec<Line<'static>>,
-    pending_thread_switch_clear: bool,
+    pending_history_lines: Vec<PendingHistoryLines>,
+    ambient_pet_image_state: crate::pets::PetImageRenderState,
+    pet_picker_preview_image_state: crate::pets::PetImageRenderState,
     alt_saved_viewport: Option<ratatui::layout::Rect>,
     #[cfg(unix)]
     suspend_context: SuspendContext,
@@ -433,28 +481,35 @@ pub struct Tui {
     enhanced_keys_supported: bool,
     notification_backend: Option<DesktopNotificationBackend>,
     notification_condition: NotificationCondition,
-    is_zellij: bool,
-    preserve_inline_viewport_bottom_for_restore: bool,
-    // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
+    // When false, enter_alt_screen() becomes a no-op.
     alt_screen_enabled: bool,
 }
 
+struct PendingHistoryLines {
+    lines: Vec<Line<'static>>,
+    wrap_policy: HistoryLineWrapPolicy,
+}
+
+fn clear_for_viewport_change<B>(terminal: &mut CustomTerminal<B>, new_area: Rect) -> Result<()>
+where
+    B: Backend + Write,
+{
+    let clear_position = if terminal.viewport_area.is_empty() {
+        new_area.as_position()
+    } else {
+        terminal.viewport_area.as_position()
+    };
+    terminal.clear_after_position(clear_position)
+}
+
 impl Tui {
-    pub fn new(terminal: Terminal) -> Self {
+    pub fn new(terminal: Terminal, enhanced_keys_supported: bool) -> Self {
         let (draw_tx, _) = broadcast::channel(1);
         let frame_requester = FrameRequester::new(draw_tx.clone());
 
-        // Detect keyboard enhancement support before any EventStream is created so the
-        // crossterm poller can acquire its lock without contention.
-        let enhanced_keys_supported = !keyboard_modes::keyboard_enhancement_disabled()
-            && detect_keyboard_enhancement_supported();
         // Cache this to avoid contention with the event reader.
         supports_color::on_cached(supports_color::Stream::Stdout);
         let _ = crate::terminal_palette::default_colors();
-        let is_zellij = matches!(
-            codex_terminal_detection::terminal_info().multiplexer,
-            Some(codex_terminal_detection::Multiplexer::Zellij {})
-        );
 
         Self {
             frame_requester,
@@ -462,7 +517,8 @@ impl Tui {
             event_broker: Arc::new(EventBroker::new()),
             terminal,
             pending_history_lines: vec![],
-            pending_thread_switch_clear: false,
+            ambient_pet_image_state: crate::pets::PetImageRenderState::default(),
+            pet_picker_preview_image_state: crate::pets::PetImageRenderState::default(),
             alt_saved_viewport: None,
             #[cfg(unix)]
             suspend_context: SuspendContext::new(),
@@ -471,8 +527,6 @@ impl Tui {
             enhanced_keys_supported,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             notification_condition: NotificationCondition::default(),
-            is_zellij,
-            preserve_inline_viewport_bottom_for_restore: false,
             alt_screen_enabled: true,
         }
     }
@@ -638,81 +692,30 @@ impl Tui {
     }
 
     pub fn insert_history_lines(&mut self, lines: Vec<Line<'static>>) {
-        self.pending_history_lines.extend(lines);
+        self.insert_history_lines_with_wrap_policy(lines, HistoryLineWrapPolicy::PreWrap);
+    }
+
+    pub fn insert_history_lines_with_wrap_policy(
+        &mut self,
+        lines: Vec<Line<'static>>,
+        wrap_policy: HistoryLineWrapPolicy,
+    ) {
+        if lines.is_empty() {
+            return;
+        }
+        if let Some(last) = self.pending_history_lines.last_mut()
+            && last.wrap_policy == wrap_policy
+        {
+            last.lines.extend(lines);
+        } else {
+            self.pending_history_lines
+                .push(PendingHistoryLines { lines, wrap_policy });
+        }
         self.frame_requester().schedule_frame();
     }
 
     pub fn clear_pending_history_lines(&mut self) {
         self.pending_history_lines.clear();
-    }
-
-    /// Clear thread-switch scrollback inside the next synchronized draw.
-    ///
-    /// The next frame also flushes replayed history and repaints the composer, so deferring the
-    /// raw terminal clear until that transaction keeps terminals from briefly showing an empty
-    /// screen between "old thread disappeared" and "new thread arrived."
-    pub(crate) fn schedule_thread_switch_clear(&mut self) {
-        self.pending_thread_switch_clear = true;
-        self.frame_requester().schedule_frame();
-    }
-
-    /// Resize the inline viewport to `height` rows, scrolling content above it if
-    /// the viewport would extend past the bottom of the screen. Returns `true` when
-    /// the caller must invalidate the diff buffer (Zellij mode), because the scroll
-    /// was performed with raw newlines that ratatui cannot track.
-    fn update_inline_viewport(
-        terminal: &mut Terminal,
-        height: u16,
-        is_zellij: bool,
-        preserve_bottom: bool,
-    ) -> Result<bool> {
-        let size = terminal.size()?;
-        let mut needs_full_repaint = false;
-
-        let mut area = terminal.viewport_area;
-        area.height = height.min(size.height);
-        area.width = size.width;
-        if preserve_bottom {
-            preserve_viewport_bottom(&mut area, terminal.viewport_area.bottom());
-        }
-        if area.bottom() > size.height {
-            let scroll_by = area.bottom() - size.height;
-            if is_zellij {
-                Self::scroll_zellij_expanded_viewport(terminal, size, scroll_by)?;
-                needs_full_repaint = true;
-            } else {
-                terminal
-                    .backend_mut()
-                    .scroll_region_up(0..area.top(), scroll_by)?;
-            }
-            area.y = size.height - area.height;
-        }
-        if area != terminal.viewport_area {
-            // TODO(nornagon): probably this could be collapsed with the clear + set_viewport_area above.
-            terminal.clear()?;
-            terminal.set_viewport_area(area);
-        }
-
-        Ok(needs_full_repaint)
-    }
-
-    /// Push content above the viewport upward by `scroll_by` rows using raw
-    /// newlines at the screen bottom. This is the Zellij-safe alternative to
-    /// `scroll_region_up`, which relies on DECSTBM sequences Zellij does not
-    /// support.
-    fn scroll_zellij_expanded_viewport(
-        terminal: &mut Terminal,
-        size: Size,
-        scroll_by: u16,
-    ) -> Result<()> {
-        crossterm::queue!(
-            terminal.backend_mut(),
-            crossterm::cursor::MoveTo(0, size.height.saturating_sub(1))
-        )?;
-        for _ in 0..scroll_by {
-            crossterm::queue!(terminal.backend_mut(), crossterm::style::Print("\n"))?;
-        }
-        Ok(())
     }
 
     /// Resize the inline viewport for the resize-reflow path.
@@ -723,8 +726,6 @@ impl Tui {
     fn update_inline_viewport_for_resize_reflow(
         terminal: &mut Terminal,
         height: u16,
-        is_zellij: bool,
-        preserve_bottom: bool,
     ) -> Result<bool> {
         let size = terminal.size()?;
         let terminal_height_shrank = size.height < terminal.last_known_screen_size.height;
@@ -736,24 +737,17 @@ impl Tui {
         let mut area = terminal.viewport_area;
         area.height = height.min(size.height);
         area.width = size.width;
-        if preserve_bottom {
-            preserve_viewport_bottom(&mut area, previous_area.bottom());
-        }
         let mut needs_full_repaint = false;
 
         if area.bottom() > size.height {
             let scroll_by = area.bottom() - size.height;
             if !terminal_height_shrank {
-                if is_zellij {
-                    Self::scroll_zellij_expanded_viewport(terminal, size, scroll_by)?;
-                } else {
-                    terminal
-                        .backend_mut()
-                        .scroll_region_up(0..area.top(), scroll_by)?;
-                }
+                terminal
+                    .backend_mut()
+                    .scroll_region_up(0..area.top(), scroll_by)?;
             }
             area.y = size.height - area.height;
-        } else if !preserve_bottom && terminal_height_grew && viewport_was_bottom_aligned {
+        } else if terminal_height_grew && viewport_was_bottom_aligned {
             area.y = size.height - area.height;
         }
 
@@ -768,46 +762,28 @@ impl Tui {
     }
 
     /// Write any buffered history lines above the viewport and clear the buffer.
-    /// Returns `true` when Zellij mode was used, signaling that the caller must
-    /// invalidate the diff buffer for a full repaint.
     fn flush_pending_history_lines(
         terminal: &mut Terminal,
-        pending_history_lines: &mut Vec<Line<'static>>,
-        is_zellij: bool,
-    ) -> Result<bool> {
+        pending_history_lines: &mut Vec<PendingHistoryLines>,
+    ) -> Result<()> {
         if pending_history_lines.is_empty() {
-            return Ok(false);
+            return Ok(());
         }
 
-        crate::insert_history::insert_history_lines_with_mode(
-            terminal,
-            pending_history_lines.clone(),
-            crate::insert_history::InsertHistoryMode::new(is_zellij),
-        )?;
+        for batch in pending_history_lines.iter() {
+            crate::insert_history::insert_history_lines_with_wrap_policy(
+                terminal,
+                batch.lines.clone(),
+                batch.wrap_policy,
+            )?;
+        }
         pending_history_lines.clear();
-        Ok(is_zellij)
+        Ok(())
     }
 
     pub fn draw(
         &mut self,
         height: u16,
-        draw_fn: impl FnOnce(&mut custom_terminal::Frame),
-    ) -> Result<()> {
-        self.draw_with_inline_bottom_preservation(height, /*preserve_bottom*/ false, draw_fn)
-    }
-
-    pub fn draw_preserving_inline_bottom(
-        &mut self,
-        height: u16,
-        draw_fn: impl FnOnce(&mut custom_terminal::Frame),
-    ) -> Result<()> {
-        self.draw_with_inline_bottom_preservation(height, /*preserve_bottom*/ true, draw_fn)
-    }
-
-    fn draw_with_inline_bottom_preservation(
-        &mut self,
-        height: u16,
-        preserve_bottom: bool,
         draw_fn: impl FnOnce(&mut custom_terminal::Frame),
     ) -> Result<()> {
         // If we are resuming from ^Z, we need to prepare the resume action now so we can apply it
@@ -821,10 +797,7 @@ impl Tui {
         // the synchronized update, to avoid racing with the event reader.
         let mut pending_viewport_area = self.pending_viewport_area()?;
 
-        let preserve_bottom_requested = preserve_bottom;
-        let preserve_bottom =
-            preserve_bottom_requested || self.preserve_inline_viewport_bottom_for_restore;
-        let result = stdout().sync_update(|_| {
+        stdout().sync_update(|_| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
                 prepared.apply(&mut self.terminal)?;
@@ -836,22 +809,26 @@ impl Tui {
                 terminal.clear()?;
             }
 
-            let mut needs_full_repaint = if self.pending_thread_switch_clear {
-                self.pending_thread_switch_clear = false;
-                Self::clear_thread_switch_viewport(terminal, height)?;
-                true
-            } else {
-                Self::update_inline_viewport(terminal, height, self.is_zellij, preserve_bottom)?
-            };
-            needs_full_repaint |= Self::flush_pending_history_lines(
-                terminal,
-                &mut self.pending_history_lines,
-                self.is_zellij,
-            )?;
+            let size = terminal.size()?;
 
-            if needs_full_repaint {
-                terminal.invalidate_viewport();
+            let mut area = terminal.viewport_area;
+            area.height = height.min(size.height);
+            area.width = size.width;
+            // If the viewport has expanded, scroll everything else up to make room.
+            if area.bottom() > size.height {
+                terminal
+                    .backend_mut()
+                    .scroll_region_up(0..area.top(), area.bottom() - size.height)?;
+                area.y = size.height - area.height;
             }
+            if area != terminal.viewport_area {
+                // On startup, the old viewport can still be empty. Clear from the
+                // new viewport top so stale shell cells do not show through spaces.
+                clear_for_viewport_change(terminal, area)?;
+                terminal.set_viewport_area(area);
+            }
+
+            Self::flush_pending_history_lines(terminal, &mut self.pending_history_lines)?;
 
             // Update the y position for suspending so Ctrl-Z can place the cursor correctly.
             #[cfg(unix)]
@@ -870,9 +847,51 @@ impl Tui {
             terminal.draw(|frame| {
                 draw_fn(frame);
             })
-        })?;
-        self.preserve_inline_viewport_bottom_for_restore = preserve_bottom_requested;
-        result
+        })?
+    }
+
+    pub fn draw_ambient_pet_image(
+        &mut self,
+        request: Option<crate::pets::AmbientPetDraw>,
+    ) -> std::result::Result<(), crate::pets::PetImageRenderError> {
+        let terminal = &mut self.terminal;
+        let state = &mut self.ambient_pet_image_state;
+        stdout().sync_update(|_| {
+            match crate::pets::render_ambient_pet_image(terminal.backend_mut(), state, request) {
+                Ok(()) => Ok(Ok(())),
+                Err(crate::pets::PetImageRenderError::Terminal(err)) => Err(err),
+                Err(err @ crate::pets::PetImageRenderError::Asset(_)) => Ok(Err(err)),
+            }
+        })??
+    }
+
+    pub fn draw_pet_picker_preview_image(
+        &mut self,
+        request: Option<crate::pets::AmbientPetDraw>,
+    ) -> std::result::Result<(), crate::pets::PetImageRenderError> {
+        let terminal = &mut self.terminal;
+        let state = &mut self.pet_picker_preview_image_state;
+        stdout().sync_update(|_| {
+            match crate::pets::render_pet_picker_preview_image(
+                terminal.backend_mut(),
+                state,
+                request,
+            ) {
+                Ok(()) => Ok(Ok(())),
+                Err(crate::pets::PetImageRenderError::Terminal(err)) => Err(err),
+                Err(err @ crate::pets::PetImageRenderError::Asset(_)) => Ok(Err(err)),
+            }
+        })??
+    }
+
+    pub fn clear_ambient_pet_image(
+        &mut self,
+    ) -> std::result::Result<(), crate::pets::PetImageRenderError> {
+        crate::pets::render_ambient_pet_image(
+            self.terminal.backend_mut(),
+            &mut self.ambient_pet_image_state,
+            /*request*/ None,
+        )
     }
 
     /// Draw a frame using the resize-reflow viewport and history insertion rules.
@@ -885,27 +904,6 @@ impl Tui {
         height: u16,
         draw_fn: impl FnOnce(&mut custom_terminal::Frame),
     ) -> Result<()> {
-        self.draw_with_resize_reflow_and_inline_bottom_preservation(
-            height, /*preserve_bottom*/ false, draw_fn,
-        )
-    }
-
-    pub fn draw_with_resize_reflow_preserving_inline_bottom(
-        &mut self,
-        height: u16,
-        draw_fn: impl FnOnce(&mut custom_terminal::Frame),
-    ) -> Result<()> {
-        self.draw_with_resize_reflow_and_inline_bottom_preservation(
-            height, /*preserve_bottom*/ true, draw_fn,
-        )
-    }
-
-    fn draw_with_resize_reflow_and_inline_bottom_preservation(
-        &mut self,
-        height: u16,
-        preserve_bottom: bool,
-        draw_fn: impl FnOnce(&mut custom_terminal::Frame),
-    ) -> Result<()> {
         // If we are resuming from ^Z, we need to prepare the resume action now so we can apply it
         // in the synchronized update.
         #[cfg(unix)]
@@ -913,34 +911,16 @@ impl Tui {
             .suspend_context
             .prepare_resume_action(&mut self.terminal, &mut self.alt_saved_viewport);
 
-        let preserve_bottom_requested = preserve_bottom;
-        let preserve_bottom =
-            preserve_bottom_requested || self.preserve_inline_viewport_bottom_for_restore;
-        let result = stdout().sync_update(|_| {
+        stdout().sync_update(|_| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
                 prepared.apply(&mut self.terminal)?;
             }
 
             let terminal = &mut self.terminal;
-            let mut needs_full_repaint = if self.pending_thread_switch_clear {
-                self.pending_thread_switch_clear = false;
-                Self::clear_thread_switch_viewport(terminal, height)?;
-                true
-            } else {
-                Self::update_inline_viewport_for_resize_reflow(
-                    terminal,
-                    height,
-                    self.is_zellij,
-                    preserve_bottom,
-                )?
-            };
-            let flushed_history = Self::flush_pending_history_lines(
-                terminal,
-                &mut self.pending_history_lines,
-                self.is_zellij,
-            )?;
-            needs_full_repaint |= flushed_history;
+            let needs_full_repaint =
+                Self::update_inline_viewport_for_resize_reflow(terminal, height)?;
+            Self::flush_pending_history_lines(terminal, &mut self.pending_history_lines)?;
 
             if needs_full_repaint {
                 terminal.invalidate_viewport();
@@ -963,9 +943,7 @@ impl Tui {
             terminal.draw(|frame| {
                 draw_fn(frame);
             })
-        })?;
-        self.preserve_inline_viewport_bottom_for_restore = preserve_bottom_requested;
-        result
+        })?
     }
 
     fn pending_viewport_area(&mut self) -> Result<Option<Rect>> {
@@ -988,22 +966,5 @@ impl Tui {
             }
         }
         Ok(None)
-    }
-
-    fn clear_thread_switch_viewport<B>(
-        terminal: &mut CustomTerminal<B>,
-        viewport_height: u16,
-    ) -> Result<()>
-    where
-        B: Backend + Write,
-    {
-        terminal.clear_scrollback_and_visible_screen_ansi()?;
-        let size = terminal.size()?;
-        let mut area = terminal.viewport_area;
-        area.width = size.width;
-        area.height = viewport_height.min(size.height);
-        area.y = size.height.saturating_sub(area.height);
-        terminal.set_viewport_area(area);
-        Ok(())
     }
 }

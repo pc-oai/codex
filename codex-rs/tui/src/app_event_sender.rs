@@ -12,7 +12,6 @@ use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::ThreadRealtimeAudioChunk;
-use codex_app_server_protocol::ThreadUserState;
 use codex_app_server_protocol::ToolRequestUserInputResponse;
 use codex_protocol::ThreadId;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -54,12 +53,6 @@ impl AppEventSender {
 
     pub(crate) fn set_thread_name(&self, name: String) {
         self.send(AppEvent::CodexOp(AppCommand::set_thread_name(name)));
-    }
-
-    pub(crate) fn set_thread_user_state(&self, user_state: ThreadUserState) {
-        self.send(AppEvent::CodexOp(AppCommand::set_thread_user_state(
-            user_state,
-        )));
     }
 
     pub(crate) fn review(&self, target: ReviewTarget) {

@@ -92,23 +92,25 @@ fn run(data: BrowserData) -> Result<()> {
             );
         })?;
 
-        if let Event::Key(key) = read()? { match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => break Ok(()),
-            KeyCode::Up | KeyCode::Char('k') => selected = selected.saturating_sub(1),
-            KeyCode::Down | KeyCode::Char('j') => {
-                selected = (selected + 1).min(data.nodes.len().saturating_sub(1));
-            }
-            KeyCode::Home | KeyCode::Char('g') => selected = 0,
-            KeyCode::End | KeyCode::Char('G') => {
-                selected = data.nodes.len().saturating_sub(1);
-            }
-            KeyCode::Enter | KeyCode::Char(' ') => {
-                if !expanded.insert(selected) {
-                    expanded.remove(&selected);
+        if let Event::Key(key) = read()? {
+            match key.code {
+                KeyCode::Char('q') | KeyCode::Esc => break Ok(()),
+                KeyCode::Up | KeyCode::Char('k') => selected = selected.saturating_sub(1),
+                KeyCode::Down | KeyCode::Char('j') => {
+                    selected = (selected + 1).min(data.nodes.len().saturating_sub(1));
                 }
+                KeyCode::Home | KeyCode::Char('g') => selected = 0,
+                KeyCode::End | KeyCode::Char('G') => {
+                    selected = data.nodes.len().saturating_sub(1);
+                }
+                KeyCode::Enter | KeyCode::Char(' ') => {
+                    if !expanded.insert(selected) {
+                        expanded.remove(&selected);
+                    }
+                }
+                _ => {}
             }
-            _ => {}
-        } }
+        }
     };
 
     disable_raw_mode()?;

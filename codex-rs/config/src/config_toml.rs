@@ -27,6 +27,7 @@ use crate::types::ToolSuggestConfig;
 use crate::types::Tui;
 use crate::types::UriBasedFileOpener;
 use crate::types::WindowsToml;
+use codex_app_server_protocol::ForcedChatgptWorkspaceIds as ApiForcedChatgptWorkspaceIds;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_features::FeaturesToml;
@@ -37,11 +38,11 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
+use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
-use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
@@ -57,6 +58,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
+use serde::de::Error as SerdeError;
+use serde_json::Value as JsonValue;
 
 const RESERVED_MODEL_PROVIDER_IDS: [&str; 4] = [
     AMAZON_BEDROCK_PROVIDER_ID,
@@ -95,6 +98,55 @@ const fn default_true() -> Option<bool> {
     Some(true)
 }
 
+/// Backward-compatible shape for ChatGPT workspace login restrictions in config.toml.
+#[derive(Serialize, Debug, Clone, PartialEq, JsonSchema)]
+#[serde(untagged)]
+pub enum ForcedChatgptWorkspaceIds {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl ForcedChatgptWorkspaceIds {
+    pub fn into_vec(self) -> Vec<String> {
+        match self {
+            Self::Single(value) => vec![value],
+            Self::Multiple(values) => values,
+        }
+    }
+
+    pub fn into_api(self) -> ApiForcedChatgptWorkspaceIds {
+        match self {
+            Self::Single(value) => ApiForcedChatgptWorkspaceIds::Single(value),
+            Self::Multiple(values) => ApiForcedChatgptWorkspaceIds::Multiple(values),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ForcedChatgptWorkspaceIds {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Single(String),
+            Multiple(Vec<String>),
+        }
+
+        match Repr::deserialize(deserializer)? {
+            Repr::Single(value) if value.contains(',') => Err(D::Error::custom(
+                "forced_chatgpt_workspace_id must be a single workspace ID string or a TOML list \
+of strings; comma-separated strings are not supported. Use \
+`forced_chatgpt_workspace_id = [\"123e4567-e89b-42d3-a456-426614174000\", \
+\"123e4567-e89b-42d3-a456-426614174001\"]` instead.",
+            )),
+            Repr::Single(value) => Ok(Self::Single(value)),
+            Repr::Multiple(values) => Ok(Self::Multiple(values)),
+        }
+    }
+}
+
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -117,6 +169,10 @@ pub struct ConfigToml {
 
     /// Token usage threshold triggering auto-compaction of conversation history.
     pub model_auto_compact_token_limit: Option<i64>,
+
+    /// Controls whether the auto-compaction limit applies to the full context or
+    /// only to tokens after the carried prefix in the current compaction window.
+    pub model_auto_compact_token_limit_scope: Option<AutoCompactTokenLimitScope>,
 
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
@@ -159,7 +215,7 @@ pub struct ConfigToml {
     #[serde(default)]
     pub permissions: Option<PermissionsToml>,
 
-    /// Deprecated optional external command to spawn for end-user notifications.
+    /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
 
@@ -176,6 +232,9 @@ pub struct ConfigToml {
     /// Whether to inject the `<apps_instructions>` developer block.
     pub include_apps_instructions: Option<bool>,
 
+    /// Whether to inject the `<collaboration_mode>` developer block.
+    pub include_collaboration_mode_instructions: Option<bool>,
+
     /// Whether to inject the `<environment_context>` user block.
     pub include_environment_context: Option<bool>,
 
@@ -188,14 +247,9 @@ pub struct ConfigToml {
     /// Compact prompt used for history compaction.
     pub compact_prompt: Option<String>,
 
-    /// Optional commit attribution text for commit message co-author trailers.
-    ///
-    /// Set to an empty string to disable automatic commit attribution.
-    pub commit_attribution: Option<String>,
-
-    /// When set, restricts ChatGPT login to a specific workspace identifier.
+    /// When set, restricts ChatGPT login to one or more workspace identifiers.
     #[serde(default)]
-    pub forced_chatgpt_workspace_id: Option<String>,
+    pub forced_chatgpt_workspace_id: Option<ForcedChatgptWorkspaceIds>,
 
     /// When set, restricts the login mechanism users may use.
     #[serde(default)]
@@ -321,11 +375,15 @@ pub struct ConfigToml {
     /// Optionally specify a personality for the model
     pub personality: Option<Personality>,
 
-    /// Optional explicit service tier preference for new turns (`fast` or `flex`).
-    pub service_tier: Option<ServiceTier>,
+    /// Optional explicit service tier request id for new turns (for example
+    /// `priority` or `flex`; legacy `fast` also works).
+    pub service_tier: Option<String>,
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
+
+    /// Optional product SKU forwarded on host-owned Codex Apps MCP requests.
+    pub apps_mcp_product_sku: Option<String>,
 
     /// Base URL override for the built-in `openai` model provider.
     pub openai_base_url: Option<String>,
@@ -359,13 +417,14 @@ pub struct ConfigToml {
     /// active.
     pub experimental_realtime_start_instructions: Option<String>,
 
-    /// Experimental / do not use. When set, app-server uses a remote thread
-    /// store at this endpoint instead of the local filesystem/SQLite store.
-    pub experimental_thread_store_endpoint: Option<String>,
-
     /// Experimental / do not use. When set, app-server fetches thread-scoped
     /// config from a remote service at this endpoint.
     pub experimental_thread_config_endpoint: Option<String>,
+
+    /// Removed. Former remote thread-store endpoint setting kept only so we can
+    /// fail fast instead of silently falling back to local persistence.
+    #[schemars(skip)]
+    pub experimental_thread_store_endpoint: Option<String>,
 
     /// Experimental / do not use. Selects the thread store implementation.
     pub experimental_thread_store: Option<ThreadStoreToml>,
@@ -446,6 +505,10 @@ pub struct ConfigToml {
     #[serde(default)]
     pub apps: Option<AppsConfigToml>,
 
+    /// Opaque desktop settings stored alongside the rest of config.toml.
+    #[serde(default)]
+    pub desktop: Option<HashMap<String, JsonValue>>,
+
     /// OTEL configuration.
     pub otel: Option<OtelConfigToml>,
 
@@ -453,20 +516,12 @@ pub struct ConfigToml {
     #[serde(default)]
     pub windows: Option<WindowsToml>,
 
-    /// Tracks whether the Windows onboarding screen has been acknowledged.
-    pub windows_wsl_setup_acknowledged: Option<bool>,
-
     /// Collection of in-product notices (different from notifications)
     /// See [`crate::types::Notice`] for more details
     pub notice: Option<Notice>,
 
-    /// Legacy, now use features
-    /// Deprecated: ignored. Use `model_instructions_file`.
-    #[schemars(skip)]
-    pub experimental_instructions_file: Option<AbsolutePathBuf>,
     pub experimental_compact_prompt_file: Option<AbsolutePathBuf>,
     pub experimental_use_unified_exec_tool: Option<bool>,
-    pub experimental_use_freeform_apply_patch: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
     pub oss_provider: Option<String>,
 }
@@ -507,9 +562,6 @@ pub struct DebugConfigLockToml {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ThreadStoreToml {
     Local {},
-    Remote {
-        endpoint: String,
-    },
     #[schemars(skip)]
     InMemory {
         id: String,
@@ -534,7 +586,9 @@ impl From<ConfigToml> for UserSavedConfig {
             approval_policy: config_toml.approval_policy,
             sandbox_mode: config_toml.sandbox_mode,
             sandbox_settings: config_toml.sandbox_workspace_write.map(From::from),
-            forced_chatgpt_workspace_id: config_toml.forced_chatgpt_workspace_id,
+            forced_chatgpt_workspace_id: config_toml
+                .forced_chatgpt_workspace_id
+                .map(ForcedChatgptWorkspaceIds::into_api),
             forced_login_method: config_toml.forced_login_method,
             model: config_toml.model,
             model_reasoning_effort: config_toml.model_reasoning_effort,
@@ -624,10 +678,6 @@ pub struct ToolsToml {
         deserialize_with = "deserialize_optional_web_search_tool_config"
     )]
     pub web_search: Option<WebSearchToolConfig>,
-
-    /// Enable the `view_image` tool that lets the agent attach local images.
-    #[serde(default)]
-    pub view_image: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -705,7 +755,6 @@ impl From<ToolsToml> for Tools {
     fn from(tools_toml: ToolsToml) -> Self {
         Self {
             web_search: tools_toml.web_search.is_some().then_some(true),
-            view_image: tools_toml.view_image,
         }
     }
 }
@@ -980,5 +1029,58 @@ pub fn validate_oss_provider(provider: &str) -> std::io::Result<()> {
                 "Invalid OSS provider '{provider}'. Must be one of: {LMSTUDIO_OSS_PROVIDER_ID}, {OLLAMA_OSS_PROVIDER_ID}"
             ),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    const WORKSPACE_ID_A: &str = "123e4567-e89b-42d3-a456-426614174000";
+    const WORKSPACE_ID_B: &str = "123e4567-e89b-42d3-a456-426614174001";
+
+    #[test]
+    fn forced_chatgpt_workspace_id_accepts_single_string() {
+        let config: ConfigToml = toml::from_str(&format!(
+            r#"forced_chatgpt_workspace_id = "{WORKSPACE_ID_A}""#
+        ))
+        .expect("single workspace id should deserialize");
+
+        assert_eq!(
+            config
+                .forced_chatgpt_workspace_id
+                .expect("workspace id should be set")
+                .into_vec(),
+            vec![WORKSPACE_ID_A.to_string()]
+        );
+    }
+
+    #[test]
+    fn forced_chatgpt_workspace_id_accepts_string_list() {
+        let config: ConfigToml = toml::from_str(&format!(
+            r#"forced_chatgpt_workspace_id = ["{WORKSPACE_ID_A}", "{WORKSPACE_ID_B}"]"#
+        ))
+        .expect("workspace id list should deserialize");
+
+        assert_eq!(
+            config
+                .forced_chatgpt_workspace_id
+                .expect("workspace ids should be set")
+                .into_vec(),
+            vec![WORKSPACE_ID_A.to_string(), WORKSPACE_ID_B.to_string()]
+        );
+    }
+
+    #[test]
+    fn forced_chatgpt_workspace_id_rejects_comma_separated_string() {
+        let err = toml::from_str::<ConfigToml>(&format!(
+            r#"forced_chatgpt_workspace_id = "{WORKSPACE_ID_A},{WORKSPACE_ID_B}""#
+        ))
+        .expect_err("comma-separated string should be rejected");
+
+        let message = err.to_string();
+        assert!(message.contains("TOML list of strings"));
+        assert!(message.contains("comma-separated strings are not supported"));
     }
 }

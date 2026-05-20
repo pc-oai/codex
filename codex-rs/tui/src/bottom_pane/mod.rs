@@ -17,6 +17,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use crate::app::app_server_requests::ResolvedAppServerRequest;
+use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::pending_input_preview::PendingInputPreview;
@@ -30,12 +31,13 @@ use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
 use crate::tui::FrameRequester;
 pub(crate) use bottom_pane_view::BottomPaneView;
-use bottom_pane_view::ViewCompletion;
+pub(crate) use bottom_pane_view::ViewCompletion;
 use codex_app_server_protocol::ToolRequestUserInputParams;
 use codex_core_skills::model::SkillMetadata;
 use codex_features::Features;
 use codex_file_search::FileMatch;
 use codex_plugin::PluginCapabilitySummary;
+use codex_protocol::ThreadId;
 use codex_protocol::user_input::TextElement;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -47,7 +49,6 @@ use std::time::Duration;
 use std::time::Instant;
 
 mod action_required_title;
-mod agent_menu;
 mod app_link_view;
 mod approval_overlay;
 mod mcp_server_elicitation;
@@ -59,7 +60,6 @@ mod status_surface_preview;
 mod title_setup;
 pub(crate) use action_required_title::ACTION_REQUIRED_PREVIEW_PREFIX;
 pub(crate) use action_required_title::build_action_required_title_text;
-pub(crate) use agent_menu::AgentMenuItem;
 pub(crate) use app_link_view::AppLinkElicitationTarget;
 pub(crate) use app_link_view::AppLinkSuggestionType;
 pub(crate) use app_link_view::AppLinkView;
@@ -71,7 +71,6 @@ pub(crate) use mcp_server_elicitation::McpServerElicitationFormRequest;
 pub(crate) use mcp_server_elicitation::McpServerElicitationOverlay;
 pub(crate) use request_user_input::RequestUserInputOverlay;
 pub(crate) use status_line_style::status_line_from_segments;
-pub(crate) use status_line_style::status_line_from_segments_with_muting;
 mod bottom_pane_view;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -96,6 +95,7 @@ mod file_search_popup;
 mod footer;
 mod list_selection_view;
 mod memories_settings_view;
+mod mentions_v2;
 pub(crate) mod prompt_args;
 mod skill_popup;
 mod skills_toggle_view;
@@ -105,8 +105,8 @@ pub(crate) use footer::GoalStatusIndicator;
 #[cfg(test)]
 pub(crate) use footer::goal_status_indicator_line;
 pub(crate) use list_selection_view::ColumnWidthMode;
-#[cfg(test)]
 pub(crate) use list_selection_view::ListSelectionView;
+pub(crate) use list_selection_view::OnSelectionChangedCallback;
 pub(crate) use list_selection_view::SelectionRowDisplay;
 pub(crate) use list_selection_view::SelectionToggle;
 pub(crate) use list_selection_view::SelectionViewParams;
@@ -114,6 +114,7 @@ pub(crate) use list_selection_view::SideContentWidth;
 pub(crate) use list_selection_view::popup_content_width;
 pub(crate) use list_selection_view::side_by_side_layout_widths;
 pub(crate) use memories_settings_view::MemoriesSettingsView;
+use slash_commands::ServiceTierCommand;
 mod feedback_view;
 mod hooks_browser_view;
 pub(crate) use feedback_view::FeedbackAudience;
@@ -130,7 +131,6 @@ pub(crate) use status_surface_preview::StatusSurfacePreviewData;
 pub(crate) use status_surface_preview::StatusSurfacePreviewItem;
 pub(crate) use title_setup::TerminalTitleItem;
 pub(crate) use title_setup::TerminalTitleSetupView;
-pub(crate) use title_setup::compact_title_items_for_thread_title;
 #[cfg(test)]
 pub(crate) use title_setup::preview_line_for_title_items;
 mod paste_burst;
@@ -205,13 +205,12 @@ pub(crate) struct BottomPane {
 
     /// Stack of views displayed instead of the composer (e.g. popups/modals).
     view_stack: Vec<Box<dyn BottomPaneView>>,
-    /// Floating, composer-preserving agent chooser anchored over the footer.
-    agent_menu: Option<agent_menu::AgentMenu>,
     delayed_approval_requests: VecDeque<DelayedApprovalRequest>,
     last_composer_activity_at: Option<Instant>,
 
     app_event_tx: AppEventSender,
     frame_requester: FrameRequester,
+    thread_id: Option<ThreadId>,
 
     has_input_focus: bool,
     enhanced_keys_supported: bool,
@@ -243,7 +242,6 @@ pub(crate) struct BottomPaneParams {
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) placeholder_text: String,
     pub(crate) disable_paste_burst: bool,
-    pub(crate) paste_text_inline_char_limit: usize,
     pub(crate) animations_enabled: bool,
     pub(crate) skills: Option<Vec<SkillMetadata>>,
 }
@@ -257,7 +255,6 @@ impl BottomPane {
             enhanced_keys_supported,
             placeholder_text,
             disable_paste_burst,
-            paste_text_inline_char_limit,
             animations_enabled,
             skills,
         } = params;
@@ -268,7 +265,6 @@ impl BottomPane {
             placeholder_text,
             disable_paste_burst,
         );
-        composer.set_paste_text_inline_char_limit(paste_text_inline_char_limit);
         composer.set_frame_requester(frame_requester.clone());
         let keymap = RuntimeKeymap::defaults();
         composer.set_keymap_bindings(&keymap);
@@ -276,11 +272,11 @@ impl BottomPane {
         Self {
             composer,
             view_stack: Vec::new(),
-            agent_menu: None,
             delayed_approval_requests: VecDeque::new(),
             last_composer_activity_at: None,
             app_event_tx,
             frame_requester,
+            thread_id: None,
             has_input_focus,
             enhanced_keys_supported,
             disable_paste_burst,
@@ -322,6 +318,11 @@ impl BottomPane {
 
     pub fn set_plugins_command_enabled(&mut self, enabled: bool) {
         self.composer.set_plugins_command_enabled(enabled);
+        self.request_redraw();
+    }
+
+    pub fn set_mentions_v2_enabled(&mut self, enabled: bool) {
+        self.composer.set_mentions_v2_enabled(enabled);
         self.request_redraw();
     }
 
@@ -400,8 +401,13 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub fn set_fast_command_enabled(&mut self, enabled: bool) {
-        self.composer.set_fast_command_enabled(enabled);
+    pub fn set_service_tier_commands_enabled(&mut self, enabled: bool) {
+        self.composer.set_service_tier_commands_enabled(enabled);
+        self.request_redraw();
+    }
+
+    pub fn set_service_tier_commands(&mut self, commands: Vec<ServiceTierCommand>) {
+        self.composer.set_service_tier_commands(commands);
         self.request_redraw();
     }
 
@@ -434,20 +440,6 @@ impl BottomPane {
     /// binding that `ChatWidget` actually listens for.
     pub(crate) fn set_queued_message_edit_binding(&mut self, binding: Option<KeyBinding>) {
         self.pending_input_preview.set_edit_binding(binding);
-        self.request_redraw();
-    }
-
-    /// Update the discard hint shown next to queued messages so it matches the
-    /// binding that `ChatWidget` actually listens for.
-    pub(crate) fn set_queued_message_discard_binding(&mut self, binding: Option<KeyBinding>) {
-        self.pending_input_preview.set_discard_binding(binding);
-        self.request_redraw();
-    }
-
-    /// Update the steer hint shown next to queued messages so it matches the
-    /// binding that `ChatWidget` actually listens for.
-    pub(crate) fn set_queued_message_steer_binding(&mut self, binding: Option<KeyBinding>) {
-        self.pending_input_preview.set_steer_binding(binding);
         self.request_redraw();
     }
 
@@ -572,18 +564,6 @@ impl BottomPane {
 
     /// Forward a key event to the active view or the composer.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
-        if let Some(agent_menu) = self.agent_menu.as_mut() {
-            if key_event.kind == KeyEventKind::Release {
-                return InputResult::None;
-            }
-
-            if agent_menu.handle_key_event(key_event) {
-                self.agent_menu = None;
-            }
-            self.request_redraw();
-            return InputResult::None;
-        }
-
         // If a modal/view is active, handle it here; otherwise forward to composer.
         if !self.view_stack.is_empty() {
             if key_event.kind == KeyEventKind::Release {
@@ -688,10 +668,7 @@ impl BottomPane {
     /// was received, but it does not decide whether the process should exit; `ChatWidget` owns the
     /// quit/interrupt state machine and uses the result to decide what happens next.
     pub(crate) fn on_ctrl_c(&mut self) -> CancellationEvent {
-        if self.agent_menu.take().is_some() {
-            self.request_redraw();
-            CancellationEvent::Handled
-        } else if let Some(view) = self.view_stack.last_mut() {
+        if let Some(view) = self.view_stack.last_mut() {
             let event = view.on_ctrl_c();
             let view_complete = view.is_complete();
             let completion = view.completion();
@@ -718,10 +695,6 @@ impl BottomPane {
     }
 
     pub fn handle_paste(&mut self, pasted: String) {
-        if self.agent_menu.is_some() {
-            return;
-        }
-
         let has_pasted_text = !pasted.is_empty();
         if let Some(view) = self.view_stack.last_mut() {
             let needs_redraw = view.handle_paste(pasted);
@@ -738,7 +711,6 @@ impl BottomPane {
             if has_pasted_text {
                 self.record_composer_activity_at(Instant::now());
             }
-            self.composer.sync_popups();
             if needs_redraw {
                 self.request_redraw();
             }
@@ -747,7 +719,6 @@ impl BottomPane {
 
     pub(crate) fn insert_str(&mut self, text: &str) {
         self.composer.insert_str(text);
-        self.composer.sync_popups();
         self.request_redraw();
     }
 
@@ -818,13 +789,23 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub(crate) fn clear_composer_for_ctrl_c(&mut self) {
-        self.composer.clear_for_ctrl_c();
+    pub(crate) fn show_shutdown_in_progress(&mut self) {
+        self.view_stack.clear();
+        self.composer.show_shutdown_in_progress();
         self.request_redraw();
     }
 
-    pub(crate) fn clear_composer(&mut self) {
-        self.composer.clear();
+    pub(crate) fn clear_composer_for_ctrl_c(&mut self) {
+        if let Some(text) = self.composer.clear_for_ctrl_c() {
+            if let Some(thread_id) = self.thread_id {
+                self.app_event_tx
+                    .send(AppEvent::AppendMessageHistoryEntry { thread_id, text });
+            } else {
+                tracing::warn!(
+                    "failed to append Ctrl+C-cleared draft to history: no active thread id"
+                );
+            }
+        }
         self.request_redraw();
     }
 
@@ -833,49 +814,18 @@ impl BottomPane {
         self.composer.current_text()
     }
 
-    pub(crate) fn set_composer_cursor(&mut self, pos: usize) {
-        self.composer.set_cursor(pos);
-        self.request_redraw();
+    pub(crate) fn composer_draft_snapshot(&self) -> chat_composer::ComposerDraftSnapshot {
+        self.composer.draft_snapshot()
     }
 
-    pub(crate) fn composer_cursor(&self) -> usize {
-        self.composer.current_cursor()
-    }
-
-    pub(crate) fn history_previous(&mut self) -> bool {
-        let changed = self.composer.history_previous();
-        if changed {
-            self.request_redraw();
-        }
-        changed
-    }
-
-    pub(crate) fn history_next(&mut self) -> bool {
-        let changed = self.composer.history_next();
-        if changed {
-            self.request_redraw();
-        }
-        changed
-    }
-
-    pub(crate) fn history_edit_previous(&mut self, steps_back: usize) -> bool {
-        let changed = self.composer.history_edit_previous(steps_back);
-        if changed {
-            self.request_redraw();
-        }
-        changed
-    }
-
+    #[cfg(test)]
     pub(crate) fn composer_text_elements(&self) -> Vec<TextElement> {
         self.composer.text_elements()
     }
 
+    #[cfg(test)]
     pub(crate) fn composer_local_images(&self) -> Vec<LocalImageAttachment> {
         self.composer.local_images()
-    }
-
-    pub(crate) fn composer_mention_bindings(&self) -> Vec<MentionBinding> {
-        self.composer.mention_bindings()
     }
 
     #[cfg(test)]
@@ -906,16 +856,6 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub(crate) fn set_previous_message_edit_mode(&mut self, enabled: bool) {
-        self.composer.set_previous_message_edit_mode(enabled);
-        self.request_redraw();
-    }
-
-    #[cfg(test)]
-    pub(crate) fn footer_hint_override_items(&self) -> Option<Vec<(String, String)>> {
-        self.composer.footer_hint_override_items()
-    }
-
     /// Applies the externally decided Plan-mode nudge visibility to the footer presentation.
     pub(crate) fn set_plan_mode_nudge_visible(&mut self, visible: bool) {
         if self.composer.set_plan_mode_nudge_visible(visible) {
@@ -933,6 +873,7 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    #[cfg(test)]
     pub(crate) fn remote_image_urls(&self) -> Vec<String> {
         self.composer.remote_image_urls()
     }
@@ -1014,11 +955,6 @@ impl BottomPane {
     #[cfg(test)]
     pub(crate) fn status_line_text(&self) -> Option<String> {
         self.composer.status_line_text()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn status_line_right_text(&self) -> Option<String> {
-        self.composer.status_line_right_text()
     }
 
     pub(crate) fn show_esc_backtrack_hint(&mut self) {
@@ -1116,20 +1052,6 @@ impl BottomPane {
         self.push_view(Box::new(view));
     }
 
-    /// Show the compact floating agent chooser without replacing the composer.
-    pub(crate) fn show_agent_menu(
-        &mut self,
-        items: Vec<AgentMenuItem>,
-        selected_thread_id: Option<codex_protocol::ThreadId>,
-    ) {
-        self.agent_menu = Some(agent_menu::AgentMenu::new(
-            items,
-            selected_thread_id,
-            self.app_event_tx.clone(),
-        ));
-        self.request_redraw();
-    }
-
     fn apply_standard_popup_hint(&self, params: &mut list_selection_view::SelectionViewParams) {
         if params.footer_hint.is_none()
             || params.footer_hint.as_ref() == Some(&popup_consts::standard_popup_hint_line())
@@ -1165,6 +1087,10 @@ impl BottomPane {
 
     pub(crate) fn standard_popup_hint_line(&self) -> Line<'static> {
         popup_consts::standard_popup_hint_line_for_keymap(&self.keymap.list)
+    }
+
+    pub(crate) fn list_keymap(&self) -> crate::keymap::ListKeymap {
+        self.keymap.list.clone()
     }
 
     /// Replace one or more active views whose IDs are in `view_ids` with a
@@ -1213,6 +1139,20 @@ impl BottomPane {
             .last()
             .filter(|view| view.view_id() == Some(view_id))
             .and_then(|view| view.active_tab_id())
+    }
+
+    pub(crate) fn dismiss_active_view_if_id(&mut self, view_id: &'static str) -> bool {
+        let is_match = self
+            .view_stack
+            .last()
+            .is_some_and(|view| view.view_id() == Some(view_id));
+        if !is_match {
+            return false;
+        }
+
+        self.view_stack.pop();
+        self.request_redraw();
+        true
     }
 
     /// Update the pending-input preview shown above the composer.
@@ -1296,15 +1236,12 @@ impl BottomPane {
     /// overlays or popups and not running a task. This is the safe context to
     /// use Esc-Esc for backtracking from the main view.
     pub(crate) fn is_normal_backtrack_mode(&self) -> bool {
-        !self.is_task_running
-            && self.agent_menu.is_none()
-            && self.view_stack.is_empty()
-            && !self.composer.popup_active()
+        !self.is_task_running && self.view_stack.is_empty() && !self.composer.popup_active()
     }
 
     /// Return true when no popups or modal views are active, regardless of task state.
     pub(crate) fn can_launch_external_editor(&self) -> bool {
-        self.agent_menu.is_none() && self.view_stack.is_empty() && !self.composer.popup_active()
+        self.view_stack.is_empty() && !self.composer.popup_active()
     }
 
     /// Returns true when the bottom pane has no active modal view and no active composer popup.
@@ -1372,12 +1309,13 @@ impl BottomPane {
             request
         };
 
-        let modal = RequestUserInputOverlay::new(
+        let modal = RequestUserInputOverlay::new_with_keymap(
             request,
             self.app_event_tx.clone(),
             self.has_input_focus,
             self.enhanced_keys_supported,
             self.disable_paste_burst,
+            self.keymap.clone(),
         );
         self.pause_status_timer_for_modal();
         self.set_composer_input_enabled(
@@ -1416,7 +1354,7 @@ impl BottomPane {
                 tool_suggestion.suggest_type,
                 mcp_server_elicitation::ToolSuggestionType::Enable
             );
-            let view = AppLinkView::new(
+            let view = AppLinkView::new_with_keymap(
                 AppLinkViewParams {
                     app_id: tool_suggestion.tool_id.clone(),
                     title: tool_suggestion.tool_name.clone(),
@@ -1428,6 +1366,12 @@ impl BottomPane {
                         AppLinkSuggestionType::Enable => {
                             "Enable this app to use it for the current request.".to_string()
                         }
+                        AppLinkSuggestionType::Auth => unreachable!(
+                            "auth uses URL mode elicitation, not tool suggestion forms"
+                        ),
+                        AppLinkSuggestionType::ExternalAction => unreachable!(
+                            "external actions use URL mode elicitation, not tool suggestion forms"
+                        ),
                     },
                     url: install_url,
                     is_installed,
@@ -1441,6 +1385,7 @@ impl BottomPane {
                     }),
                 },
                 self.app_event_tx.clone(),
+                self.keymap.list.clone(),
             );
             self.pause_status_timer_for_modal();
             self.set_composer_input_enabled(
@@ -1451,12 +1396,13 @@ impl BottomPane {
             return;
         }
 
-        let modal = McpServerElicitationOverlay::new(
+        let modal = McpServerElicitationOverlay::new_with_keymap(
             request,
             self.app_event_tx.clone(),
             self.has_input_focus,
             self.enhanced_keys_supported,
             self.disable_paste_burst,
+            self.keymap.list.clone(),
         );
         self.pause_status_timer_for_modal();
         self.set_composer_input_enabled(
@@ -1533,8 +1479,15 @@ impl BottomPane {
 
     // --- History helpers ---
 
-    pub(crate) fn set_history_metadata(&mut self, log_id: u64, entry_count: usize) {
-        self.composer.set_history_metadata(log_id, entry_count);
+    pub(crate) fn set_history_metadata(
+        &mut self,
+        thread_id: ThreadId,
+        log_id: u64,
+        entry_count: usize,
+    ) {
+        self.thread_id = Some(thread_id);
+        self.composer
+            .set_history_metadata(thread_id, log_id, entry_count);
     }
 
     pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
@@ -1579,7 +1532,7 @@ impl BottomPane {
     }
 
     pub(crate) fn attach_image(&mut self, path: PathBuf) {
-        if self.agent_menu.is_none() && self.view_stack.is_empty() {
+        if self.view_stack.is_empty() {
             self.composer.attach_image(path);
             self.request_redraw();
         }
@@ -1605,6 +1558,13 @@ impl BottomPane {
     }
 
     fn as_renderable(&'_ self) -> RenderableItem<'_> {
+        self.as_renderable_with_composer_right_reserve(/*composer_right_reserve*/ 0)
+    }
+
+    fn as_renderable_with_composer_right_reserve(
+        &'_ self,
+        composer_right_reserve: u16,
+    ) -> RenderableItem<'_> {
         if let Some(view) = self.active_view() {
             RenderableItem::Borrowed(view)
         } else {
@@ -1646,19 +1606,58 @@ impl BottomPane {
             }
             let mut flex2 = FlexRenderable::new();
             flex2.push(/*flex*/ 1, RenderableItem::Owned(flex.into()));
-            flex2.push(/*flex*/ 0, RenderableItem::Borrowed(&self.composer));
+            let composer: RenderableItem<'_> = if composer_right_reserve == 0 {
+                RenderableItem::Borrowed(&self.composer)
+            } else {
+                RenderableItem::Owned(Box::new(ChatComposerRightReserveRenderable {
+                    composer: &self.composer,
+                    right_reserve: composer_right_reserve,
+                }))
+            };
+            flex2.push(/*flex*/ 0, composer);
             RenderableItem::Owned(Box::new(flex2))
         }
     }
 
-    pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) {
-        if self.composer.set_status_line(status_line) {
-            self.request_redraw();
-        }
+    pub(crate) fn render_with_composer_right_reserve(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        composer_right_reserve: u16,
+    ) {
+        self.as_renderable_with_composer_right_reserve(composer_right_reserve)
+            .render(area, buf);
     }
 
-    pub(crate) fn set_status_line_right(&mut self, status_line: Option<Line<'static>>) {
-        if self.composer.set_status_line_right(status_line) {
+    pub(crate) fn desired_height_with_composer_right_reserve(
+        &self,
+        width: u16,
+        composer_right_reserve: u16,
+    ) -> u16 {
+        self.as_renderable_with_composer_right_reserve(composer_right_reserve)
+            .desired_height(width)
+    }
+
+    pub(crate) fn cursor_pos_with_composer_right_reserve(
+        &self,
+        area: Rect,
+        composer_right_reserve: u16,
+    ) -> Option<(u16, u16)> {
+        self.as_renderable_with_composer_right_reserve(composer_right_reserve)
+            .cursor_pos(area)
+    }
+
+    pub(crate) fn cursor_style_with_composer_right_reserve(
+        &self,
+        area: Rect,
+        composer_right_reserve: u16,
+    ) -> crossterm::cursor::SetCursorStyle {
+        self.as_renderable_with_composer_right_reserve(composer_right_reserve)
+            .cursor_style(area)
+    }
+
+    pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) {
+        if self.composer.set_status_line(status_line) {
             self.request_redraw();
         }
     }
@@ -1685,20 +1684,40 @@ impl BottomPane {
         }
     }
 
-    pub(crate) fn show_agent_navigation_strip(&mut self, line: Line<'static>, duration: Duration) {
-        self.composer.show_agent_navigation_strip(line, duration);
-        self.request_redraw();
-    }
-
-    #[cfg(test)]
-    pub(crate) fn active_agent_label(&self) -> Option<&str> {
-        self.composer.active_agent_label()
-    }
-
     pub(crate) fn set_side_conversation_context_label(&mut self, label: Option<String>) {
         if self.composer.set_side_conversation_context_label(label) {
             self.request_redraw();
         }
+    }
+}
+
+struct ChatComposerRightReserveRenderable<'a> {
+    composer: &'a chat_composer::ChatComposer,
+    right_reserve: u16,
+}
+
+impl Renderable for ChatComposerRightReserveRenderable<'_> {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        self.composer.render_with_mask_and_textarea_right_reserve(
+            area,
+            buf,
+            /*mask_char*/ None,
+            self.right_reserve,
+        );
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        self.composer
+            .desired_height_with_textarea_right_reserve(width, self.right_reserve)
+    }
+
+    fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        self.composer
+            .cursor_pos_with_textarea_right_reserve(area, self.right_reserve)
+    }
+
+    fn cursor_style(&self, area: Rect) -> crossterm::cursor::SetCursorStyle {
+        self.composer.cursor_style(area)
     }
 }
 
@@ -1735,33 +1754,11 @@ impl Renderable for BottomPane {
         self.as_renderable().desired_height(width)
     }
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        if self.agent_menu.is_some() {
-            None
-        } else {
-            self.as_renderable().cursor_pos(area)
-        }
+        self.as_renderable().cursor_pos(area)
     }
 
     fn cursor_style(&self, area: Rect) -> crossterm::cursor::SetCursorStyle {
         self.as_renderable().cursor_style(area)
-    }
-}
-
-impl BottomPane {
-    /// Render the agent chooser over the already-laid-out chat surface.
-    ///
-    /// This intentionally lives outside [`Renderable::render`] so opening the chooser does not
-    /// change bottom-pane layout or inherit the composer's much shorter render area.
-    pub(crate) fn render_agent_menu_overlay(&self, area: Rect, buf: &mut Buffer) {
-        if let Some(agent_menu) = &self.agent_menu {
-            agent_menu.render(area, buf);
-        }
-    }
-
-    pub(crate) fn agent_menu_overlay_height(&self) -> Option<u16> {
-        self.agent_menu
-            .as_ref()
-            .map(agent_menu::AgentMenu::preferred_overlay_height)
     }
 }
 
@@ -1796,7 +1793,7 @@ mod tests {
             for x in 0..buf.area().width {
                 row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
             }
-            lines.push(row.trim_end().to_string());
+            lines.push(row);
         }
         lines.join("\n")
     }
@@ -1804,7 +1801,6 @@ mod tests {
     fn render_snapshot(pane: &BottomPane, area: Rect) -> String {
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
-        pane.render_agent_menu_overlay(area, &mut buf);
         snapshot_buffer(&buf)
     }
 
@@ -1823,8 +1819,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst,
-            paste_text_inline_char_limit:
-                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         })
@@ -1925,8 +1919,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: true,
-            paste_text_inline_char_limit:
-                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -1947,17 +1939,12 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: true,
-            paste_text_inline_char_limit:
-                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
         pane.insert_str("draft");
 
-        pane.handle_key_event(KeyEvent::new(
-            KeyCode::Char('r'),
-            KeyModifiers::ALT | KeyModifiers::SHIFT,
-        ));
+        pane.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
         assert!(pane.composer.popup_active());
 
         assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());
@@ -1980,8 +1967,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            paste_text_inline_char_limit:
-                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2232,8 +2217,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            paste_text_inline_char_limit:
-                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2301,8 +2284,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            paste_text_inline_char_limit:
-                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2330,8 +2311,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            paste_text_inline_char_limit:
-                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2363,8 +2342,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            paste_text_inline_char_limit:
-                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2388,8 +2365,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            paste_text_inline_char_limit:
-                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2419,8 +2394,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            paste_text_inline_char_limit:
-                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2458,8 +2431,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            paste_text_inline_char_limit:
-                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2492,8 +2463,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            paste_text_inline_char_limit:
-                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2525,8 +2494,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            paste_text_inline_char_limit:
-                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2556,8 +2523,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            paste_text_inline_char_limit:
-                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2581,8 +2546,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            paste_text_inline_char_limit:
-                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(vec![SkillMetadata {
                 name: "test-skill".to_string(),
@@ -2631,8 +2594,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            paste_text_inline_char_limit:
-                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2668,8 +2629,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            paste_text_inline_char_limit:
-                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2696,175 +2655,6 @@ mod tests {
     }
 
     #[test]
-    fn floating_agent_menu_selects_thread_without_clobbering_draft() {
-        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut pane = test_pane(tx);
-        let main_thread_id = codex_protocol::ThreadId::new();
-        let helper_thread_id = codex_protocol::ThreadId::new();
-
-        pane.insert_str("keep this draft");
-        pane.show_agent_menu(
-            vec![
-                AgentMenuItem {
-                    thread_id: main_thread_id,
-                    label: "Main".to_string(),
-                    is_closed: false,
-                },
-                AgentMenuItem {
-                    thread_id: helper_thread_id,
-                    label: "Hegel [worker]".to_string(),
-                    is_closed: false,
-                },
-            ],
-            Some(main_thread_id),
-        );
-
-        pane.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        pane.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-        assert_eq!(pane.composer_text(), "keep this draft");
-        assert!(pane.no_modal_or_popup_active());
-        assert!(matches!(
-            rx.try_recv(),
-            Ok(AppEvent::SelectAgentThread(thread_id)) if thread_id == helper_thread_id
-        ));
-    }
-
-    #[test]
-    fn floating_agent_menu_hides_the_composer_cursor() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut pane = test_pane(tx);
-        let area = Rect::new(0, 0, 56, 8);
-        let thread_id = codex_protocol::ThreadId::new();
-
-        assert!(pane.cursor_pos(area).is_some());
-
-        pane.show_agent_menu(
-            vec![AgentMenuItem {
-                thread_id,
-                label: "Main".to_string(),
-                is_closed: false,
-            }],
-            Some(thread_id),
-        );
-
-        assert_eq!(pane.cursor_pos(area), None);
-    }
-
-    #[test]
-    fn floating_agent_menu_does_not_change_bottom_pane_height() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut pane = test_pane(tx);
-        let width = 80;
-        let height_before_menu = pane.desired_height(width);
-        let thread_id = codex_protocol::ThreadId::new();
-
-        pane.show_agent_menu(
-            vec![
-                AgentMenuItem {
-                    thread_id,
-                    label: "Main".to_string(),
-                    is_closed: false,
-                },
-                AgentMenuItem {
-                    thread_id: codex_protocol::ThreadId::new(),
-                    label: "Hegel [worker]".to_string(),
-                    is_closed: false,
-                },
-                AgentMenuItem {
-                    thread_id: codex_protocol::ThreadId::new(),
-                    label: "Zeno [explorer]".to_string(),
-                    is_closed: false,
-                },
-            ],
-            Some(thread_id),
-        );
-
-        assert_eq!(pane.desired_height(width), height_before_menu);
-    }
-
-    #[test]
-    fn floating_agent_menu_stays_within_a_short_shifted_overlay_area() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut pane = test_pane(tx);
-        let main_thread_id = codex_protocol::ThreadId::new();
-
-        pane.show_agent_menu(
-            vec![
-                AgentMenuItem {
-                    thread_id: main_thread_id,
-                    label: "Main".to_string(),
-                    is_closed: false,
-                },
-                AgentMenuItem {
-                    thread_id: codex_protocol::ThreadId::new(),
-                    label: "Hegel [worker]".to_string(),
-                    is_closed: false,
-                },
-                AgentMenuItem {
-                    thread_id: codex_protocol::ThreadId::new(),
-                    label: "Zeno [explorer]".to_string(),
-                    is_closed: false,
-                },
-                AgentMenuItem {
-                    thread_id: codex_protocol::ThreadId::new(),
-                    label: "Plato [reviewer]".to_string(),
-                    is_closed: false,
-                },
-            ],
-            Some(main_thread_id),
-        );
-
-        let area = Rect::new(0, 51, 173, 5);
-        let mut buf = Buffer::empty(area);
-        pane.render_agent_menu_overlay(area, &mut buf);
-    }
-
-    #[test]
-    fn floating_agent_menu_snapshot() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut pane = test_pane(tx);
-        let main_thread_id = codex_protocol::ThreadId::new();
-
-        pane.insert_str("keep this draft visible");
-        pane.show_agent_menu(
-            vec![
-                AgentMenuItem {
-                    thread_id: main_thread_id,
-                    label: "Main".to_string(),
-                    is_closed: false,
-                },
-                AgentMenuItem {
-                    thread_id: codex_protocol::ThreadId::new(),
-                    label: "Hegel [worker]".to_string(),
-                    is_closed: false,
-                },
-                AgentMenuItem {
-                    thread_id: codex_protocol::ThreadId::new(),
-                    label: "Zeno [explorer]".to_string(),
-                    is_closed: true,
-                },
-                AgentMenuItem {
-                    thread_id: codex_protocol::ThreadId::new(),
-                    label: "Plato [reviewer]".to_string(),
-                    is_closed: false,
-                },
-            ],
-            Some(main_thread_id),
-        );
-
-        assert_snapshot!(
-            "floating_agent_menu_snapshot",
-            render_snapshot(&pane, Rect::new(0, 0, 56, 12))
-        );
-    }
-
-    #[test]
     fn esc_release_after_dismissing_agent_picker_does_not_interrupt_task() {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -2875,8 +2665,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            paste_text_inline_char_limit:
-                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -2925,8 +2713,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            paste_text_inline_char_limit:
-                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -3014,8 +2800,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            paste_text_inline_char_limit:
-                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -3064,8 +2848,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            paste_text_inline_char_limit:
-                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });
@@ -3144,8 +2926,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            paste_text_inline_char_limit:
-                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: true,
             skills: Some(Vec::new()),
         });

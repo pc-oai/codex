@@ -5,6 +5,9 @@
 
 use super::*;
 
+const SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE: &str =
+    "Editing previous prompts is unavailable in side conversations.";
+
 impl App {
     pub(super) async fn launch_external_editor(&mut self, tui: &mut tui::Tui) {
         let editor_cmd = match external_editor::resolve_editor_command() {
@@ -69,27 +72,49 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
+    pub(super) fn apply_raw_output_mode(
+        &mut self,
+        tui: &mut tui::Tui,
+        enabled: bool,
+        notify: bool,
+    ) {
+        if notify {
+            self.chat_widget.set_raw_output_mode_and_notify(enabled);
+        } else {
+            self.chat_widget.set_raw_output_mode(enabled);
+        }
+        if let Err(err) = self.reflow_transcript_now(tui) {
+            tracing::warn!(error = %err, "failed to reflow transcript after raw output mode toggle");
+            self.chat_widget
+                .add_error_message(format!("Failed to redraw transcript: {err}"));
+        }
+        tui.frame_requester().schedule_frame();
+    }
+
     pub(super) async fn handle_key_event(
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         key_event: KeyEvent,
     ) {
-        // Thread switching snapshots the active composer with the current thread before replaying
-        // the target one, so these shortcuts can stay live while drafts remain attached to the
-        // agent they were written for.
+        // Some terminals, especially on macOS, encode Option+Left/Right as Option+b/f unless
+        // enhanced keyboard reporting is available. We only treat those word-motion fallbacks as
+        // agent-switch shortcuts when the composer is empty so we never steal the expected
+        // editing behavior for moving across words inside a draft.
+        let allow_agent_word_motion_fallback = !self.enhanced_keys_supported
+            && self.chat_widget.composer_text_with_pending().is_empty();
         if self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
+            // Alt+Left/Right are also natural word-motion keys in the composer. Keep agent
+            // fast-switch available only once the draft is empty so editing behavior wins whenever
+            // there is text on screen.
+            && self.chat_widget.composer_text_with_pending().is_empty()
             && previous_agent_shortcut_matches(key_event)
         {
             if let Some(thread_id) = self
-                .adjacent_thread_id_for_switch_shortcut(
-                    app_server,
-                    AgentNavigationDirection::Previous,
-                )
+                .adjacent_thread_id_with_backfill(app_server, AgentNavigationDirection::Previous)
                 .await
             {
-                self.show_agent_switch_feedback(tui, thread_id);
                 let _ = self
                     .select_agent_thread_and_discard_side(tui, app_server, thread_id)
                     .await;
@@ -98,13 +123,15 @@ impl App {
         }
         if self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
-            && (next_agent_shortcut_matches(key_event) || rotate_agent_shortcut_matches(key_event))
+            // Mirror the previous-agent rule above: empty drafts may use these keys for thread
+            // switching, but non-empty drafts keep them for expected word-wise cursor motion.
+            && self.chat_widget.composer_text_with_pending().is_empty()
+            && next_agent_shortcut_matches(key_event)
         {
             if let Some(thread_id) = self
-                .adjacent_thread_id_for_switch_shortcut(app_server, AgentNavigationDirection::Next)
+                .adjacent_thread_id_with_backfill(app_server, AgentNavigationDirection::Next)
                 .await
             {
-                self.show_agent_switch_feedback(tui, thread_id);
                 let _ = self
                     .select_agent_thread_and_discard_side(tui, app_server, thread_id)
                     .await;
@@ -132,33 +159,10 @@ impl App {
             return;
         }
 
-        if self.should_step_edit_last_message_preview_older(key_event) {
-            self.step_backtrack_edit_preview_older();
-            tui.frame_requester().schedule_frame();
-            return;
-        }
-
-        if self.should_interrupt_turn_for_edit_last_message_shortcut(key_event) {
-            self.interrupt_turn_then_edit_last_message();
-            tui.frame_requester().schedule_frame();
-            return;
-        }
-
-        if self.should_handle_edit_last_message_shortcut(key_event) {
-            self.edit_last_message_from_command();
-            tui.frame_requester().schedule_frame();
-            return;
-        }
-
-        if self.should_cancel_edit_last_message_preview(key_event) {
-            self.cancel_backtrack_edit_preview();
-            tui.frame_requester().schedule_frame();
-            return;
-        }
-
-        if self.should_commit_edit_last_message_preview(key_event) {
-            self.commit_backtrack_edit_preview();
-            tui.frame_requester().schedule_frame();
+        if app_keymap_shortcuts_available && self.keymap.app.toggle_raw_output.is_pressed(key_event)
+        {
+            let enabled = !self.chat_widget.raw_output_mode();
+            self.apply_raw_output_mode(tui, enabled, /*notify*/ false);
             return;
         }
 
@@ -170,32 +174,6 @@ impl App {
                 self.keymap.pager.clone(),
             ));
             tui.frame_requester().schedule_frame();
-            return;
-        }
-
-        if app_keymap_shortcuts_available
-            && self.keymap.app.reload_current_session.is_pressed(key_event)
-        {
-            if self.chat_widget.thread_id().is_some() {
-                self.app_event_tx.send(AppEvent::ReloadCurrentSession);
-            } else {
-                self.chat_widget.add_error_message(
-                    "Reload is unavailable before the session starts.".to_string(),
-                );
-                tui.frame_requester().schedule_frame();
-            }
-            return;
-        }
-
-        if app_keymap_shortcuts_available
-            && self
-                .keymap
-                .app
-                .toggle_condensed_transcript
-                .is_pressed(key_event)
-        {
-            self.app_event_tx
-                .send(AppEvent::ToggleCondensedTranscriptView);
             return;
         }
 
@@ -222,6 +200,8 @@ impl App {
             // handles it.
             if self.should_handle_backtrack_esc(key_event) {
                 self.handle_backtrack_esc_key(tui);
+            } else if self.should_reject_side_backtrack_esc(key_event) {
+                self.reject_side_backtrack_esc();
             } else {
                 self.chat_widget.handle_key_event(key_event);
             }
@@ -276,133 +256,24 @@ impl App {
         };
     }
 
-    fn show_agent_switch_feedback(&mut self, tui: &mut tui::Tui, target_thread_id: ThreadId) {
-        if let Some(strip) = self.agent_navigation.agent_neighbor_strip(
-            Some(target_thread_id),
-            self.primary_thread_id,
-            Some(target_thread_id),
-        ) {
-            self.chat_widget
-                .show_agent_navigation_strip(strip, Duration::from_millis(900));
-        }
-        self.draw_agent_switch_feedback_frame(tui);
-    }
-
-    fn draw_agent_switch_feedback_frame(&mut self, tui: &mut tui::Tui) {
-        let Ok(width) = tui.terminal.size().map(|size| size.width) else {
-            return;
-        };
-        self.chat_widget.pre_draw_tick();
-        let desired_height = self.chat_widget.desired_height(width);
-        let preserve_inline_bottom = self.chat_widget.agent_menu_overlay_active();
-        let draw_result = if self.terminal_resize_reflow_enabled() && preserve_inline_bottom {
-            tui.draw_with_resize_reflow_preserving_inline_bottom(desired_height, |frame| {
-                let area = frame.area();
-                self.chat_widget.render(area, frame.buffer);
-                if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
-                    frame.set_cursor_style(self.chat_widget.cursor_style(area));
-                    frame.set_cursor_position((x, y));
-                }
-            })
-        } else if self.terminal_resize_reflow_enabled() {
-            tui.draw_with_resize_reflow(desired_height, |frame| {
-                let area = frame.area();
-                self.chat_widget.render(area, frame.buffer);
-                if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
-                    frame.set_cursor_style(self.chat_widget.cursor_style(area));
-                    frame.set_cursor_position((x, y));
-                }
-            })
-        } else if preserve_inline_bottom {
-            tui.draw_preserving_inline_bottom(desired_height, |frame| {
-                let area = frame.area();
-                self.chat_widget.render(area, frame.buffer);
-                if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
-                    frame.set_cursor_style(self.chat_widget.cursor_style(area));
-                    frame.set_cursor_position((x, y));
-                }
-            })
-        } else {
-            tui.draw(desired_height, |frame| {
-                let area = frame.area();
-                self.chat_widget.render(area, frame.buffer);
-                if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
-                    frame.set_cursor_style(self.chat_widget.cursor_style(area));
-                    frame.set_cursor_position((x, y));
-                }
-            })
-        };
-        if let Err(err) = draw_result {
-            tracing::debug!(error = %err, "failed to draw agent switch feedback frame");
-        }
-    }
-
     pub(super) fn should_handle_backtrack_esc(&self, key_event: KeyEvent) -> bool {
-        self.chat_widget.is_normal_backtrack_mode()
+        !self.chat_widget.side_conversation_active()
+            && self.chat_widget.is_normal_backtrack_mode()
             && self.chat_widget.composer_is_empty()
             && !self.chat_widget.should_handle_vim_insert_escape(key_event)
     }
 
-    /// Reuse the queued-message edit shortcut for the idle main view.
-    ///
-    /// When a task is running, ChatWidget still owns this binding so it can pull a queued follow-up
-    /// back into the composer. Once idle, the same gesture jumps straight to editing the last sent
-    /// message instead of forcing the older Esc-Esc-Enter sequence. That edit intentionally
-    /// replaces any visible draft already in the composer. Ctrl-E keeps its editor meaning unless
-    /// line-end movement would be a no-op for the current composer state.
-    pub(super) fn should_handle_edit_last_message_shortcut(&self, key_event: KeyEvent) -> bool {
-        key_event.kind == KeyEventKind::Press
-            && self.app_keymap_shortcuts_available()
-            && self.keymap.chat.edit_queued_message.is_pressed(key_event)
-            && self
-                .chat_widget
-                .edit_message_shortcut_may_claim_key_event(key_event)
+    pub(super) fn should_reject_side_backtrack_esc(&self, key_event: KeyEvent) -> bool {
+        self.chat_widget.side_conversation_active()
             && self.chat_widget.is_normal_backtrack_mode()
-    }
-
-    /// During a live turn, Ctrl-E should stop the turn so the sent request can be edited next.
-    ///
-    /// Queued follow-ups keep their existing priority: when one exists, ChatWidget still owns
-    /// Ctrl-E so it can pull that queued draft back into the composer instead. Otherwise, the
-    /// eventual edit preview replaces any visible composer draft.
-    pub(super) fn should_interrupt_turn_for_edit_last_message_shortcut(
-        &self,
-        key_event: KeyEvent,
-    ) -> bool {
-        key_event.kind == KeyEventKind::Press
-            && self.app_keymap_shortcuts_available()
-            && self.keymap.chat.edit_queued_message.is_pressed(key_event)
-            && self
-                .chat_widget
-                .edit_message_shortcut_may_claim_key_event(key_event)
-            && self.chat_widget.is_task_running()
-            && !self.chat_widget.has_queued_follow_up_messages()
-    }
-
-    fn should_step_edit_last_message_preview_older(&self, key_event: KeyEvent) -> bool {
-        key_event.kind == KeyEventKind::Press
-            && self.app_keymap_shortcuts_available()
-            && self.keymap.chat.edit_queued_message.is_pressed(key_event)
-            && self
-                .chat_widget
-                .edit_message_shortcut_may_claim_key_event(key_event)
-            && self.backtrack_edit_preview_active()
-            && self.chat_widget.is_normal_backtrack_mode()
-    }
-
-    fn should_cancel_edit_last_message_preview(&self, key_event: KeyEvent) -> bool {
-        matches!(key_event.code, KeyCode::Esc)
-            && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
-            && self.backtrack_edit_preview_active()
-            && self.chat_widget.no_modal_or_popup_active()
+            && self.chat_widget.composer_is_empty()
             && !self.chat_widget.should_handle_vim_insert_escape(key_event)
     }
 
-    fn should_commit_edit_last_message_preview(&self, key_event: KeyEvent) -> bool {
-        matches!(key_event.code, KeyCode::Enter)
-            && key_event.kind == KeyEventKind::Press
-            && self.backtrack_edit_preview_active()
-            && self.chat_widget.no_modal_or_popup_active()
+    pub(super) fn reject_side_backtrack_esc(&mut self) {
+        self.reset_backtrack_state();
+        self.chat_widget
+            .add_error_message(SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE.to_string());
     }
 
     fn app_keymap_shortcuts_available(&self) -> bool {
@@ -417,9 +288,6 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::super::test_support::make_test_app;
-    use crossterm::event::KeyCode;
-    use crossterm::event::KeyEvent;
-    use crossterm::event::KeyModifiers;
 
     #[tokio::test]
     async fn app_keymap_shortcuts_are_disabled_while_keymap_view_is_active() {
@@ -430,74 +298,5 @@ mod tests {
         app.chat_widget.open_keymap_debug(&keymap);
 
         assert!(!app.app_keymap_shortcuts_available());
-    }
-
-    #[tokio::test]
-    async fn edit_queued_shortcut_becomes_edit_last_message_when_idle() {
-        let app = make_test_app().await;
-        let alt_up = KeyEvent::new(KeyCode::Up, KeyModifiers::ALT);
-        let ctrl_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
-
-        assert!(app.should_handle_edit_last_message_shortcut(alt_up));
-        assert!(app.should_handle_edit_last_message_shortcut(ctrl_e));
-    }
-
-    #[tokio::test]
-    async fn edit_last_message_shortcut_replaces_nonempty_idle_composer() {
-        let mut app = make_test_app().await;
-        let alt_up = KeyEvent::new(KeyCode::Up, KeyModifiers::ALT);
-
-        app.chat_widget
-            .set_composer_text("draft".to_string(), Vec::new(), Vec::new());
-        assert!(app.should_handle_edit_last_message_shortcut(alt_up));
-    }
-
-    #[tokio::test]
-    async fn ctrl_e_edits_last_message_when_idle_cursor_is_at_input_end() {
-        let mut app = make_test_app().await;
-        let ctrl_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
-
-        app.chat_widget
-            .set_composer_text("draft".to_string(), Vec::new(), Vec::new());
-        app.chat_widget.set_composer_cursor("draft".len());
-
-        assert!(app.should_handle_edit_last_message_shortcut(ctrl_e));
-    }
-
-    #[tokio::test]
-    async fn ctrl_e_keeps_line_end_motion_when_idle_cursor_is_inside_draft() {
-        let mut app = make_test_app().await;
-        let ctrl_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
-
-        app.chat_widget
-            .set_composer_text("draft".to_string(), Vec::new(), Vec::new());
-        app.chat_widget.set_composer_cursor(/*pos*/ 1);
-
-        assert!(!app.should_handle_edit_last_message_shortcut(ctrl_e));
-    }
-
-    #[tokio::test]
-    async fn edit_last_message_shortcut_interrupts_running_turn_without_queued_follow_up() {
-        let mut app = make_test_app().await;
-        let ctrl_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
-
-        app.chat_widget.set_task_running_for_test(/*running*/ true);
-        app.chat_widget
-            .set_composer_text("draft".to_string(), Vec::new(), Vec::new());
-
-        assert!(app.should_interrupt_turn_for_edit_last_message_shortcut(ctrl_e));
-    }
-
-    #[tokio::test]
-    async fn ctrl_e_keeps_line_end_motion_during_running_turn_when_cursor_is_inside_draft() {
-        let mut app = make_test_app().await;
-        let ctrl_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
-
-        app.chat_widget.set_task_running_for_test(/*running*/ true);
-        app.chat_widget
-            .set_composer_text("draft".to_string(), Vec::new(), Vec::new());
-        app.chat_widget.set_composer_cursor(/*pos*/ 1);
-
-        assert!(!app.should_interrupt_turn_for_edit_last_message_shortcut(ctrl_e));
     }
 }

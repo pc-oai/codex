@@ -40,26 +40,47 @@ impl App {
             return;
         }
 
-        let items: Vec<crate::bottom_pane::AgentMenuItem> = self
+        let mut initial_selected_idx = None;
+        let items: Vec<SelectionItem> = self
             .agent_navigation
             .ordered_threads()
             .iter()
-            .map(|(thread_id, entry)| {
+            .enumerate()
+            .map(|(idx, (thread_id, entry))| {
+                if self.active_thread_id == Some(*thread_id) {
+                    initial_selected_idx = Some(idx);
+                }
+                let id = *thread_id;
                 let is_primary = self.primary_thread_id == Some(*thread_id);
-                crate::bottom_pane::AgentMenuItem {
-                    thread_id: *thread_id,
-                    label: format_agent_picker_item_name(
-                        entry.agent_nickname.as_deref(),
-                        entry.agent_role.as_deref(),
-                        is_primary,
-                    ),
-                    is_closed: entry.is_closed,
+                let name = format_agent_picker_item_name(
+                    entry.agent_nickname.as_deref(),
+                    entry.agent_role.as_deref(),
+                    is_primary,
+                );
+                let uuid = thread_id.to_string();
+                SelectionItem {
+                    name: name.clone(),
+                    name_prefix_spans: agent_picker_status_dot_spans(entry.is_closed),
+                    description: Some(uuid.clone()),
+                    is_current: self.active_thread_id == Some(*thread_id),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::SelectAgentThread(id));
+                    })],
+                    dismiss_on_select: true,
+                    search_value: Some(format!("{name} {uuid}")),
+                    ..Default::default()
                 }
             })
             .collect();
 
-        self.chat_widget
-            .show_agent_menu(items, self.active_thread_id);
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            title: Some("Subagents".to_string()),
+            subtitle: Some(AgentNavigationState::picker_subtitle()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            initial_selected_idx,
+            ..Default::default()
+        });
     }
 
     pub(super) fn is_terminal_thread_read_error(err: &color_eyre::Report) -> bool {
@@ -86,7 +107,7 @@ impl App {
     ///
     /// These two writes stay paired so the picker rows and contextual footer continue to describe
     /// the same displayed thread after nickname or role updates.
-    pub(super) async fn upsert_agent_picker_thread(
+    pub(super) fn upsert_agent_picker_thread(
         &mut self,
         thread_id: ThreadId,
         agent_nickname: Option<String>,
@@ -100,16 +121,16 @@ impl App {
         );
         self.agent_navigation
             .upsert(thread_id, agent_nickname, agent_role, is_closed);
-        self.refresh_agent_activity_label().await;
+        self.sync_active_agent_label();
     }
 
     /// Marks a cached picker thread closed and recomputes the contextual footer label.
     ///
     /// Closing a thread is not the same as removing it: users can still inspect finished agent
     /// transcripts, and the stable next/previous traversal order should not collapse around them.
-    pub(super) async fn mark_agent_picker_thread_closed(&mut self, thread_id: ThreadId) {
+    pub(super) fn mark_agent_picker_thread_closed(&mut self, thread_id: ThreadId) {
         self.agent_navigation.mark_closed(thread_id);
-        self.refresh_agent_activity_label().await;
+        self.sync_active_agent_label();
     }
 
     pub(super) async fn refresh_agent_picker_thread_liveness(
@@ -140,8 +161,7 @@ impl App {
                         thread.status,
                         codex_app_server_protocol::ThreadStatus::NotLoaded
                     ),
-                )
-                .await;
+                );
                 true
             }
             Err(err) => {
@@ -159,14 +179,12 @@ impl App {
                         entry.agent_nickname,
                         entry.agent_role,
                         is_closed,
-                    )
-                    .await;
+                    );
                 } else {
                     self.upsert_agent_picker_thread(
                         thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
                         is_closed,
-                    )
-                    .await;
+                    );
                 }
                 true
             }
@@ -241,7 +259,7 @@ impl App {
     /// Thread switches reconstruct the `ChatWidget`, which loses the `collab_agent_metadata` map.
     /// This helper copies every known nickname/role from `AgentNavigationState` into the
     /// replacement widget so that replayed collab items render agent names immediately.
-    pub(super) async fn replace_chat_widget(&mut self, mut chat_widget: ChatWidget) {
+    pub(super) fn replace_chat_widget(&mut self, mut chat_widget: ChatWidget) {
         // Transfer the last-written terminal title to the replacement widget
         // so it knows what OSC title is currently displayed. Without this, the
         // new widget would redundantly clear and rewrite the same title, causing
@@ -257,9 +275,8 @@ impl App {
                 entry.agent_role.clone(),
             );
         }
-        chat_widget.set_condensed_transcript_view(self.condensed_transcript_view);
         self.chat_widget = chat_widget;
-        self.refresh_agent_activity_label().await;
+        self.sync_active_agent_label();
     }
 
     pub(super) async fn select_agent_thread(
@@ -272,10 +289,9 @@ impl App {
             return Ok(());
         }
 
-        if self.should_check_agent_liveness_before_switch(thread_id)
-            && !self
-                .refresh_agent_picker_thread_liveness(app_server, thread_id)
-                .await
+        if !self
+            .refresh_agent_picker_thread_liveness(app_server, thread_id)
+            .await
         {
             self.chat_widget
                 .add_error_message(format!("Agent thread {thread_id} is no longer available."));
@@ -331,21 +347,6 @@ impl App {
             &mut snapshot,
         )
         .await;
-        let snapshot_keeps_terminal_progress =
-            Self::thread_switch_snapshot_keeps_terminal_progress(&snapshot);
-        let transferred_terminal_progress = if snapshot_keeps_terminal_progress {
-            self.chat_widget.take_managed_terminal_progress()
-        } else {
-            self.chat_widget
-                .clear_managed_terminal_progress()
-                .unwrap_or_else(|err| {
-                    tracing::debug!(
-                        error = %err,
-                        "failed to clear terminal progress bar before idle thread switch"
-                    );
-                });
-            false
-        };
 
         self.active_thread_id = Some(thread_id);
         self.active_thread_rx = Some(receiver);
@@ -355,12 +356,7 @@ impl App {
             self.config.clone(),
             /*initial_user_message*/ None,
         );
-        self.replace_chat_widget(ChatWidget::new_with_app_event(init))
-            .await;
-        if transferred_terminal_progress {
-            self.chat_widget
-                .inherit_managed_terminal_progress(transferred_terminal_progress);
-        }
+        self.replace_chat_widget(ChatWidget::new_with_app_event(init));
 
         self.reset_for_thread_switch(tui)?;
         self.replay_thread_snapshot(snapshot, !is_replay_only);
@@ -380,20 +376,6 @@ impl App {
         Ok(())
     }
 
-    pub(super) fn thread_switch_snapshot_keeps_terminal_progress(
-        snapshot: &ThreadEventSnapshot,
-    ) -> bool {
-        snapshot
-            .input_state
-            .as_ref()
-            .is_some_and(ThreadInputState::agent_turn_running)
-            || snapshot
-                .turns
-                .iter()
-                .rev()
-                .any(|turn| matches!(turn.status, TurnStatus::InProgress))
-    }
-
     pub(super) fn should_attach_live_thread_for_selection(&self, thread_id: ThreadId) -> bool {
         !self.thread_event_channels.contains_key(&thread_id)
             && self
@@ -402,17 +384,29 @@ impl App {
                 .is_none_or(|entry| !entry.is_closed)
     }
 
-    pub(super) fn should_check_agent_liveness_before_switch(&self, thread_id: ThreadId) -> bool {
-        !self.thread_event_channels.contains_key(&thread_id)
-    }
-
     pub(super) fn reset_for_thread_switch(&mut self, tui: &mut tui::Tui) -> Result<()> {
         self.reset_transcript_state_after_clear();
         tui.clear_pending_history_lines();
+        Self::clear_terminal_for_thread_switch(&mut tui.terminal)?;
         Ok(())
     }
 
-    pub(super) async fn reset_thread_event_state(&mut self) {
+    pub(super) fn clear_terminal_for_thread_switch<B>(
+        terminal: &mut crate::custom_terminal::Terminal<B>,
+    ) -> Result<()>
+    where
+        B: Backend + Write,
+    {
+        terminal.clear_scrollback_and_visible_screen_ansi()?;
+        let mut area = terminal.viewport_area;
+        if area.y > 0 {
+            area.y = 0;
+            terminal.set_viewport_area(area);
+        }
+        Ok(())
+    }
+
+    pub(super) fn reset_thread_event_state(&mut self) {
         self.abort_all_thread_event_listeners();
         self.thread_event_channels.clear();
         self.agent_navigation.clear();
@@ -425,7 +419,7 @@ impl App {
         self.pending_primary_events.clear();
         self.pending_app_server_requests.clear();
         self.chat_widget.set_pending_thread_approvals(Vec::new());
-        self.refresh_agent_activity_label().await;
+        self.sync_active_agent_label();
     }
 
     pub(super) async fn start_fresh_session_with_summary_hint(
@@ -479,7 +473,7 @@ impl App {
                     if let Some(usage_line) = summary.usage_line {
                         lines.push(usage_line.into());
                     }
-                    if let Some(command) = summary.resume_command {
+                    if let Some(command) = summary.resume_hint {
                         let spans = vec!["To continue this session, run ".into(), command.cyan()];
                         lines.push(spans.into());
                     }
@@ -506,14 +500,13 @@ impl App {
         // Initial messages are for freshly attached primary threads only. Thread switches and
         // resume/fork flows pass `None` so they cannot replay old history and then auto-submit a new
         // user turn by accident.
-        self.reset_thread_event_state().await;
+        self.reset_thread_event_state();
         let init = self.chatwidget_init_for_forked_or_resumed_thread(
             tui,
             self.config.clone(),
             initial_user_message,
         );
-        self.replace_chat_widget(ChatWidget::new_with_app_event(init))
-            .await;
+        self.replace_chat_widget(ChatWidget::new_with_app_event(init));
         self.enqueue_primary_thread_session(started.session, started.turns)
             .await?;
         self.backfill_loaded_subagent_threads(app_server).await;
@@ -583,119 +576,10 @@ impl App {
                 thread.agent_nickname,
                 thread.agent_role,
                 /*is_closed*/ false,
-            )
-            .await;
+            );
         }
-        self.refresh_agent_activity_label().await;
-        self.prewarm_loaded_subagent_switch_targets(app_server);
 
         !had_read_error
-    }
-
-    /// Starts at most two background resumes for the targets reachable by the first left/right
-    /// agent switch from the currently displayed thread.
-    ///
-    /// Backfill keeps startup responsive by fetching only cheap picker metadata inline. These
-    /// resumes are intentionally off the foreground path; when one finishes before the first
-    /// switch, selection can reuse the same cached channel shape as later switches.
-    pub(super) fn prewarm_loaded_subagent_switch_targets(&self, app_server: &AppServerSession) {
-        let Some(primary_thread_id) = self.primary_thread_id else {
-            return;
-        };
-        let target_thread_ids = self.loaded_subagent_switch_prewarm_targets();
-        if target_thread_ids.is_empty() {
-            return;
-        }
-
-        let request_handle = app_server.request_handle();
-        let config = self.config.clone();
-        let thread_params_mode = if app_server.is_remote() {
-            crate::app_server_session::ThreadParamsMode::Remote
-        } else {
-            crate::app_server_session::ThreadParamsMode::Embedded
-        };
-        let remote_cwd_override = app_server
-            .remote_cwd_override()
-            .map(std::path::Path::to_path_buf);
-        let app_event_tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            for thread_id in target_thread_ids {
-                let result = AppServerSession::resume_thread_with_request_handle(
-                    request_handle.clone(),
-                    config.clone(),
-                    thread_id,
-                    thread_params_mode,
-                    remote_cwd_override.clone(),
-                )
-                .await
-                .map_err(|err| err.to_string());
-                app_event_tx.send(AppEvent::LoadedSubagentSwitchPrewarmed {
-                    primary_thread_id,
-                    thread_id,
-                    result: Box::new(result),
-                });
-            }
-        });
-    }
-
-    pub(super) fn loaded_subagent_switch_prewarm_targets(&self) -> Vec<ThreadId> {
-        let current_thread_id = self.current_displayed_thread_id();
-        let mut target_thread_ids = Vec::new();
-        for direction in [
-            AgentNavigationDirection::Next,
-            AgentNavigationDirection::Previous,
-        ] {
-            let Some(thread_id) = self
-                .agent_navigation
-                .adjacent_thread_id(current_thread_id, direction)
-            else {
-                continue;
-            };
-            if self.should_attach_live_thread_for_selection(thread_id)
-                && !target_thread_ids.contains(&thread_id)
-            {
-                target_thread_ids.push(thread_id);
-            }
-        }
-        target_thread_ids
-    }
-
-    pub(super) async fn cache_loaded_subagent_switch_prewarm(
-        &mut self,
-        primary_thread_id: ThreadId,
-        thread_id: ThreadId,
-        result: Result<AppServerStartedThread, String>,
-    ) {
-        if self.primary_thread_id != Some(primary_thread_id)
-            || self.active_thread_id == Some(thread_id)
-            || self.agent_navigation.get(&thread_id).is_none()
-        {
-            return;
-        }
-
-        let started = match result {
-            Ok(started) => started,
-            Err(err) => {
-                tracing::warn!(
-                    thread_id = %thread_id,
-                    error = %err,
-                    "failed to prewarm loaded subagent switch target"
-                );
-                return;
-            }
-        };
-        if started.session.thread_id != thread_id {
-            tracing::warn!(
-                expected_thread_id = %thread_id,
-                resumed_thread_id = %started.session.thread_id,
-                "ignoring mismatched loaded subagent switch prewarm"
-            );
-            return;
-        }
-
-        let channel = self.ensure_thread_channel(thread_id);
-        let mut store = channel.store.lock().await;
-        store.set_session(started.session, started.turns);
     }
 
     /// Returns the adjacent thread id for keyboard navigation, backfilling from the server if the
@@ -731,24 +615,6 @@ impl App {
             .adjacent_thread_id(self.current_displayed_thread_id(), direction)
     }
 
-    /// Returns the shortcut switch target, or explains that no other agent is available.
-    pub(super) async fn adjacent_thread_id_for_switch_shortcut(
-        &mut self,
-        app_server: &mut AppServerSession,
-        direction: AgentNavigationDirection,
-    ) -> Option<ThreadId> {
-        let thread_id = self
-            .adjacent_thread_id_with_backfill(app_server, direction)
-            .await;
-        if thread_id.is_none() {
-            self.chat_widget.add_info_message(
-                "No other agents available to switch to.".to_string(),
-                /*hint*/ None,
-            );
-        }
-        thread_id
-    }
-
     pub(super) fn fresh_session_config(&self) -> Config {
         let mut config = self.config.clone();
         config.service_tier = self.chat_widget.configured_service_tier();
@@ -767,7 +633,7 @@ impl App {
         }
 
         let current_cwd = self.config.cwd.to_path_buf();
-        let resume_cwd = if self.remote_app_server_url.is_some() {
+        let resume_cwd = if self.app_server_target.uses_remote_workspace() {
             current_cwd.clone()
         } else {
             match crate::session_resume::resolve_cwd_for_resume_or_fork(
@@ -829,7 +695,7 @@ impl App {
                             if let Some(usage_line) = summary.usage_line {
                                 lines.push(usage_line.into());
                             }
-                            if let Some(command) = summary.resume_command {
+                            if let Some(command) = summary.resume_hint {
                                 let spans =
                                     vec!["To continue this session, run ".into(), command.cyan()];
                                 lines.push(spans.into());
