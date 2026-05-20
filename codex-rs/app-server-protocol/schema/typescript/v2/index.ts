@@ -405,6 +405,8 @@ export type { ThreadShellCommandResponse } from "./ThreadShellCommandResponse";
 export type { ThreadSortKey } from "./ThreadSortKey";
 export type { ThreadSource } from "./ThreadSource";
 export type { ThreadSourceKind } from "./ThreadSourceKind";
+export type { ThreadSpawnParams } from "./ThreadSpawnParams";
+export type { ThreadSpawnResponse } from "./ThreadSpawnResponse";
 export type { ThreadStartParams } from "./ThreadStartParams";
 export type { ThreadStartResponse } from "./ThreadStartResponse";
 export type { ThreadStartSource } from "./ThreadStartSource";

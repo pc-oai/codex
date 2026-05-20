@@ -1,5 +1,7 @@
 use crate::SkillsManager;
 use crate::agent::AgentControl;
+use crate::agent::control::SpawnAgentOptions;
+use crate::agent::next_thread_spawn_depth;
 use crate::attestation::AttestationProvider;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
@@ -29,6 +31,7 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
+use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::error::CodexErr;
@@ -50,6 +53,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_protocol::user_input::UserInput;
 use codex_rollout::state_db::StateDbHandle;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
 use codex_thread_store::InMemoryThreadStore;
@@ -635,6 +639,75 @@ impl ThreadManager {
             InterruptedTurnHistoryMarker::from_config(&options.config),
         );
         self.start_thread_with_options(options).await
+    }
+
+    /// Spawn a child agent below an already loaded thread and submit its first task.
+    pub async fn spawn_thread_subagent(
+        &self,
+        parent_thread_id: ThreadId,
+        task_name: String,
+        input: Vec<UserInput>,
+    ) -> CodexResult<(ThreadId, Arc<CodexThread>)> {
+        if input.is_empty() {
+            return Err(CodexErr::InvalidRequest(
+                "subagent input must not be empty".to_string(),
+            ));
+        }
+
+        let parent_thread = self.get_thread(parent_thread_id).await?;
+        let parent_snapshot = parent_thread.config_snapshot().await;
+        let parent_base_instructions = parent_thread.codex.session.get_base_instructions().await;
+        let mut child_config = (*parent_thread.config().await).clone();
+        child_config.model = Some(parent_snapshot.model.clone());
+        child_config.service_tier = parent_snapshot.service_tier.clone();
+        child_config.model_reasoning_effort = parent_snapshot.reasoning_effort;
+        child_config.model_reasoning_summary = parent_snapshot.reasoning_summary;
+        child_config.personality = parent_snapshot.personality;
+        child_config.cwd = parent_snapshot.cwd.clone();
+        child_config.workspace_roots = parent_snapshot.workspace_roots.clone();
+        child_config.base_instructions = Some(parent_base_instructions.text);
+        child_config
+            .permissions
+            .approval_policy
+            .set(parent_snapshot.approval_policy)
+            .map_err(|err| CodexErr::InvalidRequest(format!("invalid approval policy: {err}")))?;
+        child_config
+            .permissions
+            .set_permission_profile(parent_snapshot.permission_profile)
+            .map_err(|err| {
+                CodexErr::InvalidRequest(format!("invalid permission profile: {err}"))
+            })?;
+
+        let child_depth = next_thread_spawn_depth(&parent_snapshot.session_source);
+        let parent_agent_path = parent_snapshot
+            .session_source
+            .get_agent_path()
+            .unwrap_or_else(AgentPath::root);
+        let agent_path = parent_agent_path
+            .join(&task_name)
+            .map_err(CodexErr::InvalidRequest)?;
+        let session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            depth: child_depth,
+            agent_path: Some(agent_path),
+            agent_nickname: None,
+            agent_role: None,
+        });
+
+        let spawned = parent_thread
+            .codex
+            .session
+            .services
+            .agent_control
+            .spawn_agent_with_metadata(
+                child_config,
+                input.into(),
+                Some(session_source),
+                SpawnAgentOptions::default(),
+            )
+            .await?;
+        let child_thread = self.get_thread(spawned.thread_id).await?;
+        Ok((spawned.thread_id, child_thread))
     }
 
     pub async fn resume_thread_from_rollout(

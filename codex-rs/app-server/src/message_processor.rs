@@ -972,6 +972,16 @@ impl MessageProcessor {
                     )
                     .await
             }
+            ClientRequest::ThreadSpawn { params, .. } => {
+                self.thread_processor
+                    .thread_spawn(
+                        request_id.clone(),
+                        params,
+                        app_server_client_name.clone(),
+                        client_version.clone(),
+                    )
+                    .await
+            }
             ClientRequest::ThreadUnsubscribe { params, .. } => {
                 self.thread_processor
                     .thread_unsubscribe(&request_id, params)

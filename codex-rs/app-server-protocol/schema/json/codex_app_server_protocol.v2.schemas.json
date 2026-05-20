@@ -985,6 +985,30 @@
             },
             "method": {
               "enum": [
+                "thread/spawn"
+              ],
+              "title": "Thread/spawnRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadSpawnParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/spawnRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/resume"
               ],
               "title": "Thread/resumeRequestMethod",
@@ -15227,6 +15251,125 @@
         "unknown"
       ],
       "type": "string"
+    },
+    "ThreadSpawnParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Spawn a child agent thread from an already loaded parent thread.",
+      "properties": {
+        "input": {
+          "items": {
+            "$ref": "#/definitions/UserInput"
+          },
+          "type": "array"
+        },
+        "taskName": {
+          "description": "Optional relative task name for the child agent path.\n\nOmitted lets the server assign a unique path segment.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "input",
+        "threadId"
+      ],
+      "title": "ThreadSpawnParams",
+      "type": "object"
+    },
+    "ThreadSpawnResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "activePermissionProfile": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ActivePermissionProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Named or implicit built-in profile that produced the active permissions, when known."
+        },
+        "approvalPolicy": {
+          "$ref": "#/definitions/AskForApproval"
+        },
+        "approvalsReviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            }
+          ],
+          "description": "Reviewer currently used for approval requests on this thread."
+        },
+        "cwd": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "instructionSources": {
+          "default": [],
+          "description": "Instruction source files currently loaded for this thread.",
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": "array"
+        },
+        "model": {
+          "type": "string"
+        },
+        "modelProvider": {
+          "type": "string"
+        },
+        "reasoningEffort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runtimeWorkspaceRoots": {
+          "default": [],
+          "description": "Thread-scoped runtime workspace roots used to materialize `:workspace_roots`.",
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": "array"
+        },
+        "sandbox": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SandboxPolicy"
+            }
+          ],
+          "description": "Legacy sandbox policy retained for compatibility."
+        },
+        "serviceTier": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thread": {
+          "$ref": "#/definitions/Thread"
+        }
+      },
+      "required": [
+        "approvalPolicy",
+        "approvalsReviewer",
+        "cwd",
+        "model",
+        "modelProvider",
+        "sandbox",
+        "thread"
+      ],
+      "title": "ThreadSpawnResponse",
+      "type": "object"
     },
     "ThreadStartParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",

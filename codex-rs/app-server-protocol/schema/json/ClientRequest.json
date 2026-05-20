@@ -3648,6 +3648,32 @@
       ],
       "type": "string"
     },
+    "ThreadSpawnParams": {
+      "description": "Spawn a child agent thread from an already loaded parent thread.",
+      "properties": {
+        "input": {
+          "items": {
+            "$ref": "#/definitions/UserInput"
+          },
+          "type": "array"
+        },
+        "taskName": {
+          "description": "Optional relative task name for the child agent path.\n\nOmitted lets the server assign a unique path segment.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "input",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadStartParams": {
       "properties": {
         "approvalPolicy": {
@@ -4222,6 +4248,30 @@
         "params"
       ],
       "title": "Thread/startRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/spawn"
+          ],
+          "title": "Thread/spawnRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadSpawnParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/spawnRequest",
       "type": "object"
     },
     {

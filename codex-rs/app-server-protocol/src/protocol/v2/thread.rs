@@ -220,6 +220,48 @@ pub struct ThreadStartResponse {
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// Spawn a child agent thread from an already loaded parent thread.
+pub struct ThreadSpawnParams {
+    pub thread_id: String,
+    pub input: Vec<super::UserInput>,
+    /// Optional relative task name for the child agent path.
+    ///
+    /// Omitted lets the server assign a unique path segment.
+    #[ts(optional = nullable)]
+    pub task_name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadSpawnResponse {
+    pub thread: Thread,
+    pub model: String,
+    pub model_provider: String,
+    pub service_tier: Option<String>,
+    pub cwd: AbsolutePathBuf,
+    /// Thread-scoped runtime workspace roots used to materialize
+    /// `:workspace_roots`.
+    #[serde(default)]
+    pub runtime_workspace_roots: Vec<AbsolutePathBuf>,
+    /// Instruction source files currently loaded for this thread.
+    #[serde(default)]
+    pub instruction_sources: Vec<AbsolutePathBuf>,
+    pub approval_policy: AskForApproval,
+    /// Reviewer currently used for approval requests on this thread.
+    pub approvals_reviewer: ApprovalsReviewer,
+    /// Legacy sandbox policy retained for compatibility.
+    pub sandbox: SandboxPolicy,
+    /// Named or implicit built-in profile that produced the active
+    /// permissions, when known.
+    #[serde(default)]
+    pub active_permission_profile: Option<ActivePermissionProfile>,
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
 #[derive(
     Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
 )]

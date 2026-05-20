@@ -448,6 +448,11 @@ client_request_definitions! {
         serialization: None,
         response: v2::ThreadStartResponse,
     },
+    ThreadSpawn => "thread/spawn" {
+        params: v2::ThreadSpawnParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadSpawnResponse,
+    },
     ThreadResume => "thread/resume" {
         params: v2::ThreadResumeParams,
         inspect_params: true,

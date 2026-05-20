@@ -425,6 +425,28 @@ impl ThreadRequestProcessor {
         .map(|()| None)
     }
 
+    pub(crate) async fn thread_spawn(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadSpawnParams,
+        app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let (response, notif) = self
+            .thread_spawn_response(
+                &request_id,
+                params,
+                app_server_client_name,
+                app_server_client_version,
+            )
+            .await?;
+        self.outgoing.send_response(request_id, response).await;
+        self.outgoing
+            .send_server_notification(ServerNotification::ThreadStarted(notif))
+            .await;
+        Ok(None)
+    }
+
     pub(crate) async fn thread_fork(
         &self,
         request_id: ConnectionRequestId,
@@ -1236,6 +1258,89 @@ impl ThreadRequestProcessor {
             Some("ready"),
         );
         Ok(())
+    }
+
+    async fn thread_spawn_response(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadSpawnParams,
+        app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
+    ) -> Result<(ThreadSpawnResponse, ThreadStartedNotification), JSONRPCErrorError> {
+        let (parent_thread_id, parent_thread) = self.load_thread(&params.thread_id).await?;
+        let task_name = params.task_name.unwrap_or_else(|| {
+            format!(
+                "user_subagent_{}",
+                ThreadId::new().to_string().replace('-', "_")
+            )
+        });
+        let input = params
+            .input
+            .into_iter()
+            .map(V2UserInput::into_core)
+            .collect();
+        let (thread_id, child_thread) = self
+            .thread_manager
+            .spawn_thread_subagent(parent_thread_id, task_name, input)
+            .await
+            .map_err(|err| core_thread_write_error("spawn subagent", err))?;
+
+        let parent_config = parent_thread.config().await;
+        let instruction_sources = Self::instruction_sources_from_config(&parent_config).await;
+        Self::set_app_server_client_info(
+            child_thread.as_ref(),
+            app_server_client_name,
+            app_server_client_version,
+        )
+        .await?;
+        let config_snapshot = child_thread.config_snapshot().await;
+        let mut thread =
+            build_thread_from_loaded_snapshot(thread_id, &config_snapshot, child_thread.as_ref());
+
+        log_listener_attach_result(
+            self.ensure_conversation_listener(
+                thread_id,
+                request_id.connection_id,
+                /*raw_events_enabled*/ false,
+            )
+            .await,
+            thread_id,
+            request_id.connection_id,
+            "spawned subagent",
+        );
+        self.thread_watch_manager
+            .upsert_thread_silently(thread.clone())
+            .await;
+        thread.status = resolve_thread_status(
+            self.thread_watch_manager
+                .loaded_status_for_thread(&thread.id)
+                .await,
+            /*has_in_progress_turn*/ true,
+        );
+
+        let sandbox = thread_response_sandbox_policy(
+            &config_snapshot.permission_profile,
+            config_snapshot.cwd.as_path(),
+        );
+        let active_permission_profile =
+            thread_response_active_permission_profile(config_snapshot.active_permission_profile);
+        let response = ThreadSpawnResponse {
+            thread: thread.clone(),
+            model: config_snapshot.model,
+            model_provider: config_snapshot.model_provider_id,
+            service_tier: config_snapshot.service_tier,
+            cwd: config_snapshot.cwd,
+            runtime_workspace_roots: config_snapshot.workspace_roots,
+            instruction_sources,
+            approval_policy: config_snapshot.approval_policy.into(),
+            approvals_reviewer: config_snapshot.approvals_reviewer.into(),
+            sandbox,
+            active_permission_profile,
+            reasoning_effort: config_snapshot.reasoning_effort,
+        };
+
+        let notif = thread_started_notification(thread);
+        Ok((response, notif))
     }
 
     #[allow(clippy::too_many_arguments)]
