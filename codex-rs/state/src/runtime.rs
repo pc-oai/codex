@@ -16,6 +16,7 @@ use crate::ThreadMetadata;
 use crate::ThreadMetadataBuilder;
 use crate::ThreadsPage;
 use crate::apply_rollout_item;
+use crate::migrations::remap_legacy_state_migrations;
 use crate::migrations::runtime_goals_migrator;
 use crate::migrations::runtime_logs_migrator;
 use crate::migrations::runtime_state_migrator;
@@ -308,6 +309,9 @@ async fn open_sqlite(
         &pool_result,
     );
     let pool = pool_result?;
+    if matches!(spec.kind, DbKind::State) {
+        remap_legacy_state_migrations(&pool).await?;
+    }
     let started = Instant::now();
     let migrate_result = migrator.run(&pool).await.map_err(anyhow::Error::from);
     crate::telemetry::record_init_result(
