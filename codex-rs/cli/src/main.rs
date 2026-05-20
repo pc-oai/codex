@@ -643,40 +643,11 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
 }
 
 /// Handle the app exit and print the results. Optionally run the update action.
-#[cfg(unix)]
-fn reload_current_session(thread_id: Option<codex_protocol::ThreadId>) -> anyhow::Result<()> {
-    use std::os::unix::process::CommandExt;
-
-    let thread_id = thread_id
-        .ok_or_else(|| anyhow::anyhow!("cannot reload before a resumable thread exists"))?;
-    let mut command = if let Some(helper) = std::env::var_os("CODEX_RELOAD_HELPER") {
-        let mut command = std::process::Command::new(helper);
-        command.arg(thread_id.to_string());
-        command
-    } else {
-        let mut command = std::process::Command::new(std::env::current_exe()?);
-        command.arg("resume").arg(thread_id.to_string());
-        command
-    };
-    let err = command.exec();
-    Err(anyhow::anyhow!(
-        "failed to exec Codex reload command: {err}"
-    ))
-}
-
-#[cfg(not(unix))]
-fn reload_current_session(_thread_id: Option<codex_protocol::ThreadId>) -> anyhow::Result<()> {
-    anyhow::bail!("reload is only supported on Unix platforms")
-}
-
 fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
     match exit_info.exit_reason {
         ExitReason::Fatal(message) => {
             eprintln!("ERROR: {message}");
             std::process::exit(1);
-        }
-        ExitReason::ReloadRequested => {
-            return reload_current_session(exit_info.thread_id);
         }
         ExitReason::UserRequested => { /* normal exit */ }
     }
