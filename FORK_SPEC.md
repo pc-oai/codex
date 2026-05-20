@@ -188,6 +188,10 @@ properties, treat that as a fork regression even if the merged tree compiles.
   render instead of waiting on `model/list`. It refreshes models from the app
   server in the background and updates model-dependent UI after that result
   arrives.
+- Fresh local TUI startup and clear-screen redraws do not print the boxed
+  `OpenAI Codex` session header into terminal history. The prompt and compact
+  footer/status surfaces are enough; the large model/directory/permissions
+  banner is startup noise in the local loop.
 - The Talon integration is per session. Keep the local file-RPC bridge and the
   session-owned command sockets working together: they expose editor/session
   state and narrow control actions through `talon_send`/`talon_sim`, ambient
@@ -242,6 +246,7 @@ High-signal static anchors include:
 | Thread retrieval state | `ThreadUserState`, `user_message_count`, state migrations and thread-store fields |
 | Local title helpers | `thread_name_suggestion.rs`, `/retitle`, `/emoji`, live config use |
 | Fast model bootstrap | `local_bootstrap_models`, `models_list_with_request_handle`, `ModelsLoaded` |
+| Startup header suppression | `clear_ui_header_lines_with_version`, `SessionHeaderHistoryCell` |
 | Footer status split | `set_status_line_right`, `mcp_startup_progress_label`, `local_build_label` |
 | Compact agent switching | `show_agent_menu`, `AgentMenu`, active-agent footer label refresh |
 | Transcript experiments | `ToggleCondensedTranscriptView`, `transcript_outline`, `transcript_tree` |
@@ -252,7 +257,8 @@ Then validate behavior rather than just conflict resolution:
    sockets and startup retry, thread title suggestions, reload handoff,
    terminal progress, the local build helper and archive path, user lifecycle
    state, old-migration remapping, bundled-model startup with background model
-   refresh, short session selectors, and the transcript prototype binaries.
+   refresh, suppressed boxed startup history header, short session selectors,
+   and the transcript prototype binaries.
 2. Regenerate or inspect app-server schema output when thread API payloads move.
    The local delta touches thread delete, rollback start, thread user state, and
    thread metadata payloads.
