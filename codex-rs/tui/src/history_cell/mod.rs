@@ -251,6 +251,11 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
         false
     }
 
+    /// Whether this cell belongs in the condensed main scrollback projection.
+    fn show_in_condensed_main_view(&self) -> bool {
+        false
+    }
+
     /// Returns a coarse "animation tick" when transcript output is time-dependent.
     ///
     /// The transcript overlay caches the rendered output of the in-flight active cell, so cells

@@ -465,6 +465,7 @@ struct SessionSummary {
 struct InitialHistoryReplayBuffer {
     retained_lines: VecDeque<Line<'static>>,
     render_from_transcript_tail: bool,
+    defer_terminal_writes: bool,
 }
 
 pub(crate) struct App {
@@ -486,6 +487,8 @@ pub(crate) struct App {
     pub(crate) file_search: FileSearchManager,
 
     pub(crate) transcript_cells: Vec<Arc<dyn HistoryCell>>,
+    /// Whether native main-view scrollback shows conversational messages only.
+    pub(crate) condensed_transcript_view: bool,
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
@@ -927,6 +930,7 @@ See the Codex keymap documentation for supported actions and examples."
             enhanced_keys_supported,
             keymap: runtime_keymap,
             transcript_cells: Vec::new(),
+            condensed_transcript_view: false,
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,

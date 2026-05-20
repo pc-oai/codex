@@ -205,6 +205,18 @@ impl App {
         }
 
         if app_keymap_shortcuts_available
+            && self
+                .keymap
+                .app
+                .toggle_condensed_transcript
+                .is_pressed(key_event)
+        {
+            self.app_event_tx
+                .send(AppEvent::ToggleCondensedTranscriptView);
+            return;
+        }
+
+        if app_keymap_shortcuts_available
             && self.keymap.app.open_external_editor.is_pressed(key_event)
         {
             // Only launch the external editor if there is no overlay and the bottom pane is not in use.

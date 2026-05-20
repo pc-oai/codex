@@ -241,6 +241,10 @@ impl ChatWidget {
                 }
                 self.app_event_tx.compact();
             }
+            SlashCommand::Condensed => {
+                self.app_event_tx
+                    .send(AppEvent::ToggleCondensedTranscriptView);
+            }
             SlashCommand::Review => {
                 self.open_review_popup();
             }
@@ -1059,6 +1063,7 @@ impl ChatWidget {
             | SlashCommand::Quit
             | SlashCommand::Exit
             | SlashCommand::Delete
+            | SlashCommand::Condensed
             | SlashCommand::Logout
             | SlashCommand::Mention
             | SlashCommand::Skills

@@ -47,6 +47,7 @@ pub enum SlashCommand {
     Fork,
     Init,
     Compact,
+    Condensed,
     Plan,
     Goal,
     Agent,
@@ -99,6 +100,9 @@ impl SlashCommand {
             SlashCommand::New => "start a new chat during a conversation",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
+            SlashCommand::Condensed => {
+                "toggle message-only main transcript view in terminal scrollback"
+            }
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Rename => "rename the current thread",
             SlashCommand::Park => "mark the current thread as parked",
@@ -260,6 +264,7 @@ impl SlashCommand {
             | SlashCommand::Exit
             | SlashCommand::Delete
             | SlashCommand::Side => true,
+            SlashCommand::Condensed => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
             SlashCommand::Realtime => true,

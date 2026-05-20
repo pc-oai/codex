@@ -336,6 +336,10 @@ impl App {
                 let request = self.latest_user_request_text();
                 self.chat_widget.copy_last_user_request_text(request);
             }
+            AppEvent::ToggleCondensedTranscriptView => {
+                self.toggle_condensed_transcript_view(tui)?;
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::Exit(mode) => {
                 if mode == ExitMode::ShutdownFirst {
                     self.show_shutdown_feedback(tui)?;

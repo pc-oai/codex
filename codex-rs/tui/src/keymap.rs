@@ -63,6 +63,8 @@ pub(crate) struct AppKeymap {
     pub(crate) clear_terminal: Vec<KeyBinding>,
     /// Reload the current session and resume it in a fresh process.
     pub(crate) reload_current_session: Vec<KeyBinding>,
+    /// Toggle message-only main transcript view in native terminal scrollback.
+    pub(crate) toggle_condensed_transcript: Vec<KeyBinding>,
     /// Toggle Vim mode for the composer input.
     pub(crate) toggle_vim_mode: Vec<KeyBinding>,
     /// Toggle Fast mode.
@@ -394,6 +396,11 @@ impl RuntimeKeymap {
                 &defaults.app.reload_current_session,
                 "tui.keymap.global.reload_current_session",
             )?,
+            toggle_condensed_transcript: resolve_bindings(
+                keymap.global.toggle_condensed_transcript.as_ref(),
+                &defaults.app.toggle_condensed_transcript,
+                "tui.keymap.global.toggle_condensed_transcript",
+            )?,
             toggle_vim_mode: resolve_bindings(
                 keymap.global.toggle_vim_mode.as_ref(),
                 &defaults.app.toggle_vim_mode,
@@ -575,6 +582,10 @@ impl RuntimeKeymap {
                 app.reload_current_session.as_slice(),
             ),
             (
+                keymap.global.toggle_condensed_transcript.as_ref(),
+                app.toggle_condensed_transcript.as_slice(),
+            ),
+            (
                 keymap.global.toggle_vim_mode.as_ref(),
                 app.toggle_vim_mode.as_slice(),
             ),
@@ -699,6 +710,7 @@ impl RuntimeKeymap {
                 copy: default_bindings![ctrl(KeyCode::Char('o'))],
                 clear_terminal: default_bindings![ctrl(KeyCode::Char('l'))],
                 reload_current_session: default_bindings![ctrl(KeyCode::Char('r'))],
+                toggle_condensed_transcript: default_bindings![alt(KeyCode::Char('c'))],
                 toggle_vim_mode: default_bindings![],
                 toggle_fast_mode: default_bindings![],
                 toggle_raw_output: default_bindings![alt(KeyCode::Char('r'))],
@@ -933,6 +945,10 @@ impl RuntimeKeymap {
                     "reload_current_session",
                     self.app.reload_current_session.as_slice(),
                 ),
+                (
+                    "toggle_condensed_transcript",
+                    self.app.toggle_condensed_transcript.as_slice(),
+                ),
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
                 ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
                 ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
@@ -986,6 +1002,10 @@ impl RuntimeKeymap {
                 (
                     "reload_current_session",
                     self.app.reload_current_session.as_slice(),
+                ),
+                (
+                    "toggle_condensed_transcript",
+                    self.app.toggle_condensed_transcript.as_slice(),
                 ),
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
                 ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
@@ -1042,6 +1062,10 @@ impl RuntimeKeymap {
                     "reload_current_session",
                     self.app.reload_current_session.as_slice(),
                 ),
+                (
+                    "toggle_condensed_transcript",
+                    self.app.toggle_condensed_transcript.as_slice(),
+                ),
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
                 ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
                 ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
@@ -1097,6 +1121,10 @@ impl RuntimeKeymap {
                 (
                     "reload_current_session",
                     self.app.reload_current_session.as_slice(),
+                ),
+                (
+                    "toggle_condensed_transcript",
+                    self.app.toggle_condensed_transcript.as_slice(),
                 ),
                 (
                     "chat.decrease_reasoning_effort",
