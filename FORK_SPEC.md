@@ -178,6 +178,11 @@ properties, treat that as a fork regression even if the merged tree compiles.
   replaced by `Alt-Left` / `Alt-Right` word-motion chords.
 - Active-agent footer labels refresh when a new subagent thread starts so the
   visible count and working-state marker do not lag behind the picker.
+- Loaded parent threads can spawn a child agent directly through app-server
+  `thread/spawn`. The TUI exposes that as `/subagent <task>` and an `Alt-\`
+  empty-composer shortcut that opens the command draft without switching focus;
+  spawned children inherit the parent runtime context, stay in its agent tree,
+  and become visible in the agent picker.
 
 ### Local automation and runtime signals
 
