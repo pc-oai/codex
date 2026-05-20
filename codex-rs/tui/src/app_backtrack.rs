@@ -72,6 +72,8 @@ pub(crate) struct BacktrackState {
     pub(crate) pending_rollback: Option<PendingBacktrackRollback>,
     /// Reversible edit mode entered by the direct "edit last message" shortcut.
     pub(crate) edit_preview: Option<BacktrackEditPreview>,
+    /// Thread that should enter direct-edit mode after Ctrl-E interrupts its live turn.
+    pub(crate) edit_after_interrupt_thread_id: Option<ThreadId>,
 }
 
 /// A user-visible backtrack choice that can be confirmed into a rollback request.
@@ -104,6 +106,7 @@ pub(crate) struct PendingBacktrackRollback {
     pub(crate) selection: BacktrackSelection,
     pub(crate) thread_id: Option<ThreadId>,
     pub(crate) edited_user_message: Option<UserMessage>,
+    pub(crate) submission_already_started: bool,
 }
 
 /// A direct-edit preview that has not yet mutated thread history.
@@ -229,6 +232,7 @@ impl App {
             selection,
             thread_id: self.chat_widget.thread_id(),
             edited_user_message: None,
+            submission_already_started: false,
         });
         self.chat_widget
             .submit_op(AppCommand::thread_rollback(num_turns));
@@ -502,6 +506,33 @@ impl App {
         true
     }
 
+    /// Stop the current turn so Ctrl-E can become "edit the last request" once the UI is idle.
+    pub(crate) fn interrupt_turn_then_edit_last_message(&mut self) -> bool {
+        if !self.chat_widget.is_task_running() || self.chat_widget.has_queued_follow_up_messages() {
+            return false;
+        }
+
+        let thread_id = self.chat_widget.thread_id();
+        if self.chat_widget.submit_op(AppCommand::interrupt()) {
+            self.backtrack.edit_after_interrupt_thread_id = thread_id;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Enter direct-edit mode after a Ctrl-E-triggered interrupt completes.
+    pub(crate) fn maybe_edit_last_message_after_interrupt(&mut self) -> bool {
+        let Some(thread_id) = self.backtrack.edit_after_interrupt_thread_id.take() else {
+            return false;
+        };
+        if self.chat_widget.thread_id() != Some(thread_id) || self.chat_widget.is_task_running() {
+            return false;
+        }
+
+        self.edit_last_message_from_command()
+    }
+
     pub(crate) fn begin_backtrack_edit_preview(&mut self, selection: BacktrackSelection) {
         let replaced_draft = if let Some(preview) = self.backtrack.edit_preview.as_ref() {
             preview.replaced_draft.clone()
@@ -588,19 +619,31 @@ impl App {
         self.backtrack.pending_rollback = Some(PendingBacktrackRollback {
             selection: preview.selection,
             thread_id: preview.thread_id,
-            edited_user_message: Some(edited_user_message),
+            edited_user_message: Some(edited_user_message.clone()),
+            submission_already_started: true,
         });
         self.chat_widget
             .show_edit_last_message_pending_hint(edit_last_message_hint_target(
                 usize::try_from(rollback_turns).unwrap_or(usize::MAX),
             ));
-        self.chat_widget
-            .submit_op(AppCommand::thread_rollback(rollback_turns));
+        if !self
+            .chat_widget
+            .submit_user_message_from_backtrack_edit(edited_user_message, Some(rollback_turns))
+        {
+            self.handle_backtrack_rollback_failed();
+        }
         true
     }
 
     pub(crate) fn backtrack_edit_preview_active(&self) -> bool {
         self.backtrack.edit_preview.is_some()
+    }
+
+    pub(crate) fn pending_combined_edit_rollback_active(&self) -> bool {
+        self.backtrack
+            .pending_rollback
+            .as_ref()
+            .is_some_and(|pending| pending.submission_already_started)
     }
 
     /// Clear all backtrack-related state and composer hints.
@@ -685,8 +728,15 @@ impl App {
         if let Some(edited_user_message) = pending.edited_user_message {
             self.backtrack.edit_preview = None;
             self.chat_widget.clear_edit_last_message_hint();
-            self.chat_widget
-                .submit_user_message_from_backtrack_edit(edited_user_message);
+            if pending.submission_already_started {
+                self.chat_widget
+                    .confirm_backtrack_edit_submission(&edited_user_message);
+            } else {
+                self.chat_widget.submit_user_message_from_backtrack_edit(
+                    edited_user_message,
+                    /*rollback_num_turns*/ None,
+                );
+            }
         }
     }
 

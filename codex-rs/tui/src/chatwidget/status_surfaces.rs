@@ -4,6 +4,7 @@
 //! behavior easier to review without paging through the rest of `chatwidget.rs`.
 
 use super::*;
+use crate::bottom_pane::compact_title_items_for_thread_title;
 use crate::bottom_pane::status_line_from_segments_with_muting;
 use crate::branch_summary;
 use crate::chatwidget::limit_label_for_window;
@@ -30,6 +31,7 @@ pub(super) const TERMINAL_TITLE_SPINNER_FRAMES: [&str; 10] =
 
 /// Time between spinner frame advances in the terminal title.
 pub(super) const TERMINAL_TITLE_SPINNER_INTERVAL: Duration = Duration::from_millis(100);
+const TERMINAL_TITLE_SESSION_ID_SUFFIX_LEN: usize = 8;
 
 /// Time between action-required blink phases in the terminal title.
 const TERMINAL_TITLE_ACTION_REQUIRED_INTERVAL: Duration = Duration::from_secs(1);
@@ -317,19 +319,32 @@ impl ChatWidget {
         selections: &StatusSurfaceSelections,
         now: Instant,
     ) -> Option<String> {
+        let items = self.terminal_title_items_for_rendering(selections);
         if self.terminal_title_shows_action_required_with_selections(selections) {
-            return Some(self.action_required_terminal_title_text(selections, now));
+            return Some(self.action_required_terminal_title_text(&items, now));
         }
 
-        let mut previous = None;
-        let title = selections
-            .terminal_title_items
+        let mut segments = items
             .iter()
             .copied()
             .filter_map(|item| {
                 self.terminal_title_value_for_item(item, now)
                     .map(|value| (item, value))
             })
+            .collect::<Vec<_>>();
+        if items.contains(&TerminalTitleItem::Thread)
+            && let Some(emoji) = self.leading_thread_title_emoji()
+        {
+            let insert_at = usize::from(
+                segments
+                    .first()
+                    .is_some_and(|(item, _)| *item == TerminalTitleItem::Spinner),
+            );
+            segments.insert(insert_at, (TerminalTitleItem::Thread, emoji));
+        }
+        let mut previous = None;
+        let title = segments
+            .into_iter()
             .fold(String::new(), |mut title, (item, value)| {
                 title.push_str(item.separator_from_previous(previous));
                 title.push_str(&value);
@@ -341,15 +356,36 @@ impl ChatWidget {
 
     fn action_required_terminal_title_text(
         &mut self,
-        selections: &StatusSurfaceSelections,
+        items: &[TerminalTitleItem],
         now: Instant,
     ) -> String {
         crate::bottom_pane::build_action_required_title_text(
             self.action_required_terminal_title_prefix_at(now),
-            selections.terminal_title_items.iter().copied(),
+            items.iter().copied(),
             &[TerminalTitleItem::Status],
             |item| self.terminal_title_value_for_item(item, now),
         )
+    }
+
+    fn terminal_title_items_for_rendering(
+        &self,
+        selections: &StatusSurfaceSelections,
+    ) -> Vec<TerminalTitleItem> {
+        if self.terminal_title_has_thread_text(selections) {
+            compact_title_items_for_thread_title(&selections.terminal_title_items)
+        } else {
+            selections.terminal_title_items.clone()
+        }
+    }
+
+    fn terminal_title_has_thread_text(&self, selections: &StatusSurfaceSelections) -> bool {
+        selections
+            .terminal_title_items
+            .contains(&TerminalTitleItem::Thread)
+            && self
+                .thread_name
+                .as_ref()
+                .is_some_and(|name| !thread_title_without_leading_emoji(name).is_empty())
     }
 
     fn action_required_terminal_title_prefix_at(&self, now: Instant) -> &'static str {
@@ -364,6 +400,13 @@ impl ChatWidget {
         } else {
             TERMINAL_TITLE_ACTION_REQUIRED_PREFIX_HIDDEN
         }
+    }
+
+    fn leading_thread_title_emoji(&self) -> Option<String> {
+        self.thread_name
+            .as_deref()
+            .and_then(|title| split_leading_emoji(title.trim()))
+            .map(|(emoji, _)| emoji)
     }
 
     fn terminal_title_shows_action_required_with_selections(
@@ -790,9 +833,17 @@ impl ChatWidget {
             )),
             TerminalTitleItem::Spinner => self.terminal_title_spinner_text_at(now),
             TerminalTitleItem::Status => Some(self.run_state_status_text()),
-            TerminalTitleItem::Thread => self
-                .status_line_value_for_item(StatusLineItem::ThreadTitle)
-                .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 48)),
+            TerminalTitleItem::Thread => self.thread_name.as_ref().and_then(|name| {
+                let trimmed = thread_title_without_leading_emoji(name);
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(Self::truncate_terminal_title_part(
+                        trimmed.to_string(),
+                        /*max_chars*/ 48,
+                    ))
+                }
+            }),
             TerminalTitleItem::GitBranch => self.status_line_branch.as_ref().map(|branch| {
                 Self::truncate_terminal_title_part(branch.clone(), /*max_chars*/ 32)
             }),
@@ -822,7 +873,7 @@ impl ChatWidget {
                 .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),
             TerminalTitleItem::SessionId => self
                 .status_line_value_for_item(StatusLineItem::SessionId)
-                .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),
+                .map(Self::terminal_title_session_id_suffix),
             TerminalTitleItem::FastMode => self
                 .status_line_value_for_item(StatusLineItem::FastMode)
                 .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),
@@ -962,6 +1013,71 @@ impl ChatWidget {
         truncated.push_str("...");
         truncated
     }
+
+    /// Keeps the distinguishing tail of a UUID-shaped session id compact in terminal chrome.
+    fn terminal_title_session_id_suffix(value: String) -> String {
+        let suffix = value
+            .chars()
+            .rev()
+            .take(TERMINAL_TITLE_SESSION_ID_SUFFIX_LEN)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect::<String>();
+        format!("…{suffix}")
+    }
+}
+
+fn thread_title_without_leading_emoji(title: &str) -> &str {
+    let trimmed = title.trim();
+    if let Some((_emoji, rest)) = split_leading_emoji(trimmed) {
+        rest.trim_start()
+    } else {
+        trimmed
+    }
+}
+
+fn split_leading_emoji(title: &str) -> Option<(String, &str)> {
+    let graphemes = title.grapheme_indices(true).collect::<Vec<_>>();
+    let mut pos = 0usize;
+    let mut emoji_count = 0usize;
+    let mut prefix_end = 0usize;
+
+    while emoji_count < 3
+        && let Some(&(idx, grapheme)) = graphemes.get(pos)
+        && grapheme.chars().any(is_emoji_like)
+    {
+        emoji_count += 1;
+        prefix_end = idx + grapheme.len();
+        pos += 1;
+
+        let mut next_non_whitespace = pos;
+        while graphemes
+            .get(next_non_whitespace)
+            .is_some_and(|(_, grapheme)| grapheme.chars().all(char::is_whitespace))
+        {
+            next_non_whitespace += 1;
+        }
+        if graphemes
+            .get(next_non_whitespace)
+            .is_some_and(|(_, grapheme)| grapheme.chars().any(is_emoji_like))
+        {
+            pos = next_non_whitespace;
+        } else {
+            break;
+        }
+    }
+
+    (emoji_count > 0).then_some((title[..prefix_end].to_string(), &title[prefix_end..]))
+}
+
+fn is_emoji_like(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{1F000}'..='\u{1FAFF}'
+            | '\u{2600}'..='\u{27BF}'
+            | '\u{FE0F}'
+    )
 }
 
 fn five_hour_status_window(

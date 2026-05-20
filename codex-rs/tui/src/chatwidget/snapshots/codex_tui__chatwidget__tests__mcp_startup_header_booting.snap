@@ -6,4 +6,4 @@ expression: normalized_backend_snapshot(terminal.backend())
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "
-"  gpt-5.5 default · /tmp/project                                v55 · MCP: 0/1  "
+"  gpt-5.5 default · /tmp/project                                v63 · MCP: 0/1  "

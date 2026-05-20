@@ -76,6 +76,10 @@ impl App {
         cell: &dyn HistoryCell,
         width: u16,
     ) -> Vec<Line<'static>> {
+        if self.condensed_transcript_view && !cell.show_in_condensed_main_view() {
+            return Vec::new();
+        }
+
         let mut display =
             cell.display_lines_for_mode(width, self.chat_widget.history_render_mode());
         if !display.is_empty() && !cell.is_stream_continuation() {
@@ -127,13 +131,12 @@ impl App {
     /// defer terminal writes until the replay is complete and reuse the resize-reflow tail renderer
     /// so only the rows the terminal would retain are formatted and inserted.
     pub(super) fn begin_thread_switch_history_replay_buffer(&mut self) {
-        if self.terminal_resize_reflow_enabled()
-            && self.resize_reflow_max_rows().is_some()
-            && self.overlay.is_none()
-        {
+        if self.overlay.is_none() {
             self.initial_history_replay_buffer = Some(InitialHistoryReplayBuffer {
                 retained_lines: VecDeque::new(),
-                render_from_transcript_tail: true,
+                render_from_transcript_tail: self.terminal_resize_reflow_enabled()
+                    && self.resize_reflow_max_rows().is_some(),
+                defer_terminal_writes: true,
             });
         }
     }
@@ -187,6 +190,8 @@ impl App {
         if let Some(buffer) = &mut self.initial_history_replay_buffer {
             if let Some(max_rows) = max_rows {
                 Self::buffer_initial_history_replay_display_lines(buffer, display, max_rows);
+            } else if buffer.defer_terminal_writes {
+                buffer.retained_lines.extend(display);
             } else if self.overlay.is_some() {
                 self.deferred_history_lines.extend(display);
             } else {
@@ -462,6 +467,9 @@ impl App {
         while start > 0 {
             start -= 1;
             let cell = self.transcript_cells[start].clone();
+            if self.condensed_transcript_view && !cell.show_in_condensed_main_view() {
+                continue;
+            }
             let lines = cell.display_lines_for_mode(width, self.chat_widget.history_render_mode());
             rendered_rows += lines.len();
             cell_displays.push_front(ReflowCellDisplay {
@@ -481,6 +489,9 @@ impl App {
         {
             start -= 1;
             let cell = self.transcript_cells[start].clone();
+            if self.condensed_transcript_view && !cell.show_in_condensed_main_view() {
+                continue;
+            }
             cell_displays.push_front(ReflowCellDisplay {
                 lines: cell.display_lines_for_mode(width, self.chat_widget.history_render_mode()),
                 is_stream_continuation: cell.is_stream_continuation(),
@@ -510,6 +521,36 @@ impl App {
         ReflowRenderResult {
             lines: reflowed_lines,
         }
+    }
+
+    pub(super) fn render_transcript_lines_for_scrollback_replay(
+        &mut self,
+        width: u16,
+    ) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        let mut has_emitted_history_lines = false;
+        for cell in &self.transcript_cells {
+            if self.condensed_transcript_view && !cell.show_in_condensed_main_view() {
+                continue;
+            }
+            let display =
+                cell.display_lines_for_mode(width, self.chat_widget.history_render_mode());
+            if !display.is_empty() && !cell.is_stream_continuation() {
+                if has_emitted_history_lines {
+                    lines.push(Line::from(""));
+                } else {
+                    has_emitted_history_lines = true;
+                }
+            }
+            lines.extend(display);
+        }
+        lines
+    }
+
+    pub(super) fn toggle_condensed_transcript_view(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        self.condensed_transcript_view = !self.condensed_transcript_view;
+        self.reflow_transcript_now(tui)?;
+        Ok(())
     }
 
     /// Return whether current transcript state should be treated as stream-time resize state.

@@ -56,6 +56,25 @@ impl ChatWidget {
                 modifiers,
                 kind: KeyEventKind::Press,
                 ..
+            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'x') => {
+                let discard_queued_message = self
+                    .chat_keymap
+                    .discard_queued_message
+                    .is_pressed(key_event)
+                    && self.has_queued_follow_up_messages()
+                    && self.bottom_pane.no_modal_or_popup_active();
+                if !discard_queued_message {
+                    if !self.composer_is_empty() {
+                        self.clear_composer_draft();
+                    }
+                    return;
+                }
+            }
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
             } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'d') => {
                 if self.on_ctrl_d() {
                     return;
@@ -99,6 +118,38 @@ impl ChatWidget {
             _ => {}
         }
 
+        if key_event.kind == KeyEventKind::Press
+            && self
+                .chat_keymap
+                .rename_current_session
+                .is_pressed(key_event)
+            && self.bottom_pane.no_modal_or_popup_active()
+        {
+            self.session_telemetry
+                .counter("codex.thread.rename", /*inc*/ 1, &[]);
+            self.show_rename_prompt();
+            self.request_redraw();
+            return;
+        }
+
+        if key_event.kind == KeyEventKind::Press
+            && self
+                .chat_keymap
+                .retitle_current_session
+                .is_pressed(key_event)
+            && self.bottom_pane.no_modal_or_popup_active()
+        {
+            if self.bottom_pane.is_task_running() {
+                self.add_to_history(history_cell::new_error_event(
+                    "'/retitle' is disabled while a task is in progress.".to_string(),
+                ));
+            } else {
+                self.request_retitle_suggestion();
+            }
+            self.request_redraw();
+            return;
+        }
+
         if multi_agents::open_agent_picker_shortcut_matches(key_event)
             && self.agent_picker_shortcut_may_claim_key_event(key_event)
             && self.bottom_pane.no_modal_or_popup_active()
@@ -116,6 +167,35 @@ impl ChatWidget {
         {
             if let Some(user_message) = self.pop_latest_queued_user_message() {
                 self.restore_user_message_to_composer(user_message);
+                self.refresh_pending_input_preview();
+                self.request_redraw();
+            }
+            return;
+        }
+
+        if key_event.kind == KeyEventKind::Press
+            && self
+                .chat_keymap
+                .discard_queued_message
+                .is_pressed(key_event)
+            && self.has_queued_follow_up_messages()
+            && self.bottom_pane.no_modal_or_popup_active()
+        {
+            if self.pop_latest_queued_user_message().is_some() {
+                self.refresh_pending_input_preview();
+                self.request_redraw();
+            }
+            return;
+        }
+
+        if key_event.kind == KeyEventKind::Press
+            && self.chat_keymap.steer_queued_message.is_pressed(key_event)
+            && self.has_queued_follow_up_messages()
+            && self.turn_lifecycle.agent_turn_running
+            && self.bottom_pane.no_modal_or_popup_active()
+        {
+            if let Some(user_message) = self.pop_latest_queued_user_message() {
+                self.submit_user_message(user_message);
                 self.refresh_pending_input_preview();
                 self.request_redraw();
             }
@@ -207,6 +287,11 @@ impl ChatWidget {
         self.bottom_pane.set_footer_hint_override(items);
     }
 
+    #[cfg(test)]
+    pub(crate) fn footer_hint_override_items(&self) -> Option<Vec<(String, String)>> {
+        self.bottom_pane.footer_hint_override_items()
+    }
+
     pub(crate) fn show_edit_last_message_hint(&mut self, target: String) {
         self.bottom_pane.set_footer_hint_override(Some(vec![
             ("Editing".to_string(), target),
@@ -232,6 +317,10 @@ impl ChatWidget {
 
     pub(crate) fn no_modal_or_popup_active(&self) -> bool {
         self.bottom_pane.no_modal_or_popup_active()
+    }
+
+    pub(crate) fn is_task_running(&self) -> bool {
+        self.bottom_pane.is_task_running()
     }
 
     pub(crate) fn can_launch_external_editor(&self) -> bool {
@@ -278,6 +367,28 @@ impl ChatWidget {
         self.copy_last_agent_markdown_with(crate::clipboard_copy::copy_to_clipboard);
     }
 
+    /// Copy the current thread ID to the system clipboard.
+    pub(crate) fn copy_thread_id(&mut self) {
+        self.copy_thread_id_with(crate::clipboard_copy::copy_to_clipboard);
+    }
+
+    /// Copy the most recent user request text to the system clipboard.
+    pub(crate) fn copy_last_user_request_text(&mut self, request: Option<String>) {
+        self.copy_last_user_request_text_with(request, crate::clipboard_copy::copy_to_clipboard);
+    }
+
+    /// Return recent copyable agent responses, newest first.
+    pub(crate) fn recent_agent_markdowns(&self, limit: usize) -> Vec<String> {
+        self.transcript
+            .agent_turn_markdowns
+            .iter()
+            .rev()
+            .map(|entry| entry.markdown.clone())
+            .filter(|markdown| !markdown.is_empty())
+            .take(limit)
+            .collect()
+    }
+
     pub(crate) fn truncate_agent_copy_history_to_user_turn_count(
         &mut self,
         user_turn_count: usize,
@@ -316,6 +427,63 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    /// Inner implementation with an injectable clipboard backend for testing.
+    pub(crate) fn copy_thread_id_with(
+        &mut self,
+        copy_fn: impl FnOnce(&str) -> Result<Option<crate::clipboard_copy::ClipboardLease>, String>,
+    ) {
+        match self.thread_id {
+            Some(thread_id) => {
+                let thread_id = thread_id.to_string();
+                match copy_fn(&thread_id) {
+                    Ok(lease) => {
+                        self.clipboard_lease = lease;
+                        self.add_to_history(history_cell::new_info_event(
+                            format!("Copied thread ID to clipboard ({thread_id})"),
+                            /*hint*/ None,
+                        ));
+                    }
+                    Err(error) => self.add_to_history(history_cell::new_error_event(format!(
+                        "Copy failed: {error}"
+                    ))),
+                }
+            }
+            None => self.add_to_history(history_cell::new_error_event(
+                "Thread ID is unavailable before the session starts.".into(),
+            )),
+        }
+        self.request_redraw();
+    }
+
+    /// Inner implementation with an injectable clipboard backend for testing.
+    pub(crate) fn copy_last_user_request_text_with(
+        &mut self,
+        request: Option<String>,
+        copy_fn: impl FnOnce(&str) -> Result<Option<crate::clipboard_copy::ClipboardLease>, String>,
+    ) {
+        match request {
+            Some(request) if !request.is_empty() => match copy_fn(&request) {
+                Ok(lease) => {
+                    self.clipboard_lease = lease;
+                    self.add_to_history(history_cell::new_info_event(
+                        "Copied last request to clipboard".into(),
+                        /*hint*/ None,
+                    ));
+                }
+                Err(error) => self.add_to_history(history_cell::new_error_event(format!(
+                    "Copy failed: {error}"
+                ))),
+            },
+            Some(_) => self.add_to_history(history_cell::new_error_event(
+                "Last request has no text to copy".into(),
+            )),
+            None => self.add_to_history(history_cell::new_error_event(
+                "No user request to copy".into(),
+            )),
+        }
+        self.request_redraw();
+    }
+
     #[cfg(test)]
     pub(crate) fn last_agent_markdown_text(&self) -> Option<&str> {
         self.transcript.last_agent_markdown.as_deref()
@@ -349,6 +517,18 @@ impl ChatWidget {
         );
 
         self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn rename_thread_from_text(&mut self, name: &str) -> bool {
+        if !self.ensure_thread_rename_allowed() {
+            return false;
+        }
+        let Some(name) = crate::legacy_core::util::normalize_thread_name(name) else {
+            self.add_error_message("Thread name cannot be empty.".to_string());
+            return false;
+        };
+        self.app_event_tx.set_thread_name(name);
+        true
     }
 
     pub(super) fn ensure_thread_rename_allowed(&mut self) -> bool {

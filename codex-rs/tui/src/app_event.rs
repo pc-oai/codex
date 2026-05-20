@@ -33,6 +33,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
 
 use crate::app_command::AppCommand;
+use crate::app_server_session::AppServerStartedThread;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
@@ -49,6 +50,7 @@ use codex_realtime_webrtc::RealtimeWebrtcEvent;
 use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
 
 use crate::history_cell::HistoryCell;
+use crate::thread_name_suggestion::ThreadNameSuggestionKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RealtimeAudioDeviceKind {
@@ -139,6 +141,12 @@ pub(crate) enum AppEvent {
     OpenAgentPicker,
     /// Switch the active thread to the selected agent.
     SelectAgentThread(ThreadId),
+    /// Cache a resume snapshot fetched off the UI path for a nearby loaded subagent.
+    LoadedSubagentSwitchPrewarmed {
+        primary_thread_id: ThreadId,
+        thread_id: ThreadId,
+        result: Box<Result<AppServerStartedThread, String>>,
+    },
 
     /// Fork the current thread into a transient side conversation.
     StartSide {
@@ -150,6 +158,20 @@ pub(crate) enum AppEvent {
     StartSubagent {
         parent_thread_id: ThreadId,
         prompt: String,
+    },
+
+    /// Ask an ephemeral fork to generate thread-title metadata off the main transcript.
+    GenerateThreadNameSuggestion {
+        parent_thread_id: ThreadId,
+        kind: ThreadNameSuggestionKind,
+        prompt: String,
+        current_name: Option<String>,
+    },
+
+    /// Finish an out-of-band thread-title metadata request after its ephemeral turn completes.
+    ThreadNameSuggestionFinished {
+        child_thread_id: ThreadId,
+        result: Result<String, String>,
     },
 
     /// Submit an op to the specified thread, regardless of current focus.
@@ -215,6 +237,12 @@ pub(crate) enum AppEvent {
     /// Request to restart the current session in a fresh Codex process.
     ReloadCurrentSession,
 
+    /// Toggle the main-view transcript between full history and message-only scrollback.
+    ToggleCondensedTranscriptView,
+
+    /// Copy the most recent user request in the visible transcript.
+    CopyLastRequest,
+
     /// Request to exit the application.
     ///
     /// Use `ShutdownFirst` for user-initiated quits so core cleanup runs and the
@@ -222,6 +250,9 @@ pub(crate) enum AppEvent {
     /// escape hatch that skips shutdown and may drop in-flight work (e.g.,
     /// background tasks, rollout flush, or child process cleanup).
     Exit(ExitMode),
+
+    /// Delete the current thread and exit the application.
+    DeleteCurrentSessionAndExit,
 
     /// Request app-server account logout, then exit after it succeeds.
     Logout,

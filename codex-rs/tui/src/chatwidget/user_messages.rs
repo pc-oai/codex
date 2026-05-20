@@ -132,6 +132,12 @@ pub(crate) struct ThreadInputState {
     pub(super) agent_turn_running: bool,
 }
 
+impl ThreadInputState {
+    pub(crate) fn agent_turn_running(&self) -> bool {
+        self.agent_turn_running
+    }
+}
+
 impl From<String> for UserMessage {
     fn from(text: String) -> Self {
         Self {

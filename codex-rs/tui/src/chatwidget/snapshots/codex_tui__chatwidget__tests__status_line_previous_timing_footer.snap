@@ -8,4 +8,4 @@ expression: normalized_backend_snapshot(terminal.backend())
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "
-"                                                            v55 · 800ms  ≋3ms  "
+"                                                            v63 · 800ms  ≋3ms  "

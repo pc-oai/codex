@@ -1045,9 +1045,11 @@ async fn alt_e_edits_most_recent_queued_message() {
         .set_queued_message_edit_binding(chat.queued_message_edit_hint_binding);
 
     chat.bottom_pane.set_task_running(/*running*/ true);
-    chat.queued_user_messages
+    chat.input_queue
+        .queued_user_messages
         .push_back(UserMessage::from("first queued".to_string()).into());
-    chat.queued_user_messages
+    chat.input_queue
+        .queued_user_messages
         .push_back(UserMessage::from("second queued".to_string()).into());
     chat.refresh_pending_input_preview();
 
@@ -1057,9 +1059,9 @@ async fn alt_e_edits_most_recent_queued_message() {
         chat.bottom_pane.composer_text(),
         "second queued".to_string()
     );
-    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().text,
+        chat.input_queue.queued_user_messages.front().unwrap().text,
         "first queued"
     );
 }
@@ -1075,14 +1077,15 @@ async fn ctrl_e_edits_most_recent_queued_message_at_input_end() {
     chat.bottom_pane.set_task_running(/*running*/ true);
     chat.set_composer_text("draft".to_string(), Vec::new(), Vec::new());
     chat.set_composer_cursor("draft".len());
-    chat.queued_user_messages
+    chat.input_queue
+        .queued_user_messages
         .push_back(UserMessage::from("queued".to_string()).into());
     chat.refresh_pending_input_preview();
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
 
     assert_eq!(chat.bottom_pane.composer_text(), "queued".to_string());
-    assert!(chat.queued_user_messages.is_empty());
+    assert!(chat.input_queue.queued_user_messages.is_empty());
 }
 
 #[tokio::test]
@@ -1096,14 +1099,15 @@ async fn ctrl_e_keeps_composer_draft_when_cursor_is_inside_input_with_queued_mes
     chat.bottom_pane.set_task_running(/*running*/ true);
     chat.set_composer_text("draft".to_string(), Vec::new(), Vec::new());
     chat.set_composer_cursor(/*pos*/ 1);
-    chat.queued_user_messages
+    chat.input_queue
+        .queued_user_messages
         .push_back(UserMessage::from("queued".to_string()).into());
     chat.refresh_pending_input_preview();
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
 
     assert_eq!(chat.bottom_pane.composer_text(), "draft".to_string());
-    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
 }
 
 #[tokio::test]
@@ -1111,24 +1115,31 @@ async fn alt_down_steers_most_recent_queued_message() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.chat_keymap.steer_queued_message = vec![crate::key_hint::alt(KeyCode::Down)];
     chat.thread_id = Some(ThreadId::new());
-    chat.agent_turn_running = true;
+    chat.turn_lifecycle.agent_turn_running = true;
     chat.bottom_pane.set_task_running(/*running*/ true);
-    chat.queued_user_messages
+    chat.input_queue
+        .queued_user_messages
         .push_back(UserMessage::from("first queued".to_string()).into());
-    chat.queued_user_messages
+    chat.input_queue
+        .queued_user_messages
         .push_back(UserMessage::from("second queued".to_string()).into());
     chat.refresh_pending_input_preview();
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
 
-    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().text,
+        chat.input_queue.queued_user_messages.front().unwrap().text,
         "first queued"
     );
-    assert_eq!(chat.pending_steers.len(), 1);
+    assert_eq!(chat.input_queue.pending_steers.len(), 1);
     assert_eq!(
-        chat.pending_steers.front().unwrap().user_message.text,
+        chat.input_queue
+            .pending_steers
+            .front()
+            .unwrap()
+            .user_message
+            .text,
         "second queued"
     );
 }
@@ -1138,18 +1149,24 @@ async fn alt_enter_steers_most_recent_queued_message_while_one_is_queued() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.chat_keymap.steer_queued_message = vec![crate::key_hint::alt(KeyCode::Enter)];
     chat.thread_id = Some(ThreadId::new());
-    chat.agent_turn_running = true;
+    chat.turn_lifecycle.agent_turn_running = true;
     chat.bottom_pane.set_task_running(/*running*/ true);
-    chat.queued_user_messages
+    chat.input_queue
+        .queued_user_messages
         .push_back(UserMessage::from("queued".to_string()).into());
     chat.refresh_pending_input_preview();
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
 
-    assert!(chat.queued_user_messages.is_empty());
-    assert_eq!(chat.pending_steers.len(), 1);
+    assert!(chat.input_queue.queued_user_messages.is_empty());
+    assert_eq!(chat.input_queue.pending_steers.len(), 1);
     assert_eq!(
-        chat.pending_steers.front().unwrap().user_message.text,
+        chat.input_queue
+            .pending_steers
+            .front()
+            .unwrap()
+            .user_message
+            .text,
         "queued"
     );
 }
@@ -1158,20 +1175,22 @@ async fn alt_enter_steers_most_recent_queued_message_while_one_is_queued() {
 async fn ctrl_x_discards_most_recent_queued_message() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.chat_keymap.discard_queued_message = vec![crate::key_hint::ctrl(KeyCode::Char('x'))];
-    chat.queued_user_messages
+    chat.input_queue
+        .queued_user_messages
         .push_back(UserMessage::from("first queued".to_string()).into());
-    chat.queued_user_messages
+    chat.input_queue
+        .queued_user_messages
         .push_back(UserMessage::from("second queued".to_string()).into());
     chat.refresh_pending_input_preview();
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL));
 
-    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().text,
+        chat.input_queue.queued_user_messages.front().unwrap().text,
         "first queued"
     );
-    assert!(chat.pending_steers.is_empty());
+    assert!(chat.input_queue.pending_steers.is_empty());
     assert!(chat.bottom_pane.composer_text().is_empty());
 }
 

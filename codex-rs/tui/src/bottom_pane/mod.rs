@@ -134,6 +134,7 @@ pub(crate) use status_surface_preview::StatusSurfacePreviewData;
 pub(crate) use status_surface_preview::StatusSurfacePreviewItem;
 pub(crate) use title_setup::TerminalTitleItem;
 pub(crate) use title_setup::TerminalTitleSetupView;
+pub(crate) use title_setup::compact_title_items_for_thread_title;
 #[cfg(test)]
 pub(crate) use title_setup::preview_line_for_title_items;
 mod paste_burst;
@@ -446,6 +447,16 @@ impl BottomPane {
     /// binding that `ChatWidget` actually listens for.
     pub(crate) fn set_queued_message_edit_binding(&mut self, binding: Option<KeyBinding>) {
         self.pending_input_preview.set_edit_binding(binding);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_queued_message_discard_binding(&mut self, binding: Option<KeyBinding>) {
+        self.pending_input_preview.set_discard_binding(binding);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_queued_message_steer_binding(&mut self, binding: Option<KeyBinding>) {
+        self.pending_input_preview.set_steer_binding(binding);
         self.request_redraw();
     }
 
@@ -888,6 +899,11 @@ impl BottomPane {
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
         self.composer.set_footer_hint_override(items);
         self.request_redraw();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn footer_hint_override_items(&self) -> Option<Vec<(String, String)>> {
+        self.composer.footer_hint_override_items()
     }
 
     /// Applies the externally decided Plan-mode nudge visibility to the footer presentation.
@@ -1746,6 +1762,10 @@ impl BottomPane {
         }
     }
 
+    pub(crate) fn active_agent_label(&self) -> Option<&str> {
+        self.composer.active_agent_label()
+    }
+
     pub(crate) fn set_side_conversation_context_label(&mut self, label: Option<String>) {
         if self.composer.set_side_conversation_context_label(label) {
             self.request_redraw();
@@ -2025,7 +2045,10 @@ mod tests {
         });
         pane.insert_str("draft");
 
-        pane.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        pane.handle_key_event(KeyEvent::new(
+            KeyCode::Char('r'),
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+        ));
         assert!(pane.composer.popup_active());
 
         assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());

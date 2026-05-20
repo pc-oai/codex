@@ -238,7 +238,7 @@ impl App {
     /// Thread switches reconstruct the `ChatWidget`, which loses the `collab_agent_metadata` map.
     /// This helper copies every known nickname/role from `AgentNavigationState` into the
     /// replacement widget so that replayed collab items render agent names immediately.
-    pub(super) fn replace_chat_widget(&mut self, mut chat_widget: ChatWidget) {
+    pub(super) async fn replace_chat_widget(&mut self, mut chat_widget: ChatWidget) {
         // Transfer the last-written terminal title to the replacement widget
         // so it knows what OSC title is currently displayed. Without this, the
         // new widget would redundantly clear and rewrite the same title, causing
@@ -255,7 +255,7 @@ impl App {
             );
         }
         self.chat_widget = chat_widget;
-        self.sync_active_agent_label();
+        self.refresh_agent_activity_label().await;
     }
 
     pub(super) async fn select_agent_thread(
@@ -268,9 +268,10 @@ impl App {
             return Ok(());
         }
 
-        if !self
-            .refresh_agent_picker_thread_liveness(app_server, thread_id)
-            .await
+        if self.should_check_agent_liveness_before_switch(thread_id)
+            && !self
+                .refresh_agent_picker_thread_liveness(app_server, thread_id)
+                .await
         {
             self.chat_widget
                 .add_error_message(format!("Agent thread {thread_id} is no longer available."));
@@ -326,6 +327,21 @@ impl App {
             &mut snapshot,
         )
         .await;
+        let snapshot_keeps_terminal_progress =
+            Self::thread_switch_snapshot_keeps_terminal_progress(&snapshot);
+        let transferred_terminal_progress = if snapshot_keeps_terminal_progress {
+            self.chat_widget.take_managed_terminal_progress()
+        } else {
+            self.chat_widget
+                .clear_managed_terminal_progress()
+                .unwrap_or_else(|err| {
+                    tracing::debug!(
+                        error = %err,
+                        "failed to clear terminal progress bar before idle thread switch"
+                    );
+                });
+            false
+        };
 
         self.active_thread_id = Some(thread_id);
         self.active_thread_rx = Some(receiver);
@@ -335,7 +351,12 @@ impl App {
             self.config.clone(),
             /*initial_user_message*/ None,
         );
-        self.replace_chat_widget(ChatWidget::new_with_app_event(init));
+        self.replace_chat_widget(ChatWidget::new_with_app_event(init))
+            .await;
+        if transferred_terminal_progress {
+            self.chat_widget
+                .inherit_managed_terminal_progress(transferred_terminal_progress);
+        }
 
         self.reset_for_thread_switch(tui)?;
         self.replay_thread_snapshot(snapshot, !is_replay_only);
@@ -355,12 +376,30 @@ impl App {
         Ok(())
     }
 
+    pub(super) fn thread_switch_snapshot_keeps_terminal_progress(
+        snapshot: &ThreadEventSnapshot,
+    ) -> bool {
+        snapshot
+            .input_state
+            .as_ref()
+            .is_some_and(ThreadInputState::agent_turn_running)
+            || snapshot
+                .turns
+                .iter()
+                .rev()
+                .any(|turn| matches!(turn.status, TurnStatus::InProgress))
+    }
+
     pub(super) fn should_attach_live_thread_for_selection(&self, thread_id: ThreadId) -> bool {
         !self.thread_event_channels.contains_key(&thread_id)
             && self
                 .agent_navigation
                 .get(&thread_id)
                 .is_none_or(|entry| !entry.is_closed)
+    }
+
+    pub(super) fn should_check_agent_liveness_before_switch(&self, thread_id: ThreadId) -> bool {
+        !self.thread_event_channels.contains_key(&thread_id)
     }
 
     pub(super) fn reset_for_thread_switch(&mut self, tui: &mut tui::Tui) -> Result<()> {
@@ -385,7 +424,7 @@ impl App {
         Ok(())
     }
 
-    pub(super) fn reset_thread_event_state(&mut self) {
+    pub(super) async fn reset_thread_event_state(&mut self) {
         self.abort_all_thread_event_listeners();
         self.thread_event_channels.clear();
         self.agent_navigation.clear();
@@ -398,7 +437,7 @@ impl App {
         self.pending_primary_events.clear();
         self.pending_app_server_requests.clear();
         self.chat_widget.set_pending_thread_approvals(Vec::new());
-        self.sync_active_agent_label();
+        self.refresh_agent_activity_label().await;
     }
 
     pub(super) async fn start_fresh_session_with_summary_hint(
@@ -479,13 +518,14 @@ impl App {
         // Initial messages are for freshly attached primary threads only. Thread switches and
         // resume/fork flows pass `None` so they cannot replay old history and then auto-submit a new
         // user turn by accident.
-        self.reset_thread_event_state();
+        self.reset_thread_event_state().await;
         let init = self.chatwidget_init_for_forked_or_resumed_thread(
             tui,
             self.config.clone(),
             initial_user_message,
         );
-        self.replace_chat_widget(ChatWidget::new_with_app_event(init));
+        self.replace_chat_widget(ChatWidget::new_with_app_event(init))
+            .await;
         self.enqueue_primary_thread_session(started.session, started.turns)
             .await?;
         self.backfill_loaded_subagent_threads(app_server).await;
@@ -557,8 +597,110 @@ impl App {
                 /*is_closed*/ false,
             );
         }
+        self.refresh_agent_activity_label().await;
+        self.prewarm_loaded_subagent_switch_targets(app_server);
 
         !had_read_error
+    }
+
+    pub(super) fn prewarm_loaded_subagent_switch_targets(&self, app_server: &AppServerSession) {
+        let Some(primary_thread_id) = self.primary_thread_id else {
+            return;
+        };
+        let target_thread_ids = self.loaded_subagent_switch_prewarm_targets();
+        if target_thread_ids.is_empty() {
+            return;
+        }
+
+        let request_handle = app_server.request_handle();
+        let config = self.config.clone();
+        let thread_params_mode = if app_server.uses_remote_workspace() {
+            crate::app_server_session::ThreadParamsMode::Remote
+        } else {
+            crate::app_server_session::ThreadParamsMode::Embedded
+        };
+        let remote_cwd_override = app_server
+            .remote_cwd_override()
+            .map(std::path::Path::to_path_buf);
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            for thread_id in target_thread_ids {
+                let result = AppServerSession::resume_thread_with_request_handle(
+                    request_handle.clone(),
+                    config.clone(),
+                    thread_id,
+                    thread_params_mode,
+                    remote_cwd_override.clone(),
+                )
+                .await
+                .map_err(|err| err.to_string());
+                app_event_tx.send(AppEvent::LoadedSubagentSwitchPrewarmed {
+                    primary_thread_id,
+                    thread_id,
+                    result: Box::new(result),
+                });
+            }
+        });
+    }
+
+    pub(super) fn loaded_subagent_switch_prewarm_targets(&self) -> Vec<ThreadId> {
+        let current_thread_id = self.current_displayed_thread_id();
+        let mut target_thread_ids = Vec::new();
+        for direction in [
+            AgentNavigationDirection::Next,
+            AgentNavigationDirection::Previous,
+        ] {
+            let Some(thread_id) = self
+                .agent_navigation
+                .adjacent_thread_id(current_thread_id, direction)
+            else {
+                continue;
+            };
+            if self.should_attach_live_thread_for_selection(thread_id)
+                && !target_thread_ids.contains(&thread_id)
+            {
+                target_thread_ids.push(thread_id);
+            }
+        }
+        target_thread_ids
+    }
+
+    pub(super) async fn cache_loaded_subagent_switch_prewarm(
+        &mut self,
+        primary_thread_id: ThreadId,
+        thread_id: ThreadId,
+        result: Result<AppServerStartedThread, String>,
+    ) {
+        if self.primary_thread_id != Some(primary_thread_id)
+            || self.active_thread_id == Some(thread_id)
+            || self.agent_navigation.get(&thread_id).is_none()
+        {
+            return;
+        }
+
+        let started = match result {
+            Ok(started) => started,
+            Err(err) => {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    error = %err,
+                    "failed to prewarm loaded subagent switch target"
+                );
+                return;
+            }
+        };
+        if started.session.thread_id != thread_id {
+            tracing::warn!(
+                expected_thread_id = %thread_id,
+                resumed_thread_id = %started.session.thread_id,
+                "ignoring mismatched loaded subagent switch prewarm"
+            );
+            return;
+        }
+
+        let channel = self.ensure_thread_channel(thread_id);
+        let mut store = channel.store.lock().await;
+        store.set_session(started.session, started.turns);
     }
 
     /// Returns the adjacent thread id for keyboard navigation, backfilling from the server if the
@@ -592,6 +734,50 @@ impl App {
         }
         self.agent_navigation
             .adjacent_thread_id(self.current_displayed_thread_id(), direction)
+    }
+
+    pub(super) async fn adjacent_thread_id_for_switch_shortcut(
+        &mut self,
+        app_server: &mut AppServerSession,
+        direction: AgentNavigationDirection,
+    ) -> Option<ThreadId> {
+        let thread_id = self
+            .adjacent_thread_id_with_backfill(app_server, direction)
+            .await;
+        if thread_id.is_none() {
+            self.chat_widget.add_info_message(
+                "No other agents available to switch to.".to_string(),
+                /*hint*/ None,
+            );
+        }
+        thread_id
+    }
+
+    pub(super) async fn refresh_agent_activity_label(&mut self) {
+        let working_subagents = self.working_subagent_count().await;
+        let label = self.agent_navigation.active_agent_activity_label(
+            self.current_displayed_thread_id(),
+            self.primary_thread_id,
+            working_subagents,
+        );
+        self.chat_widget.set_active_agent_label(label);
+        self.sync_side_thread_ui();
+    }
+
+    async fn working_subagent_count(&self) -> usize {
+        let mut count = 0usize;
+        for (thread_id, entry) in self.agent_navigation.ordered_threads() {
+            if self.primary_thread_id == Some(thread_id) || entry.is_closed {
+                continue;
+            }
+            let Some(channel) = self.thread_event_channels.get(&thread_id) else {
+                continue;
+            };
+            if channel.store.lock().await.active_turn_id().is_some() {
+                count = count.saturating_add(1);
+            }
+        }
+        count
     }
 
     pub(super) fn fresh_session_config(&self) -> Config {

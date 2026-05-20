@@ -507,6 +507,7 @@ impl App {
             }
             AppCommand::UserTurn {
                 items,
+                rollback_num_turns,
                 cwd,
                 approval_policy,
                 approvals_reviewer,
@@ -597,6 +598,7 @@ impl App {
                         .turn_start(
                             thread_id,
                             items.to_vec(),
+                            *rollback_num_turns,
                             cwd.clone(),
                             *approval_policy,
                             approvals_reviewer,
@@ -633,6 +635,12 @@ impl App {
             AppCommand::SetThreadName { name } => {
                 app_server
                     .thread_set_name(thread_id, name.to_string())
+                    .await?;
+                Ok(true)
+            }
+            AppCommand::SetThreadUserState { user_state } => {
+                app_server
+                    .thread_metadata_update_user_state(thread_id, *user_state)
                     .await?;
                 Ok(true)
             }
@@ -1369,6 +1377,25 @@ impl App {
             ThreadBufferedEvent::Notification(ServerNotification::TurnStarted(_))
                 | ThreadBufferedEvent::Notification(ServerNotification::ThreadTokenUsageUpdated(_))
         );
+        let turn_completed = matches!(
+            &event,
+            ThreadBufferedEvent::Notification(ServerNotification::TurnCompleted(_))
+        );
+        if let ThreadBufferedEvent::Notification(ServerNotification::ThreadRolledBack(notification)) =
+            &event
+            && self.pending_combined_edit_rollback_active()
+        {
+            self.handle_backtrack_rollback_succeeded(notification.num_turns);
+        }
+        if let ThreadBufferedEvent::Notification(ServerNotification::Error(notification)) = &event
+            && matches!(
+                notification.error.codex_error_info,
+                Some(codex_app_server_protocol::CodexErrorInfo::ThreadRollbackFailed)
+            )
+            && self.pending_combined_edit_rollback_active()
+        {
+            self.handle_backtrack_rollback_failed();
+        }
         match event {
             ThreadBufferedEvent::Notification(notification) => {
                 self.cache_collab_receiver_threads_for_notification(&notification);
@@ -1390,6 +1417,9 @@ impl App {
             ThreadBufferedEvent::FeedbackSubmission(event) => {
                 self.handle_feedback_thread_event(event);
             }
+        }
+        if turn_completed {
+            self.maybe_edit_last_message_after_interrupt();
         }
         if needs_refresh {
             self.refresh_status_line();

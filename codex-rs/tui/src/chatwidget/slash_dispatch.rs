@@ -13,6 +13,9 @@ use crate::bottom_pane::slash_commands::BuiltinCommandFlags;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
 use crate::bottom_pane::slash_commands::SlashCommandItem;
 use crate::bottom_pane::slash_commands::find_slash_command;
+use crate::thread_name_suggestion::ThreadNameSuggestionKind;
+use crate::thread_name_suggestion::thread_name_is_meaningful;
+use codex_app_server_protocol::ThreadUserState;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {
@@ -38,6 +41,9 @@ const GOAL_USAGE: &str = "Usage: /goal <objective>";
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
 const SUBAGENT_USAGE: &str = "Usage: /subagent <task>";
+pub(super) const RETITLE_PROMPT: &str = "Based on the entire conversation so far, return one concise thread title only. Use plain text, no quotes, no markdown, no explanation, and no leading emoji.";
+pub(super) const EMOJI_PROMPT: &str = "Based on the entire conversation so far, return only one to three leading emoji that would make this thread easy to recognize. Use your judgment about how many are useful. No words, no quotes, no markdown, no explanation.";
+pub(super) const EMOJI_WITH_TITLE_PROMPT: &str = "Based on the entire conversation so far, return one concise thread title with one to three leading emoji that would make this thread easy to recognize. Use your judgment about how many are useful. Use plain text, no quotes, no markdown, and no explanation.";
 
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
@@ -124,6 +130,40 @@ impl ChatWidget {
         self.request_side_conversation(parent_thread_id, /*user_message*/ None);
     }
 
+    fn request_thread_name_suggestion(&mut self, kind: ThreadNameSuggestionKind, prompt: &str) {
+        if !self.ensure_thread_rename_allowed() {
+            return;
+        }
+        let Some(parent_thread_id) = self.thread_id else {
+            self.add_error_message(
+                "Thread title suggestions are unavailable before the session starts.".to_string(),
+            );
+            return;
+        };
+        self.app_event_tx
+            .send(AppEvent::GenerateThreadNameSuggestion {
+                parent_thread_id,
+                kind,
+                prompt: prompt.to_string(),
+                current_name: self.thread_name.clone(),
+            });
+    }
+
+    pub(crate) fn request_retitle_suggestion(&mut self) {
+        self.request_thread_name_suggestion(ThreadNameSuggestionKind::Retitle, RETITLE_PROMPT);
+    }
+
+    pub(crate) fn request_emoji_suggestion(&mut self) {
+        if thread_name_is_meaningful(self.thread_name.as_deref()) {
+            self.request_thread_name_suggestion(ThreadNameSuggestionKind::Emoji, EMOJI_PROMPT);
+        } else {
+            self.request_thread_name_suggestion(
+                ThreadNameSuggestionKind::EmojiWithTitle,
+                EMOJI_WITH_TITLE_PROMPT,
+            );
+        }
+    }
+
     fn emit_raw_output_mode_changed(&self, enabled: bool) {
         self.app_event_tx
             .send(AppEvent::RawOutputModeChanged { enabled });
@@ -202,6 +242,10 @@ impl ChatWidget {
                 }
                 self.app_event_tx.compact();
             }
+            SlashCommand::Condensed => {
+                self.app_event_tx
+                    .send(AppEvent::ToggleCondensedTranscriptView);
+            }
             SlashCommand::Review => {
                 self.open_review_popup();
             }
@@ -210,8 +254,29 @@ impl ChatWidget {
                     .counter("codex.thread.rename", /*inc*/ 1, &[]);
                 self.show_rename_prompt();
             }
+            SlashCommand::Park => {
+                self.app_event_tx
+                    .set_thread_user_state(ThreadUserState::Parked);
+            }
+            SlashCommand::Done => {
+                self.app_event_tx
+                    .set_thread_user_state(ThreadUserState::Done);
+            }
+            SlashCommand::Active => {
+                self.app_event_tx
+                    .set_thread_user_state(ThreadUserState::Active);
+            }
+            SlashCommand::Retitle => {
+                self.request_retitle_suggestion();
+            }
+            SlashCommand::Emoji => {
+                self.request_emoji_suggestion();
+            }
             SlashCommand::Model => {
                 self.open_model_popup();
+            }
+            SlashCommand::Effort => {
+                self.open_current_model_reasoning_popup();
             }
             SlashCommand::Realtime => {
                 if !self.realtime_conversation_enabled() {
@@ -335,11 +400,21 @@ impl ChatWidget {
             SlashCommand::Quit | SlashCommand::Exit => {
                 self.request_quit_without_confirmation();
             }
+            SlashCommand::Delete => {
+                self.app_event_tx
+                    .send(AppEvent::DeleteCurrentSessionAndExit);
+            }
             SlashCommand::Logout => {
                 self.app_event_tx.send(AppEvent::Logout);
             }
+            SlashCommand::Id => {
+                self.copy_thread_id();
+            }
             SlashCommand::Copy => {
                 self.copy_last_agent_markdown();
+            }
+            SlashCommand::CopyLastRequest => {
+                self.app_event_tx.send(AppEvent::CopyLastRequest);
             }
             SlashCommand::Raw => {
                 let enabled = self.toggle_raw_output_mode_and_notify();
@@ -965,11 +1040,16 @@ impl ChatWidget {
             | SlashCommand::Apps
             | SlashCommand::Plugins
             | SlashCommand::Rollout
+            | SlashCommand::Id
             | SlashCommand::Copy
+            | SlashCommand::CopyLastRequest
             | SlashCommand::Raw
             | SlashCommand::Vim
             | SlashCommand::Diff
             | SlashCommand::Rename
+            | SlashCommand::Park
+            | SlashCommand::Done
+            | SlashCommand::Active
             | SlashCommand::TestApproval => QueueDrain::Continue,
             SlashCommand::Feedback
             | SlashCommand::New
@@ -981,6 +1061,9 @@ impl ChatWidget {
             | SlashCommand::Compact
             | SlashCommand::Review
             | SlashCommand::Model
+            | SlashCommand::Effort
+            | SlashCommand::Retitle
+            | SlashCommand::Emoji
             | SlashCommand::Realtime
             | SlashCommand::Settings
             | SlashCommand::Personality
@@ -999,6 +1082,8 @@ impl ChatWidget {
             | SlashCommand::Memories
             | SlashCommand::Quit
             | SlashCommand::Exit
+            | SlashCommand::Delete
+            | SlashCommand::Condensed
             | SlashCommand::Logout
             | SlashCommand::Mention
             | SlashCommand::Skills

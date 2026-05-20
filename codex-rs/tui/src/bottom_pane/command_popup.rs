@@ -29,6 +29,10 @@ const COMMAND_COLUMN_WIDTH: ColumnWidthConfig = ColumnWidthConfig::new(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum CommandItem {
     Builtin(SlashCommand),
+    BuiltinAlias {
+        name: &'static str,
+        command: SlashCommand,
+    },
     ServiceTier(ServiceTierCommand),
 }
 
@@ -77,11 +81,21 @@ impl CommandPopup {
         // Keep built-in availability in sync with the composer.
         let commands = commands_for_input(flags.into(), &service_tier_commands)
             .into_iter()
-            .filter_map(|command| match command {
-                SlashCommandItem::Builtin(cmd) => (!cmd.command().starts_with("debug")
-                    && cmd != SlashCommand::Apps)
-                    .then_some(CommandItem::Builtin(cmd)),
-                SlashCommandItem::ServiceTier(command) => Some(CommandItem::ServiceTier(command)),
+            .flat_map(|command| match command {
+                SlashCommandItem::Builtin(cmd)
+                    if !cmd.command().starts_with("debug") && cmd != SlashCommand::Apps =>
+                {
+                    std::iter::once(CommandItem::Builtin(cmd))
+                        .chain(
+                            cmd.completion_aliases()
+                                .iter()
+                                .copied()
+                                .map(|name| CommandItem::BuiltinAlias { name, command: cmd }),
+                        )
+                        .collect::<Vec<_>>()
+                }
+                SlashCommandItem::Builtin(_) => Vec::new(),
+                SlashCommandItem::ServiceTier(command) => vec![CommandItem::ServiceTier(command)],
             })
             .collect();
         Self {
@@ -144,7 +158,9 @@ impl CommandPopup {
         let mut out: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
         if filter.is_empty() {
             for command in self.commands.iter() {
-                if matches!(command, CommandItem::Builtin(cmd) if ALIAS_COMMANDS.contains(cmd)) {
+                if matches!(command, CommandItem::BuiltinAlias { .. })
+                    || matches!(command, CommandItem::Builtin(cmd) if ALIAS_COMMANDS.contains(cmd))
+                {
                     continue;
                 }
                 out.push((command.clone(), None));
@@ -164,7 +180,8 @@ impl CommandPopup {
                 let name_lower = name.map(str::to_lowercase);
                 let display_exact = display_lower == filter_lower;
                 let name_exact = name_lower.as_deref() == Some(filter_lower.as_str());
-                if display_exact || name_exact {
+                let alias_item = matches!(&item, CommandItem::BuiltinAlias { .. });
+                if (display_exact || name_exact) && !alias_item {
                     let offset = if display_exact { 0 } else { name_offset };
                     exact.push((item, indices_for(offset)));
                     return;
@@ -181,7 +198,11 @@ impl CommandPopup {
 
         for command in self.commands.iter() {
             let display = command.command();
-            push_match(command.clone(), display, None, 0);
+            let canonical_name = match command {
+                CommandItem::BuiltinAlias { command, .. } => Some(command.command()),
+                CommandItem::Builtin(_) | CommandItem::ServiceTier(_) => None,
+            };
+            push_match(command.clone(), display, canonical_name, 0);
         }
 
         out.extend(exact);
@@ -245,6 +266,7 @@ impl CommandItem {
     pub(crate) fn command(&self) -> &str {
         match self {
             Self::Builtin(cmd) => cmd.command(),
+            Self::BuiltinAlias { name, .. } => name,
             Self::ServiceTier(command) => &command.name,
         }
     }
@@ -252,6 +274,7 @@ impl CommandItem {
     fn description(&self) -> &str {
         match self {
             Self::Builtin(cmd) => cmd.description(),
+            Self::BuiltinAlias { command, .. } => command.description(),
             Self::ServiceTier(command) => &command.description,
         }
     }
@@ -291,6 +314,7 @@ mod tests {
         let matches = popup.filtered_items();
         let has_init = matches.iter().any(|item| match item {
             CommandItem::Builtin(cmd) => cmd.command() == "init",
+            CommandItem::BuiltinAlias { .. } => false,
             CommandItem::ServiceTier(_) => false,
         });
         assert!(
@@ -309,6 +333,9 @@ mod tests {
         let selected = popup.selected_item();
         match selected {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "init"),
+            Some(CommandItem::BuiltinAlias { name, .. }) => {
+                panic!("expected init command, got alias {name}")
+            }
             Some(CommandItem::ServiceTier(command)) => {
                 panic!("expected init command, got service tier {command:?}")
             }
@@ -323,6 +350,9 @@ mod tests {
         let matches = popup.filtered_items();
         match matches.first() {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "model"),
+            Some(CommandItem::BuiltinAlias { name, .. }) => {
+                panic!("expected model command, got alias {name}")
+            }
             Some(CommandItem::ServiceTier(command)) => {
                 panic!("expected model command, got service tier {command:?}")
             }
@@ -373,6 +403,7 @@ mod tests {
             .into_iter()
             .map(|item| match item {
                 CommandItem::Builtin(cmd) => cmd.command().to_string(),
+                CommandItem::BuiltinAlias { name, .. } => name.to_string(),
                 CommandItem::ServiceTier(command) => command.name,
             })
             .collect();
@@ -380,6 +411,7 @@ mod tests {
             cmds,
             vec![
                 "model".to_string(),
+                "m".to_string(),
                 "memories".to_string(),
                 "mention".to_string(),
                 "mcp".to_string()
@@ -397,6 +429,7 @@ mod tests {
             .into_iter()
             .map(|item| match item {
                 CommandItem::Builtin(cmd) => cmd.command().to_string(),
+                CommandItem::BuiltinAlias { name, .. } => name.to_string(),
                 CommandItem::ServiceTier(command) => command.name,
             })
             .collect();
@@ -428,6 +461,7 @@ mod tests {
             .into_iter()
             .map(|item| match item {
                 CommandItem::Builtin(cmd) => cmd.command().to_string(),
+                CommandItem::BuiltinAlias { name, .. } => name.to_string(),
                 CommandItem::ServiceTier(command) => command.name,
             })
             .collect();
@@ -458,6 +492,9 @@ mod tests {
 
         match popup.selected_item() {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "plan"),
+            Some(CommandItem::BuiltinAlias { name, .. }) => {
+                panic!("expected plan command, got alias {name}")
+            }
             Some(CommandItem::ServiceTier(command)) => {
                 panic!("expected plan command, got service tier {command:?}")
             }
@@ -489,6 +526,7 @@ mod tests {
             .into_iter()
             .map(|item| match item {
                 CommandItem::Builtin(cmd) => cmd.command().to_string(),
+                CommandItem::BuiltinAlias { name, .. } => name.to_string(),
                 CommandItem::ServiceTier(command) => command.name,
             })
             .collect();
@@ -519,6 +557,9 @@ mod tests {
 
         match popup.selected_item() {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "personality"),
+            Some(CommandItem::BuiltinAlias { name, .. }) => {
+                panic!("expected personality command, got alias {name}")
+            }
             Some(CommandItem::ServiceTier(command)) => {
                 panic!("expected personality command, got service tier {command:?}")
             }
@@ -550,6 +591,7 @@ mod tests {
             .into_iter()
             .map(|item| match item {
                 CommandItem::Builtin(cmd) => cmd.command().to_string(),
+                CommandItem::BuiltinAlias { name, .. } => name.to_string(),
                 CommandItem::ServiceTier(command) => command.name,
             })
             .collect();
@@ -568,6 +610,7 @@ mod tests {
             .into_iter()
             .map(|item| match item {
                 CommandItem::Builtin(cmd) => cmd.command().to_string(),
+                CommandItem::BuiltinAlias { name, .. } => name.to_string(),
                 CommandItem::ServiceTier(command) => command.name,
             })
             .collect();

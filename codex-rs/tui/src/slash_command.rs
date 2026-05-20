@@ -12,7 +12,10 @@ use strum_macros::IntoStaticStr;
 pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
+    #[strum(to_string = "model", serialize = "m")]
     Model,
+    #[strum(to_string = "effort", serialize = "e")]
+    Effort,
     Ide,
     Permissions,
     Keymap,
@@ -27,25 +30,40 @@ pub enum SlashCommand {
     Memories,
     Skills,
     Hooks,
+    #[strum(to_string = "review", serialize = "rev")]
     Review,
     Rename,
+    Park,
+    Done,
+    #[strum(to_string = "active", serialize = "reopen")]
+    Active,
+    #[strum(to_string = "retitle", serialize = "rt")]
+    Retitle,
+    #[strum(to_string = "emoji", serialize = "em")]
+    Emoji,
     New,
     Resume,
     #[strum(to_string = "reload", serialize = "r")]
     Reload,
     Fork,
     Init,
+    #[strum(to_string = "compact", serialize = "c")]
     Compact,
+    Condensed,
     Plan,
     Goal,
     Agent,
     Side,
+    #[strum(to_string = "id", serialize = "i")]
+    Id,
     Copy,
+    CopyLastRequest,
     Raw,
     Diff,
     Mention,
     Status,
     DebugConfig,
+    #[strum(to_string = "title", serialize = "t")]
     Title,
     Statusline,
     Theme,
@@ -57,6 +75,7 @@ pub enum SlashCommand {
     Logout,
     Quit,
     Exit,
+    Delete,
     Feedback,
     Rollout,
     Ps,
@@ -85,14 +104,25 @@ impl SlashCommand {
             SlashCommand::New => "start a new chat during a conversation",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
+            SlashCommand::Condensed => {
+                "toggle message-only main transcript view in terminal scrollback"
+            }
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Rename => "rename the current thread",
+            SlashCommand::Park => "mark the current thread as parked",
+            SlashCommand::Done => "mark the current thread as done",
+            SlashCommand::Active => "mark the current thread as active",
+            SlashCommand::Retitle => "generate a concise title from this conversation",
+            SlashCommand::Emoji => "prepend a representative emoji to the thread title",
             SlashCommand::Resume => "resume a saved chat",
             SlashCommand::Reload => "restart Codex and resume this chat",
             SlashCommand::Clear => "clear the terminal and start a new chat",
             SlashCommand::Fork => "fork the current chat",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
+            SlashCommand::Delete => "delete this chat and exit Codex",
+            SlashCommand::Id => "copy the current thread ID",
             SlashCommand::Copy => "copy last response as markdown",
+            SlashCommand::CopyLastRequest => "copy last user request",
             SlashCommand::Raw => "toggle raw scrollback mode for copy-friendly terminal selection",
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Mention => "mention a file",
@@ -109,6 +139,7 @@ impl SlashCommand {
             SlashCommand::MemoryDrop => "DO NOT USE",
             SlashCommand::MemoryUpdate => "DO NOT USE",
             SlashCommand::Model => "choose what model and reasoning effort to use",
+            SlashCommand::Effort => "choose reasoning effort for the current model",
             SlashCommand::Ide => {
                 "include current selection, open files, and other context from your IDE"
             }
@@ -145,12 +176,31 @@ impl SlashCommand {
         self.into()
     }
 
+    /// Short spellings that should appear in slash autocomplete.
+    pub fn completion_aliases(self) -> &'static [&'static str] {
+        match self {
+            SlashCommand::Model => &["m"],
+            SlashCommand::Effort => &["e"],
+            SlashCommand::Reload => &["r"],
+            SlashCommand::Compact => &["c"],
+            SlashCommand::Id => &["i"],
+            SlashCommand::Review => &["rev"],
+            SlashCommand::Title => &["t"],
+            SlashCommand::Retitle => &["rt"],
+            SlashCommand::Emoji => &["em"],
+            _ => &[],
+        }
+    }
+
     /// Whether this command supports inline args (for example `/review ...`).
     pub fn supports_inline_args(self) -> bool {
         matches!(
             self,
             SlashCommand::Review
                 | SlashCommand::Rename
+                | SlashCommand::Park
+                | SlashCommand::Done
+                | SlashCommand::Active
                 | SlashCommand::Plan
                 | SlashCommand::Goal
                 | SlashCommand::Ide
@@ -169,7 +219,9 @@ impl SlashCommand {
     pub fn available_in_side_conversation(self) -> bool {
         matches!(
             self,
-            SlashCommand::Copy
+            SlashCommand::Id
+                | SlashCommand::Copy
+                | SlashCommand::CopyLastRequest
                 | SlashCommand::Raw
                 | SlashCommand::Diff
                 | SlashCommand::Mention
@@ -188,6 +240,7 @@ impl SlashCommand {
             | SlashCommand::Init
             | SlashCommand::Compact
             | SlashCommand::Model
+            | SlashCommand::Effort
             | SlashCommand::Personality
             | SlashCommand::Permissions
             | SlashCommand::Keymap
@@ -197,15 +250,22 @@ impl SlashCommand {
             | SlashCommand::Experimental
             | SlashCommand::Memories
             | SlashCommand::Review
+            | SlashCommand::Retitle
+            | SlashCommand::Emoji
             | SlashCommand::Plan
             | SlashCommand::Clear
             | SlashCommand::Logout
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate => false,
             SlashCommand::Diff
+            | SlashCommand::Id
             | SlashCommand::Copy
+            | SlashCommand::CopyLastRequest
             | SlashCommand::Raw
             | SlashCommand::Rename
+            | SlashCommand::Park
+            | SlashCommand::Done
+            | SlashCommand::Active
             | SlashCommand::Mention
             | SlashCommand::Skills
             | SlashCommand::Hooks
@@ -224,7 +284,9 @@ impl SlashCommand {
             | SlashCommand::Ide
             | SlashCommand::Quit
             | SlashCommand::Exit
+            | SlashCommand::Delete
             | SlashCommand::Side => true,
+            SlashCommand::Condensed => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
             SlashCommand::Realtime => true,

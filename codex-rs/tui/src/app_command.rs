@@ -8,6 +8,7 @@ use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::ThreadRealtimeAudioChunk;
 use codex_app_server_protocol::ThreadRealtimeStartTransport;
+use codex_app_server_protocol::ThreadUserState;
 use codex_app_server_protocol::ToolRequestUserInputResponse;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::ApprovalsReviewer;
@@ -38,6 +39,7 @@ pub(crate) enum AppCommand {
     },
     UserTurn {
         items: Vec<UserInput>,
+        rollback_num_turns: Option<u32>,
         cwd: PathBuf,
         approval_policy: AskForApproval,
         approvals_reviewer: Option<ApprovalsReviewer>,
@@ -96,6 +98,9 @@ pub(crate) enum AppCommand {
     SetThreadName {
         name: String,
     },
+    SetThreadUserState {
+        user_state: ThreadUserState,
+    },
     Shutdown,
     ThreadRollback {
         num_turns: u32,
@@ -153,6 +158,7 @@ impl AppCommand {
     ) -> Self {
         Self::UserTurn {
             items,
+            rollback_num_turns: None,
             cwd,
             approval_policy,
             approvals_reviewer: None,
@@ -164,6 +170,41 @@ impl AppCommand {
             final_output_json_schema,
             collaboration_mode,
             personality,
+        }
+    }
+
+    pub(crate) fn with_rollback_num_turns(self, rollback_num_turns: u32) -> Self {
+        match self {
+            Self::UserTurn {
+                items,
+                cwd,
+                approval_policy,
+                approvals_reviewer,
+                active_permission_profile,
+                model,
+                effort,
+                summary,
+                service_tier,
+                final_output_json_schema,
+                collaboration_mode,
+                personality,
+                ..
+            } => Self::UserTurn {
+                items,
+                rollback_num_turns: Some(rollback_num_turns),
+                cwd,
+                approval_policy,
+                approvals_reviewer,
+                active_permission_profile,
+                model,
+                effort,
+                summary,
+                service_tier,
+                final_output_json_schema,
+                collaboration_mode,
+                personality,
+            },
+            op => op,
         }
     }
 
@@ -253,6 +294,10 @@ impl AppCommand {
 
     pub(crate) fn set_thread_name(name: String) -> Self {
         Self::SetThreadName { name }
+    }
+
+    pub(crate) fn set_thread_user_state(user_state: ThreadUserState) -> Self {
+        Self::SetThreadUserState { user_state }
     }
 
     #[allow(dead_code)]

@@ -1164,6 +1164,11 @@ impl ChatComposer {
         self.footer.hint_override = items;
     }
 
+    #[cfg(test)]
+    pub(crate) fn footer_hint_override_items(&self) -> Option<Vec<(String, String)>> {
+        self.footer.hint_override.clone()
+    }
+
     /// Updates whether the Plan-mode nudge replaces the ambient footer row.
     ///
     /// Returns `true` only when the rendered footer can change so callers can avoid scheduling
@@ -1797,6 +1802,9 @@ impl ChatComposer {
                     return (
                         match sel {
                             CommandItem::Builtin(cmd) => InputResult::Command(cmd),
+                            CommandItem::BuiltinAlias { command, .. } => {
+                                InputResult::Command(command)
+                            }
                             CommandItem::ServiceTier(command) => {
                                 InputResult::ServiceTierCommand(command)
                             }
@@ -4235,6 +4243,10 @@ impl ChatComposer {
         self.footer.active_agent_label = active_agent_label;
         true
     }
+
+    pub(crate) fn active_agent_label(&self) -> Option<&str> {
+        self.footer.active_agent_label.as_deref()
+    }
 }
 
 fn footer_insert_newline_key(
@@ -5032,8 +5044,10 @@ mod tests {
                 composer
                     .history
                     .record_local_submission(HistoryEntry::new("cargo test".to_string()));
-                let _ = composer
-                    .handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+                let _ = composer.handle_key_event(KeyEvent::new(
+                    KeyCode::Char('r'),
+                    KeyModifiers::ALT | KeyModifiers::SHIFT,
+                ));
                 let _ = composer
                     .handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
             },
@@ -7613,6 +7627,9 @@ mod tests {
                 Some(CommandItem::Builtin(cmd)) => {
                     assert_eq!(cmd.command(), "model")
                 }
+                Some(CommandItem::BuiltinAlias { name, .. }) => {
+                    panic!("expected model command, got alias {name}")
+                }
                 Some(CommandItem::ServiceTier(command)) => {
                     panic!("expected model command, got service tier {command:?}")
                 }
@@ -7669,6 +7686,9 @@ mod tests {
                 Some(CommandItem::Builtin(cmd)) => {
                     assert_eq!(cmd.command(), "resume")
                 }
+                Some(CommandItem::BuiltinAlias { name, .. }) => {
+                    panic!("expected resume command, got alias {name}")
+                }
                 Some(CommandItem::ServiceTier(command)) => {
                     panic!("expected resume command, got service tier {command:?}")
                 }
@@ -7722,6 +7742,9 @@ mod tests {
             ActivePopup::Command(popup) => match popup.selected_item() {
                 Some(CommandItem::Builtin(cmd)) => {
                     assert_eq!(cmd.command(), "pets")
+                }
+                Some(CommandItem::BuiltinAlias { name, .. }) => {
+                    panic!("expected pets command, got alias {name}")
                 }
                 Some(CommandItem::ServiceTier(command)) => {
                     panic!("expected pets command, got service tier {command:?}")

@@ -80,6 +80,10 @@ impl ChatWidget {
             &chat_keymap.edit_queued_message,
             current_terminal_info,
         );
+        let queued_message_discard_hint_binding =
+            queued_message_discard_hint_binding(&chat_keymap.discard_queued_message);
+        let queued_message_steer_hint_binding =
+            queued_message_steer_hint_binding(&chat_keymap.steer_queued_message);
         pets::start_configured_pet_load_if_needed(
             &config,
             /*ambient_pet_missing*/ true,
@@ -137,6 +141,7 @@ impl ChatWidget {
             last_unified_wait: None,
             unified_exec_wait_streak: None,
             turn_lifecycle: TurnLifecycleState::new(prevent_idle_sleep),
+            managed_terminal_progress_active: false,
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             mcp_startup_status: None,
@@ -245,6 +250,12 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_queued_message_edit_binding(widget.queued_message_edit_hint_binding);
+        widget
+            .bottom_pane
+            .set_queued_message_discard_binding(queued_message_discard_hint_binding);
+        widget
+            .bottom_pane
+            .set_queued_message_steer_binding(queued_message_steer_hint_binding);
         #[cfg(target_os = "windows")]
         widget.bottom_pane.set_windows_degraded_sandbox_active(
             crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED

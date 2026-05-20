@@ -49,6 +49,8 @@ use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
+use codex_app_server_protocol::ThreadDeleteParams;
+use codex_app_server_protocol::ThreadDeleteResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadGoalClearParams;
@@ -96,6 +98,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
+use codex_app_server_protocol::ThreadUserState;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
@@ -121,6 +124,8 @@ use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
 
 fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
     color_eyre::eyre::eyre!("{context}: {err}")
@@ -169,10 +174,13 @@ impl ThreadParamsMode {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct AppServerStartedThread {
     pub(crate) session: ThreadSessionState,
     pub(crate) turns: Vec<Turn>,
 }
+
+static BACKGROUND_REQUEST_ID: AtomicI64 = AtomicI64::new(-1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TurnPermissionsOverride {
@@ -552,6 +560,25 @@ impl AppServerSession {
             .wrap_err("thread/metadata/update failed while syncing git branch")
     }
 
+    pub(crate) async fn thread_metadata_update_user_state(
+        &mut self,
+        thread_id: ThreadId,
+        user_state: ThreadUserState,
+    ) -> Result<ThreadMetadataUpdateResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadMetadataUpdate {
+                request_id,
+                params: ThreadMetadataUpdateParams {
+                    thread_id: thread_id.to_string(),
+                    user_state: Some(user_state),
+                    git_info: None,
+                },
+            })
+            .await
+            .wrap_err("thread/metadata/update failed while setting user state")
+    }
+
     pub(crate) async fn thread_inject_items(
         &mut self,
         thread_id: ThreadId,
@@ -580,6 +607,7 @@ impl AppServerSession {
         &mut self,
         thread_id: ThreadId,
         items: Vec<UserInput>,
+        rollback_num_turns: Option<u32>,
         cwd: PathBuf,
         approval_policy: AskForApproval,
         approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
@@ -602,7 +630,7 @@ impl AppServerSession {
                 params: TurnStartParams {
                     thread_id: thread_id.to_string(),
                     input: items,
-                    rollback_num_turns: None,
+                    rollback_num_turns,
                     responsesapi_client_metadata: None,
                     environments: None,
                     cwd: Some(cwd),
@@ -690,6 +718,21 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/name/set failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_delete(&mut self, thread_id: ThreadId) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadDeleteResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadDelete {
+                request_id,
+                params: ThreadDeleteParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/delete failed in TUI")?;
         Ok(())
     }
 
@@ -1023,6 +1066,28 @@ impl AppServerSession {
         self.client.request_handle()
     }
 
+    pub(crate) async fn resume_thread_with_request_handle(
+        request_handle: AppServerRequestHandle,
+        config: Config,
+        thread_id: ThreadId,
+        thread_params_mode: ThreadParamsMode,
+        remote_cwd_override: Option<PathBuf>,
+    ) -> Result<AppServerStartedThread> {
+        let response: ThreadResumeResponse = request_handle
+            .request_typed(ClientRequest::ThreadResume {
+                request_id: next_background_request_id(),
+                params: thread_resume_params_from_config(
+                    config.clone(),
+                    thread_id,
+                    thread_params_mode,
+                    remote_cwd_override.as_deref(),
+                ),
+            })
+            .await
+            .wrap_err("thread/resume failed during TUI subagent prewarm")?;
+        started_thread_from_resume_response(response, &config, thread_params_mode).await
+    }
+
     fn next_request_id(&mut self) -> RequestId {
         let request_id = self.next_request_id;
         self.next_request_id += 1;
@@ -1126,6 +1191,10 @@ fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
         supported_in_api: true,
         input_modalities: model.input_modalities,
     }
+}
+
+fn next_background_request_id() -> RequestId {
+    RequestId::Integer(BACKGROUND_REQUEST_ID.fetch_sub(1, Ordering::Relaxed))
 }
 
 fn approvals_reviewer_override_from_config(
@@ -2132,6 +2201,8 @@ mod tests {
                 agent_role: None,
                 git_info: None,
                 name: None,
+                user_message_count: 0,
+                user_state: Default::default(),
                 turns: vec![Turn {
                     id: "turn-1".to_string(),
                     items_view: codex_app_server_protocol::TurnItemsView::Full,

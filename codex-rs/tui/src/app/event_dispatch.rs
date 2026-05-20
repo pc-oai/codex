@@ -332,11 +332,22 @@ impl App {
                 }
                 return Ok(AppRunControl::Exit(ExitReason::ReloadRequested));
             }
+            AppEvent::CopyLastRequest => {
+                let request = self.latest_user_request_text();
+                self.chat_widget.copy_last_user_request_text(request);
+            }
+            AppEvent::ToggleCondensedTranscriptView => {
+                self.toggle_condensed_transcript_view(tui)?;
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::Exit(mode) => {
                 if mode == ExitMode::ShutdownFirst {
                     self.show_shutdown_feedback(tui)?;
                 }
                 return Ok(self.handle_exit_mode(app_server, mode).await);
+            }
+            AppEvent::DeleteCurrentSessionAndExit => {
+                return Ok(self.delete_current_session_and_exit(app_server).await);
             }
             AppEvent::Logout => match app_server.logout_account().await {
                 Ok(()) => {
@@ -1693,6 +1704,14 @@ impl App {
                 self.select_agent_thread_and_discard_side(tui, app_server, thread_id)
                     .await?;
             }
+            AppEvent::LoadedSubagentSwitchPrewarmed {
+                primary_thread_id,
+                thread_id,
+                result,
+            } => {
+                self.cache_loaded_subagent_switch_prewarm(primary_thread_id, thread_id, *result)
+                    .await;
+            }
             AppEvent::StartSide {
                 parent_thread_id,
                 user_message,
@@ -1706,6 +1725,28 @@ impl App {
                 prompt,
             } => {
                 self.handle_start_subagent(app_server, parent_thread_id, prompt)
+                    .await;
+            }
+            AppEvent::GenerateThreadNameSuggestion {
+                parent_thread_id,
+                kind,
+                prompt,
+                current_name,
+            } => {
+                self.start_thread_name_suggestion(
+                    app_server,
+                    parent_thread_id,
+                    kind,
+                    prompt,
+                    current_name,
+                )
+                .await;
+            }
+            AppEvent::ThreadNameSuggestionFinished {
+                child_thread_id,
+                result,
+            } => {
+                self.finish_thread_name_suggestion(app_server, child_thread_id, result)
                     .await;
             }
             AppEvent::OpenSkillsList => {
@@ -2170,6 +2211,20 @@ impl App {
         app_server: &mut AppServerSession,
         mode: ExitMode,
     ) -> AppRunControl {
+        if let Some(thread_id) = self.chat_widget.thread_id() {
+            let draft = self.chat_widget.capture_reload_draft();
+            if let Err(err) = crate::reload_handoff::replace_resume(
+                self.config.codex_home.as_path(),
+                thread_id,
+                draft.as_ref(),
+            ) {
+                tracing::warn!(
+                    error = %err,
+                    "failed to persist composer draft for later resume"
+                );
+            }
+        }
+
         match mode {
             ExitMode::ShutdownFirst => {
                 // Mark the thread we are explicitly shutting down for exit so
@@ -2200,5 +2255,56 @@ impl App {
                 AppRunControl::Exit(ExitReason::UserRequested)
             }
         }
+    }
+
+    async fn delete_current_session_and_exit(
+        &mut self,
+        app_server: &mut AppServerSession,
+    ) -> AppRunControl {
+        let Some(thread_id) = self.active_thread_id.or(self.chat_widget.thread_id()) else {
+            return AppRunControl::Exit(ExitReason::UserRequested);
+        };
+
+        match app_server.thread_delete(thread_id).await {
+            Ok(()) => {
+                if let Err(err) =
+                    crate::reload_handoff::clear_resume(self.config.codex_home.as_path(), thread_id)
+                {
+                    tracing::warn!(
+                        error = %err,
+                        %thread_id,
+                        "failed to clear saved composer draft for deleted thread"
+                    );
+                }
+                self.abort_thread_event_listener(thread_id);
+                AppRunControl::Exit(ExitReason::UserRequested)
+            }
+            Err(err) => {
+                tracing::error!("failed to delete thread {thread_id}: {err}");
+                self.chat_widget
+                    .add_error_message(format!("Delete failed: {err}"));
+                AppRunControl::Continue
+            }
+        }
+    }
+
+    pub(super) fn latest_user_request_text(&self) -> Option<String> {
+        self.recent_user_request_texts(/*limit*/ 1)
+            .into_iter()
+            .next()
+    }
+
+    pub(super) fn recent_user_request_texts(&self, limit: usize) -> Vec<String> {
+        self.transcript_cells
+            .iter()
+            .rev()
+            .filter_map(|cell| {
+                cell.as_any()
+                    .downcast_ref::<history_cell::UserHistoryCell>()
+                    .map(|cell| cell.message.clone())
+            })
+            .filter(|message| !message.is_empty())
+            .take(limit)
+            .collect()
     }
 }

@@ -104,7 +104,10 @@ impl App {
             && previous_agent_shortcut_matches(key_event)
         {
             if let Some(thread_id) = self
-                .adjacent_thread_id_with_backfill(app_server, AgentNavigationDirection::Previous)
+                .adjacent_thread_id_for_switch_shortcut(
+                    app_server,
+                    AgentNavigationDirection::Previous,
+                )
                 .await
             {
                 let _ = self
@@ -118,7 +121,7 @@ impl App {
             && next_agent_shortcut_matches(key_event)
         {
             if let Some(thread_id) = self
-                .adjacent_thread_id_with_backfill(app_server, AgentNavigationDirection::Next)
+                .adjacent_thread_id_for_switch_shortcut(app_server, AgentNavigationDirection::Next)
                 .await
             {
                 let _ = self
@@ -170,6 +173,12 @@ impl App {
             return;
         }
 
+        if self.should_interrupt_turn_for_edit_last_message_shortcut(key_event) {
+            self.interrupt_turn_then_edit_last_message();
+            tui.frame_requester().schedule_frame();
+            return;
+        }
+
         if self.should_handle_edit_last_message_shortcut(key_event) {
             self.edit_last_message_from_command();
             tui.frame_requester().schedule_frame();
@@ -210,6 +219,18 @@ impl App {
                 );
                 tui.frame_requester().schedule_frame();
             }
+            return;
+        }
+
+        if app_keymap_shortcuts_available
+            && self
+                .keymap
+                .app
+                .toggle_condensed_transcript
+                .is_pressed(key_event)
+        {
+            self.app_event_tx
+                .send(AppEvent::ToggleCondensedTranscriptView);
             return;
         }
 
@@ -308,6 +329,20 @@ impl App {
                 .chat_widget
                 .edit_message_shortcut_may_claim_key_event(key_event)
             && self.chat_widget.is_normal_backtrack_mode()
+    }
+
+    pub(super) fn should_interrupt_turn_for_edit_last_message_shortcut(
+        &self,
+        key_event: KeyEvent,
+    ) -> bool {
+        key_event.kind == KeyEventKind::Press
+            && self.app_keymap_shortcuts_available()
+            && self.keymap.chat.edit_queued_message.is_pressed(key_event)
+            && self
+                .chat_widget
+                .edit_message_shortcut_may_claim_key_event(key_event)
+            && self.chat_widget.is_task_running()
+            && !self.chat_widget.has_queued_follow_up_messages()
     }
 
     fn should_step_edit_last_message_preview_older(&self, key_event: KeyEvent) -> bool {

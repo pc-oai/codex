@@ -30,6 +30,41 @@ impl ChatWidget {
         self.open_model_popup_with_presets(presets);
     }
 
+    /// Open the reasoning picker directly for the active model, skipping model selection.
+    pub(crate) fn open_current_model_reasoning_popup(&mut self) {
+        if !self.is_session_configured() {
+            self.add_info_message(
+                "Reasoning selection is disabled until startup completes.".to_string(),
+                /*hint*/ None,
+            );
+            return;
+        }
+
+        let current_model = self.current_model().to_string();
+        let presets: Vec<ModelPreset> = match self.model_catalog.try_list_models() {
+            Ok(models) => models,
+            Err(_) => {
+                self.add_info_message(
+                    "Models are being updated; please try /effort again in a moment.".to_string(),
+                    /*hint*/ None,
+                );
+                return;
+            }
+        };
+        let Some(preset) = presets
+            .into_iter()
+            .find(|preset| preset.model.as_str() == current_model)
+        else {
+            self.add_info_message(
+                format!("Reasoning selection is unavailable for {current_model}."),
+                /*hint*/ None,
+            );
+            return;
+        };
+
+        self.open_reasoning_popup(preset);
+    }
+
     fn model_menu_header(&self, title: &str, subtitle: &str) -> Box<dyn Renderable> {
         let title = title.to_string();
         let subtitle = subtitle.to_string();
