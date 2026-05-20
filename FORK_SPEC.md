@@ -142,10 +142,11 @@ properties, treat that as a fork regression even if the merged tree compiles.
 
 - `Ctrl-X` clears the composer input or discards the relevant queued draft
   without borrowing `Ctrl-C`.
-- Main-surface key bindings include session reload and condensed transcript
-  toggling. Keymap config is forward-compatible at load time so an older local
-  binary ignores unknown future action names while generated schema stays
-  strict for validation.
+- Main-surface key bindings include `Ctrl-R` to reload the current session and
+  resume it in a fresh process, plus condensed transcript toggling. Keymap
+  config is forward-compatible at load time so an older local binary ignores
+  unknown future action names while generated schema stays strict for
+  validation.
 - Rename, retitle, queued-message edit, queued-message discard, queued-message
   steer, and reverse-history bindings remain configurable local workflow
   actions.
@@ -172,6 +173,9 @@ properties, treat that as a fork regression even if the merged tree compiles.
   active agent threads is quick and visible in the footer/main controls. The
   menu stays as a composer-preserving floating chooser, and `Ctrl-A` can open
   it from the composer when line-start movement has no more work to do.
+- `Alt-[` and `Alt-]` rotate to the previous and next agent thread. These
+  explicit bracket shortcuts are part of the local workflow and must not be
+  replaced by `Alt-Left` / `Alt-Right` word-motion chords.
 - Active-agent footer labels refresh when a new subagent thread starts so the
   visible count and working-state marker do not lag behind the picker.
 
