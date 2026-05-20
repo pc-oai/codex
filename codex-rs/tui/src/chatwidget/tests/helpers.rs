@@ -347,6 +347,10 @@ pub(super) fn status_line_text(chat: &ChatWidget) -> Option<String> {
     chat.status_line_text()
 }
 
+pub(super) fn status_line_right_text(chat: &ChatWidget) -> Option<String> {
+    chat.status_line_right_text()
+}
+
 pub(super) fn make_token_info(total_tokens: i64, context_window: i64) -> TokenUsageInfo {
     fn usage(total_tokens: i64) -> TokenUsage {
         TokenUsage {

@@ -8,12 +8,11 @@ use super::*;
 impl ChatWidget {
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
     ///
-    /// The bottom pane only has one running flag, but this module treats it as a derived state of
-    /// both the agent turn lifecycle and MCP startup lifecycle.
+    /// MCP startup has its own compact footer progress affordance; it should not make the main
+    /// conversation surface look like Codex is actively working on the user's behalf.
     pub(super) fn update_task_running_state(&mut self) {
-        self.bottom_pane.set_task_running(
-            self.turn_lifecycle.agent_turn_running || self.mcp_startup_status.is_some(),
-        );
+        self.bottom_pane
+            .set_task_running(self.turn_lifecycle.agent_turn_running);
         self.refresh_plan_mode_nudge();
         self.refresh_status_surfaces();
     }
@@ -66,9 +65,7 @@ impl ChatWidget {
         self.bottom_pane
             .set_interrupt_hint_visible(/*visible*/ true);
         self.status_state.terminal_title_status_kind = TerminalTitleStatusKind::Working;
-        if self.mcp_startup_status.is_none() || !self.status_header_is_mcp_startup_owned() {
-            self.set_status_header(String::from("Working"));
-        }
+        self.set_status_header(String::from("Working"));
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
         self.set_ambient_pet_notification(
@@ -153,6 +150,7 @@ impl ChatWidget {
                     runtime_metrics,
                 ));
             }
+            self.last_turn_runtime_metrics = runtime_metrics;
             self.turn_runtime_metrics = RuntimeMetricsSummary::default();
             self.transcript.needs_final_message_separator = false;
             self.transcript.had_work_activity = false;

@@ -99,8 +99,18 @@ impl ChatWidget {
             _ => {}
         }
 
+        if multi_agents::open_agent_picker_shortcut_matches(key_event)
+            && self.agent_picker_shortcut_may_claim_key_event(key_event)
+            && self.bottom_pane.no_modal_or_popup_active()
+        {
+            self.app_event_tx.send(AppEvent::OpenAgentPicker);
+            self.request_redraw();
+            return;
+        }
+
         if key_event.kind == KeyEventKind::Press
             && self.chat_keymap.edit_queued_message.is_pressed(key_event)
+            && self.edit_message_shortcut_may_claim_key_event(key_event)
             && self.has_queued_follow_up_messages()
             && self.bottom_pane.no_modal_or_popup_active()
         {
@@ -197,6 +207,23 @@ impl ChatWidget {
         self.bottom_pane.set_footer_hint_override(items);
     }
 
+    pub(crate) fn show_edit_last_message_hint(&mut self, target: String) {
+        self.bottom_pane.set_footer_hint_override(Some(vec![
+            ("Editing".to_string(), target),
+            ("Enter".to_string(), "submit".to_string()),
+            ("Esc".to_string(), "cancel".to_string()),
+        ]));
+    }
+
+    pub(crate) fn show_edit_last_message_pending_hint(&mut self, target: String) {
+        self.bottom_pane
+            .set_footer_hint_override(Some(vec![("Rewinding".to_string(), target)]));
+    }
+
+    pub(crate) fn clear_edit_last_message_hint(&mut self) {
+        self.bottom_pane.set_footer_hint_override(/*items*/ None);
+    }
+
     pub(crate) fn show_selection_view(&mut self, params: SelectionViewParams) {
         self.bottom_pane.show_selection_view(params);
         self.refresh_plan_mode_nudge();
@@ -222,6 +249,28 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
         false
+    }
+
+    /// Preserve Ctrl-E's Emacs-style cursor movement until it would do nothing useful.
+    pub(crate) fn edit_message_shortcut_may_claim_key_event(&self, key_event: KeyEvent) -> bool {
+        if !matches!(
+            key_event,
+            KeyEvent {
+                code: KeyCode::Char('e'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            }
+        ) {
+            return true;
+        }
+
+        self.composer_is_empty() || self.composer_cursor() == self.composer_text().len()
+    }
+
+    /// Preserve Ctrl-A's line-start cursor movement until it would be a no-op.
+    pub(crate) fn agent_picker_shortcut_may_claim_key_event(&self, key_event: KeyEvent) -> bool {
+        multi_agents::open_agent_picker_shortcut_matches(key_event)
+            && (self.composer_is_empty() || self.composer_cursor() == 0)
     }
 
     /// Copy the last agent response (raw markdown) to the system clipboard.

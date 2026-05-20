@@ -160,6 +160,8 @@ mod oss_selection;
 mod pager_overlay;
 mod permission_compat;
 pub(crate) mod public_widgets;
+#[allow(dead_code)]
+mod reload_handoff;
 mod render;
 mod resize_reflow_cap;
 mod resume_picker;
@@ -1579,7 +1581,7 @@ async fn run_ratatui_app(
     };
 
     let current_cwd = config.cwd.clone();
-    let allow_prompt = !uses_remote_workspace && cli.cwd.is_none();
+    let _allow_prompt = !uses_remote_workspace && cli.cwd.is_none();
     let action_and_target_session_if_resume_or_fork = match &session_selection {
         resume_picker::SessionSelection::Resume(target_session) => {
             Some((CwdPromptAction::Resume, target_session))
@@ -1590,7 +1592,7 @@ async fn run_ratatui_app(
         _ => None,
     };
     let fallback_cwd = match action_and_target_session_if_resume_or_fork {
-        Some((action, target_session)) => {
+        Some((_action, target_session)) => {
             if uses_remote_workspace {
                 Some(current_cwd.to_path_buf())
             } else {

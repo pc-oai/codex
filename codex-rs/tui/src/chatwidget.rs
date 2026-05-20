@@ -648,6 +648,8 @@ pub(crate) struct ChatWidget {
     quit_shortcut_key: Option<KeyBinding>,
     // Runtime metrics accumulated across delta snapshots for the active turn.
     turn_runtime_metrics: RuntimeMetricsSummary,
+    // Last completed turn metrics kept as muted footer timing until fresh metrics arrive.
+    last_turn_runtime_metrics: Option<RuntimeMetricsSummary>,
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Feedback sink for /feedback
     feedback: codex_feedback::CodexFeedback,
@@ -1594,6 +1596,14 @@ impl ChatWidget {
         self.bottom_pane.composer_is_empty()
     }
 
+    pub(crate) fn composer_text(&self) -> String {
+        self.bottom_pane.composer_text()
+    }
+
+    pub(crate) fn composer_cursor(&self) -> usize {
+        self.bottom_pane.composer_cursor()
+    }
+
     #[cfg(test)]
     pub(crate) fn is_task_running_for_test(&self) -> bool {
         self.bottom_pane.is_task_running()
@@ -1635,6 +1645,11 @@ impl ChatWidget {
         self.bottom_pane
             .set_composer_text(text, text_elements, local_image_paths);
         self.refresh_plan_mode_nudge();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_composer_cursor(&mut self, cursor: usize) {
+        self.bottom_pane.set_composer_cursor(cursor);
     }
 
     pub(crate) fn set_remote_image_urls(&mut self, remote_image_urls: Vec<String>) {
@@ -1839,6 +1854,11 @@ impl ChatWidget {
     #[cfg(test)]
     pub(crate) fn status_line_text(&self) -> Option<String> {
         self.bottom_pane.status_line_text()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn status_line_right_text(&self) -> Option<String> {
+        self.bottom_pane.status_line_right_text()
     }
 
     pub(crate) fn clear_token_usage(&mut self) {

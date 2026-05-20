@@ -69,6 +69,16 @@ impl ChatWidget {
         );
     }
 
+    pub(crate) fn submit_user_message_from_backtrack_edit(
+        &mut self,
+        user_message: UserMessage,
+    ) -> bool {
+        self.submit_user_message_with_history_record(
+            user_message,
+            UserMessageHistoryRecord::UserMessageText,
+        )
+    }
+
     pub(super) fn submit_user_message_with_history_record(
         &mut self,
         user_message: UserMessage,

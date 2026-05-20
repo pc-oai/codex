@@ -85,6 +85,21 @@ pub(crate) fn status_line_from_segments<I>(
 where
     I: IntoIterator<Item = (StatusLineItem, String)>,
 {
+    status_line_from_segments_with_muting(
+        segments
+            .into_iter()
+            .map(|(item, text)| (item, text, /*muted*/ false)),
+        use_theme_colors,
+    )
+}
+
+pub(crate) fn status_line_from_segments_with_muting<I>(
+    segments: I,
+    use_theme_colors: bool,
+) -> Option<Line<'static>>
+where
+    I: IntoIterator<Item = (StatusLineItem, String, bool)>,
+{
     status_line_from_segments_with_resolver(segments, use_theme_colors, |accent| {
         foreground_style_for_scopes(accent.scopes())
     })
@@ -96,21 +111,28 @@ fn status_line_from_segments_with_resolver<I, F>(
     theme_style_for_accent: F,
 ) -> Option<Line<'static>>
 where
-    I: IntoIterator<Item = (StatusLineItem, String)>,
+    I: IntoIterator<Item = (StatusLineItem, String, bool)>,
     F: Fn(StatusLineAccent) -> Option<Style>,
 {
     let mut spans = Vec::new();
-    for (item, text) in segments {
+    for (item, text, muted) in segments {
         if !spans.is_empty() {
             spans.push(STATUS_LINE_SEPARATOR.dim());
         }
-        let style = if use_theme_colors {
+        let style = if muted {
+            Style::default().dark_gray()
+        } else if use_theme_colors {
             let accent = StatusLineAccent::for_item(item);
             soften_status_line_style(
                 theme_style_for_accent(accent).unwrap_or_else(|| accent.fallback_style()),
             )
         } else {
             Style::default().dim()
+        };
+        let style = if use_theme_colors && item == StatusLineItem::ContextUsed {
+            context_used_style(&text)
+        } else {
+            style
         };
         let style = if item == StatusLineItem::PullRequestNumber {
             style.underlined()
@@ -121,6 +143,18 @@ where
     }
 
     (!spans.is_empty()).then(|| Line::from(spans))
+}
+
+fn context_used_style(text: &str) -> Style {
+    let percent = text.split_whitespace().find_map(|part| {
+        part.strip_suffix('%')
+            .and_then(|value| value.parse::<u8>().ok())
+    });
+    match percent {
+        Some(80..) => Style::default().red(),
+        Some(50..) => Style::default().magenta(),
+        Some(_) | None => Style::default().dim(),
+    }
 }
 
 fn soften_status_line_style(mut style: Style) -> Style {
@@ -193,9 +227,9 @@ mod tests {
     fn status_line_segments_preserve_order_and_plain_text() {
         let line = status_line_from_segments_with_resolver(
             [
-                (StatusLineItem::ModelName, "gpt-5".to_string()),
-                (StatusLineItem::CurrentDir, "/repo".to_string()),
-                (StatusLineItem::GitBranch, "main".to_string()),
+                (StatusLineItem::ModelName, "gpt-5".to_string(), false),
+                (StatusLineItem::CurrentDir, "/repo".to_string(), false),
+                (StatusLineItem::GitBranch, "main".to_string(), false),
             ],
             /*use_theme_colors*/ true,
             |_| None,
@@ -215,8 +249,12 @@ mod tests {
     fn status_line_segments_dim_separators_and_use_theme_styles_first() {
         let line = status_line_from_segments_with_resolver(
             [
-                (StatusLineItem::ModelName, "gpt-5".to_string()),
-                (StatusLineItem::ContextUsed, "Context 12% used".to_string()),
+                (StatusLineItem::ModelName, "gpt-5".to_string(), false),
+                (
+                    StatusLineItem::ContextUsed,
+                    "Context 12% used".to_string(),
+                    false,
+                ),
             ],
             /*use_theme_colors*/ true,
             |accent| match accent {
@@ -229,15 +267,15 @@ mod tests {
         assert_eq!(line.spans[0].style.fg, Some(Color::Red));
         assert!(!line.spans[0].style.add_modifier.contains(Modifier::DIM));
         assert!(line.spans[1].style.add_modifier.contains(Modifier::DIM));
-        assert_eq!(line.spans[2].style.fg, Some(Color::Green));
-        assert!(!line.spans[2].style.add_modifier.contains(Modifier::DIM));
+        assert_eq!(line.spans[2].style.fg, None);
+        assert!(line.spans[2].style.add_modifier.contains(Modifier::DIM));
     }
 
     #[test]
     #[allow(clippy::disallowed_methods)]
     fn status_line_segments_soften_rgb_theme_styles_without_dimming_text() {
         let line = status_line_from_segments_with_resolver(
-            [(StatusLineItem::ModelName, "gpt-5".to_string())],
+            [(StatusLineItem::ModelName, "gpt-5".to_string(), false)],
             /*use_theme_colors*/ true,
             |_| Some(Style::default().fg(Color::Rgb(255, 0, 0))),
         )
@@ -251,8 +289,12 @@ mod tests {
     fn status_line_segments_can_disable_theme_colors() {
         let line = status_line_from_segments_with_resolver(
             [
-                (StatusLineItem::ModelName, "gpt-5".to_string()),
-                (StatusLineItem::ContextUsed, "Context 12% used".to_string()),
+                (StatusLineItem::ModelName, "gpt-5".to_string(), false),
+                (
+                    StatusLineItem::ContextUsed,
+                    "Context 12% used".to_string(),
+                    false,
+                ),
             ],
             /*use_theme_colors*/ false,
             |_| Some(Style::default().red()),
@@ -270,7 +312,11 @@ mod tests {
     #[test]
     fn pull_request_number_uses_link_style() {
         let line = status_line_from_segments_with_resolver(
-            [(StatusLineItem::PullRequestNumber, "PR #20252".to_string())],
+            [(
+                StatusLineItem::PullRequestNumber,
+                "PR #20252".to_string(),
+                false,
+            )],
             /*use_theme_colors*/ false,
             |_| None,
         )
@@ -290,7 +336,7 @@ mod tests {
     fn status_line_segments_return_none_when_empty() {
         assert_eq!(
             status_line_from_segments_with_resolver(
-                Vec::<(StatusLineItem, String)>::new(),
+                Vec::<(StatusLineItem, String, bool)>::new(),
                 /*use_theme_colors*/ true,
                 |_| None,
             ),

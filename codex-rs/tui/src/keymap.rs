@@ -680,7 +680,12 @@ impl RuntimeKeymap {
             chat: ChatKeymap {
                 decrease_reasoning_effort: default_bindings![alt(KeyCode::Char(','))],
                 increase_reasoning_effort: default_bindings![alt(KeyCode::Char('.'))],
-                edit_queued_message: default_bindings![alt(KeyCode::Up), shift(KeyCode::Left)],
+                edit_queued_message: default_bindings![
+                    alt(KeyCode::Up),
+                    alt(KeyCode::Char('e')),
+                    ctrl(KeyCode::Char('e')),
+                    shift(KeyCode::Left)
+                ],
             },
             composer: ComposerKeymap {
                 submit: default_bindings![plain(KeyCode::Enter)],
@@ -1804,7 +1809,12 @@ mod tests {
         );
         assert_eq!(
             runtime.chat.edit_queued_message,
-            vec![key_hint::alt(KeyCode::Up), key_hint::shift(KeyCode::Left)]
+            vec![
+                key_hint::alt(KeyCode::Up),
+                key_hint::alt(KeyCode::Char('e')),
+                key_hint::ctrl(KeyCode::Char('e')),
+                key_hint::shift(KeyCode::Left)
+            ]
         );
         assert_eq!(
             runtime.composer.history_search_previous,

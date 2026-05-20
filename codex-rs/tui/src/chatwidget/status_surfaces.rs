@@ -4,13 +4,15 @@
 //! behavior easier to review without paging through the rest of `chatwidget.rs`.
 
 use super::*;
-use crate::bottom_pane::status_line_from_segments;
+use crate::bottom_pane::status_line_from_segments_with_muting;
 use crate::branch_summary;
 use crate::chatwidget::limit_label_for_window;
 use crate::chatwidget::rate_limits::get_limits_duration;
 use crate::legacy_core::config::Config;
 use crate::status::format_tokens_compact;
+use crate::version::local_build_label;
 use codex_app_server_protocol::AskForApproval;
+use codex_config::types::TuiContextUsedStyle;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::PermissionProfile;
@@ -160,23 +162,49 @@ impl ChatWidget {
     }
 
     fn refresh_status_line_from_selections(&mut self, selections: &StatusSurfaceSelections) {
-        let enabled = !selections.status_line_items.is_empty();
+        let mcp_startup_progress = self.mcp_startup_progress_label();
+        let local_build_label = local_build_label();
+        let enabled = !selections.status_line_items.is_empty()
+            || mcp_startup_progress.is_some()
+            || local_build_label.is_some();
         self.bottom_pane.set_status_line_enabled(enabled);
         if !enabled {
             self.set_status_line(/*status_line*/ None);
+            self.set_status_line_right(/*status_line*/ None);
             self.set_status_line_hyperlink(/*url*/ None);
             return;
         }
 
-        let mut segments = Vec::new();
+        let mut left_segments = Vec::new();
+        let mut right_segments = Vec::new();
+        if let Some(value) = local_build_label {
+            right_segments.push((StatusLineItem::CodexVersion, value, /*muted*/ false));
+        }
         for item in &selections.status_line_items {
-            if let Some(value) = self.status_line_value_for_item(*item) {
-                segments.push((*item, value));
+            let value = if *item == StatusLineItem::Timing {
+                self.status_line_timing_value()
+            } else {
+                self.status_line_value_for_item(*item)
+                    .map(|value| (value, /*muted*/ false))
+            };
+            if let Some((value, muted)) = value {
+                if matches!(*item, StatusLineItem::Timing | StatusLineItem::ContextUsed) {
+                    right_segments.push((*item, value, muted));
+                } else {
+                    left_segments.push((*item, value, muted));
+                }
             }
         }
+        if let Some(value) = mcp_startup_progress {
+            right_segments.push((StatusLineItem::TaskProgress, value, /*muted*/ false));
+        }
 
-        self.set_status_line(status_line_from_segments(
-            segments,
+        self.set_status_line(status_line_from_segments_with_muting(
+            left_segments,
+            self.config.tui_status_line_use_colors,
+        ));
+        self.set_status_line_right(status_line_from_segments_with_muting(
+            right_segments,
             self.config.tui_status_line_use_colors,
         ));
         let hyperlink_url = selections
@@ -601,9 +629,13 @@ impl ChatWidget {
             StatusLineItem::ContextRemaining => self
                 .status_line_context_remaining_percent()
                 .map(|remaining| format!("Context {remaining}% left")),
-            StatusLineItem::ContextUsed => self
-                .status_line_context_used_percent()
-                .map(|used| format!("Context {used}% used")),
+            StatusLineItem::ContextUsed => self.status_line_context_used_percent().map(|used| {
+                format_context_used(
+                    used,
+                    self.status_line_context_used_tokens(),
+                    self.config.tui_context_used_style,
+                )
+            }),
             StatusLineItem::FiveHourLimit => {
                 let (window, is_secondary) = self
                     .rate_limit_snapshots_by_limit_id
@@ -654,8 +686,47 @@ impl ChatWidget {
                 },
             ),
             StatusLineItem::TaskProgress => self.terminal_title_task_progress(),
-            StatusLineItem::Timing => None,
+            StatusLineItem::Timing => self.config.tui_timing.as_ref().and_then(|config| {
+                crate::history_cell::compact_runtime_metrics_label(
+                    self.turn_runtime_metrics,
+                    config,
+                )
+            }),
         }
+    }
+
+    fn status_line_timing_value(&self) -> Option<(String, bool)> {
+        let config = self.config.tui_timing.as_ref()?;
+        crate::history_cell::compact_runtime_metrics_label(self.turn_runtime_metrics, config)
+            .map(|value| (value, /*muted*/ false))
+            .or_else(|| {
+                self.last_turn_runtime_metrics.and_then(|summary| {
+                    crate::history_cell::compact_runtime_metrics_label(summary, config)
+                        .map(|value| (value, /*muted*/ true))
+                })
+            })
+    }
+
+    fn mcp_startup_progress_label(&self) -> Option<String> {
+        let current = self.mcp_startup_status.as_ref()?;
+        if current.is_empty() {
+            return None;
+        }
+
+        let total = self
+            .mcp_startup_expected_servers
+            .as_ref()
+            .map_or(current.len(), HashSet::len)
+            .max(current.len());
+        if total == 0 {
+            return None;
+        }
+
+        let completed = current
+            .values()
+            .filter(|state| !matches!(state, McpStartupStatus::Starting))
+            .count();
+        Some(format!("MCP: {completed}/{total}"))
     }
 
     fn status_line_pull_request_url(&self) -> Option<String> {
@@ -1026,6 +1097,32 @@ fn approval_mode_display(config: &Config) -> String {
         "auto-review".to_string()
     } else {
         config.permissions.approval_policy.value().to_string()
+    }
+}
+
+fn format_context_used(used: i64, used_tokens: Option<i64>, style: TuiContextUsedStyle) -> String {
+    let used = used.clamp(0, 100);
+    let filled = ((used + 19) / 20) as usize;
+    let empty = 5usize.saturating_sub(filled);
+    let usage_label = used_tokens.map_or_else(
+        || format!("{used}%"),
+        |tokens| format!("{used}% ({})", format_tokens_compact(tokens)),
+    );
+    match style {
+        TuiContextUsedStyle::Percent => usage_label,
+        TuiContextUsedStyle::Blocks => {
+            format!("{}{} {usage_label}", "▰".repeat(filled), "▱".repeat(empty))
+        }
+        TuiContextUsedStyle::SolidBlocks => {
+            format!("{}{} {usage_label}", "█".repeat(filled), "░".repeat(empty))
+        }
+        TuiContextUsedStyle::Ascii => {
+            format!(
+                "[{}{}] {usage_label}",
+                "=".repeat(filled),
+                ".".repeat(empty)
+            )
+        }
     }
 }
 

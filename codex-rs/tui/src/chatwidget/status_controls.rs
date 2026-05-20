@@ -69,6 +69,11 @@ impl ChatWidget {
         self.bottom_pane.set_status_line(status_line);
     }
 
+    /// Sets the right-aligned footer status-line value.
+    pub(crate) fn set_status_line_right(&mut self, status_line: Option<Line<'static>>) {
+        self.bottom_pane.set_status_line_right(status_line);
+    }
+
     /// Sets the terminal hyperlink target for the currently rendered footer status line.
     pub(crate) fn set_status_line_hyperlink(&mut self, url: Option<String>) {
         self.bottom_pane.set_status_line_hyperlink(url);
@@ -80,6 +85,16 @@ impl ChatWidget {
     /// user actually looking at?" and the footer stack remains a pure renderer of that decision.
     pub(crate) fn set_active_agent_label(&mut self, active_agent_label: Option<String>) {
         self.bottom_pane.set_active_agent_label(active_agent_label);
+    }
+
+    pub(crate) fn show_agent_menu(
+        &mut self,
+        items: Vec<crate::bottom_pane::AgentMenuItem>,
+        selected_thread_id: Option<codex_protocol::ThreadId>,
+    ) {
+        self.bottom_pane.show_agent_menu(items, selected_thread_id);
+        self.refresh_plan_mode_nudge();
+        self.request_redraw();
     }
 
     /// Recomputes footer status-line content from config and current runtime state.
@@ -361,6 +376,12 @@ impl ChatWidget {
     pub(super) fn status_line_context_used_percent(&self) -> Option<i64> {
         let remaining = self.status_line_context_remaining_percent().unwrap_or(100);
         Some((100 - remaining).clamp(0, 100))
+    }
+
+    pub(super) fn status_line_context_used_tokens(&self) -> Option<i64> {
+        self.token_info
+            .as_ref()
+            .map(|info| info.last_token_usage.tokens_in_context_window())
     }
 
     pub(super) fn status_line_total_usage(&self) -> TokenUsage {

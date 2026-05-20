@@ -112,11 +112,14 @@ impl TranscriptAreaRenderable<'_> {
 impl Renderable for ChatWidget {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         self.as_renderable().render(area, buf);
+        self.bottom_pane.render_agent_menu_overlay(area, buf);
         self.last_rendered_width.set(Some(area.width as usize));
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        self.as_renderable().desired_height(width)
+        self.as_renderable()
+            .desired_height(width)
+            .max(self.bottom_pane.agent_menu_overlay_height().unwrap_or(0))
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {

@@ -101,7 +101,7 @@ impl App {
         // enhanced keyboard reporting is available. We only treat those word-motion fallbacks as
         // agent-switch shortcuts when the composer is empty so we never steal the expected
         // editing behavior for moving across words inside a draft.
-        let allow_agent_word_motion_fallback = !self.enhanced_keys_supported
+        let _allow_agent_word_motion_fallback = !self.enhanced_keys_supported
             && self.chat_widget.composer_text_with_pending().is_empty();
         if self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
@@ -163,6 +163,30 @@ impl App {
         {
             let enabled = !self.chat_widget.raw_output_mode();
             self.apply_raw_output_mode(tui, enabled, /*notify*/ false);
+            return;
+        }
+
+        if self.should_step_edit_last_message_preview_older(key_event) {
+            self.step_backtrack_edit_preview_older();
+            tui.frame_requester().schedule_frame();
+            return;
+        }
+
+        if self.should_handle_edit_last_message_shortcut(key_event) {
+            self.edit_last_message_from_command();
+            tui.frame_requester().schedule_frame();
+            return;
+        }
+
+        if self.should_cancel_edit_last_message_preview(key_event) {
+            self.cancel_backtrack_edit_preview();
+            tui.frame_requester().schedule_frame();
+            return;
+        }
+
+        if self.should_commit_edit_last_message_preview(key_event) {
+            self.commit_backtrack_edit_preview();
+            tui.frame_requester().schedule_frame();
             return;
         }
 
@@ -261,6 +285,43 @@ impl App {
             && self.chat_widget.is_normal_backtrack_mode()
             && self.chat_widget.composer_is_empty()
             && !self.chat_widget.should_handle_vim_insert_escape(key_event)
+    }
+
+    /// Reuse the queued-message edit shortcut for the idle main view.
+    pub(super) fn should_handle_edit_last_message_shortcut(&self, key_event: KeyEvent) -> bool {
+        key_event.kind == KeyEventKind::Press
+            && self.app_keymap_shortcuts_available()
+            && self.keymap.chat.edit_queued_message.is_pressed(key_event)
+            && self
+                .chat_widget
+                .edit_message_shortcut_may_claim_key_event(key_event)
+            && self.chat_widget.is_normal_backtrack_mode()
+    }
+
+    fn should_step_edit_last_message_preview_older(&self, key_event: KeyEvent) -> bool {
+        key_event.kind == KeyEventKind::Press
+            && self.app_keymap_shortcuts_available()
+            && self.keymap.chat.edit_queued_message.is_pressed(key_event)
+            && self
+                .chat_widget
+                .edit_message_shortcut_may_claim_key_event(key_event)
+            && self.backtrack_edit_preview_active()
+            && self.chat_widget.is_normal_backtrack_mode()
+    }
+
+    fn should_cancel_edit_last_message_preview(&self, key_event: KeyEvent) -> bool {
+        matches!(key_event.code, KeyCode::Esc)
+            && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && self.backtrack_edit_preview_active()
+            && self.chat_widget.no_modal_or_popup_active()
+            && !self.chat_widget.should_handle_vim_insert_escape(key_event)
+    }
+
+    fn should_commit_edit_last_message_preview(&self, key_event: KeyEvent) -> bool {
+        matches!(key_event.code, KeyCode::Enter)
+            && key_event.kind == KeyEventKind::Press
+            && self.backtrack_edit_preview_active()
+            && self.chat_widget.no_modal_or_popup_active()
     }
 
     pub(super) fn should_reject_side_backtrack_esc(&self, key_event: KeyEvent) -> bool {

@@ -236,6 +236,84 @@ impl ChatWidget {
         );
     }
 
+    /// Drain the current composer payload as a user message and clear the visible draft.
+    pub(crate) fn take_composer_user_message(&mut self) -> Option<UserMessage> {
+        let draft = self.bottom_pane.composer_draft_snapshot();
+        let user_message = UserMessage {
+            text: draft.text,
+            text_elements: draft.text_elements,
+            local_images: draft.local_images,
+            remote_image_urls: draft.remote_image_urls,
+            mention_bindings: draft.mention_bindings,
+        };
+        let has_content = !user_message.text.is_empty()
+            || !user_message.local_images.is_empty()
+            || !user_message.remote_image_urls.is_empty();
+        if !has_content {
+            return None;
+        }
+        self.clear_composer_draft();
+        Some(user_message)
+    }
+
+    pub(crate) fn capture_reload_draft(&self) -> Option<crate::reload_handoff::ReloadDraft> {
+        let draft = self.bottom_pane.composer_draft_snapshot();
+        let draft = crate::reload_handoff::ReloadDraft {
+            text: draft.text,
+            text_elements: draft.text_elements,
+            local_image_paths: draft
+                .local_images
+                .into_iter()
+                .map(|image| image.path)
+                .collect(),
+            remote_image_urls: draft.remote_image_urls,
+            mention_bindings: draft
+                .mention_bindings
+                .into_iter()
+                .map(|binding| crate::reload_handoff::ReloadMentionBinding {
+                    mention: binding.mention,
+                    path: binding.path,
+                })
+                .collect(),
+            pending_pastes: draft.pending_pastes,
+            cursor: self.bottom_pane.composer_cursor(),
+        };
+        draft.has_content().then_some(draft)
+    }
+
+    pub(crate) fn restore_reload_draft(&mut self, draft: crate::reload_handoff::ReloadDraft) {
+        let mention_bindings = draft
+            .mention_bindings
+            .into_iter()
+            .map(|binding| MentionBinding {
+                mention: binding.mention,
+                path: binding.path,
+            })
+            .collect();
+        self.set_remote_image_urls(draft.remote_image_urls);
+        self.bottom_pane.set_composer_text_with_mention_bindings(
+            draft.text,
+            draft.text_elements,
+            draft.local_image_paths,
+            mention_bindings,
+        );
+        self.bottom_pane
+            .set_composer_pending_pastes(draft.pending_pastes);
+        self.bottom_pane.set_composer_cursor(draft.cursor);
+    }
+
+    pub(crate) fn clear_composer_draft(&mut self) {
+        self.set_remote_image_urls(Vec::new());
+        self.bottom_pane.set_composer_text_with_mention_bindings(
+            String::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        self.bottom_pane.set_composer_pending_pastes(Vec::new());
+        self.refresh_plan_mode_nudge();
+    }
+
     pub(crate) fn capture_thread_input_state(&self) -> Option<ThreadInputState> {
         let draft = self.bottom_pane.composer_draft_snapshot();
         let composer = ThreadComposerState {

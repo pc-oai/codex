@@ -505,6 +505,7 @@ impl ChatComposer {
                 goal_status_indicator: None,
                 ide_context_active: false,
                 status_line_value: None,
+                status_line_right_value: None,
                 status_line_hyperlink_url: None,
                 status_line_enabled: false,
                 side_conversation_context_label: None,
@@ -1087,7 +1088,13 @@ impl ChatComposer {
 
     fn mode_indicator_line(&self, show_cycle_hint: bool) -> Option<Line<'static>> {
         let mut spans: Vec<Span<'static>> = Vec::new();
+        if let Some(status_line_right) = self.footer.status_line_right_value.as_ref() {
+            spans.extend(status_line_right.spans.clone());
+        }
         if let Some(vim_mode) = self.vim_mode_indicator_span() {
+            if !spans.is_empty() {
+                spans.push(" · ".dim());
+            }
             spans.push(vim_mode);
         }
         if let Some(indicators) = status_line_right_indicator_line(
@@ -1254,7 +1261,7 @@ impl ChatComposer {
         self.sync_popups();
     }
 
-    fn current_cursor(&self) -> usize {
+    pub(crate) fn current_cursor(&self) -> usize {
         self.draft.textarea.cursor() + if self.draft.is_bash_mode { 1 } else { 0 }
     }
 
@@ -1271,7 +1278,7 @@ impl ChatComposer {
         }
     }
 
-    fn set_current_cursor(&mut self, cursor: usize) {
+    pub(crate) fn set_current_cursor(&mut self, cursor: usize) {
         let visible_cursor = if self.draft.is_bash_mode {
             cursor.saturating_sub(1)
         } else {
@@ -1466,6 +1473,11 @@ impl ChatComposer {
     #[cfg(test)]
     pub(crate) fn status_line_text(&self) -> Option<String> {
         self.footer.status_line_text()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn status_line_right_text(&self) -> Option<String> {
+        self.footer.status_line_right_text()
     }
 
     pub(crate) fn local_images(&self) -> Vec<LocalImageAttachment> {
@@ -4179,6 +4191,14 @@ impl ChatComposer {
         true
     }
 
+    pub(crate) fn set_status_line_right(&mut self, status_line: Option<Line<'static>>) -> bool {
+        if self.footer.status_line_right_value == status_line {
+            return false;
+        }
+        self.footer.status_line_right_value = status_line;
+        true
+    }
+
     pub(crate) fn set_status_line_hyperlink(&mut self, url: Option<String>) -> bool {
         if self.footer.status_line_hyperlink_url == url {
             return false;
@@ -4440,6 +4460,8 @@ impl ChatComposer {
                     let available_width =
                         hint_rect.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
                     let status_line_active = uses_passive_footer_status_layout(&footer_props);
+                    let status_line_right_pinned = self.footer.status_line_enabled
+                        && self.footer.status_line_right_value.is_some();
                     let combined_status_line = if status_line_active {
                         passive_footer_status_line(&footer_props)
                     } else {
@@ -4452,7 +4474,7 @@ impl ChatComposer {
                     } else {
                         None
                     };
-                    let left_mode_indicator = if status_line_active {
+                    let left_mode_indicator = if status_line_active || status_line_right_pinned {
                         None
                     } else {
                         self.footer.collaboration_mode_indicator
@@ -4485,7 +4507,7 @@ impl ChatComposer {
                             Some(side_conversation_context_line(label))
                         } else if let Some(line) = self.shell_mode_footer_line() {
                             Some(line)
-                        } else if status_line_active {
+                        } else if status_line_active || status_line_right_pinned {
                             let full = self.mode_indicator_line(show_cycle_hint);
                             let compact = self.mode_indicator_line(/*show_cycle_hint*/ false);
                             let full_width = full.as_ref().map(|l| l.width() as u16).unwrap_or(0);
@@ -4512,38 +4534,40 @@ impl ChatComposer {
                         can_show_left_with_context(hint_rect, left_width, right_width);
                     let has_override =
                         self.footer.flash_visible() || active_footer_hint_override.is_some();
-                    let single_line_layout = if has_override || status_line_active {
-                        None
-                    } else {
-                        match footer_props.mode {
-                            FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft => {
-                                // Both of these modes render the single-line footer style (with
-                                // either the shortcuts hint or the optional queue hint). We still
-                                // want the single-line collapse rules so the mode label can win over
-                                // the context indicator on narrow widths.
-                                Some(single_line_footer_layout(
-                                    hint_rect,
-                                    right_width,
-                                    left_mode_indicator,
-                                    show_cycle_hint,
-                                    show_shortcuts_hint,
-                                    show_queue_hint,
-                                    footer_props.key_hints,
-                                ))
+                    let single_line_layout =
+                        if has_override || status_line_active || status_line_right_pinned {
+                            None
+                        } else {
+                            match footer_props.mode {
+                                FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft => {
+                                    // Both of these modes render the single-line footer style (with
+                                    // either the shortcuts hint or the optional queue hint). We still
+                                    // want the single-line collapse rules so the mode label can win over
+                                    // the context indicator on narrow widths.
+                                    Some(single_line_footer_layout(
+                                        hint_rect,
+                                        right_width,
+                                        left_mode_indicator,
+                                        show_cycle_hint,
+                                        show_shortcuts_hint,
+                                        show_queue_hint,
+                                        footer_props.key_hints,
+                                    ))
+                                }
+                                FooterMode::EscHint
+                                | FooterMode::HistorySearch
+                                | FooterMode::QuitShortcutReminder
+                                | FooterMode::ShortcutOverlay => None,
                             }
-                            FooterMode::EscHint
-                            | FooterMode::HistorySearch
-                            | FooterMode::QuitShortcutReminder
-                            | FooterMode::ShortcutOverlay => None,
-                        }
-                    };
+                        };
                     let show_right = if matches!(
                         footer_props.mode,
                         FooterMode::EscHint
                             | FooterMode::HistorySearch
                             | FooterMode::QuitShortcutReminder
                             | FooterMode::ShortcutOverlay
-                    ) {
+                    ) && !status_line_right_pinned
+                    {
                         false
                     } else {
                         single_line_layout

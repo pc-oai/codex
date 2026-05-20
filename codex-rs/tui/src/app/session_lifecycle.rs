@@ -40,47 +40,26 @@ impl App {
             return;
         }
 
-        let mut initial_selected_idx = None;
-        let items: Vec<SelectionItem> = self
+        let items: Vec<crate::bottom_pane::AgentMenuItem> = self
             .agent_navigation
             .ordered_threads()
             .iter()
-            .enumerate()
-            .map(|(idx, (thread_id, entry))| {
-                if self.active_thread_id == Some(*thread_id) {
-                    initial_selected_idx = Some(idx);
-                }
-                let id = *thread_id;
+            .map(|(thread_id, entry)| {
                 let is_primary = self.primary_thread_id == Some(*thread_id);
-                let name = format_agent_picker_item_name(
-                    entry.agent_nickname.as_deref(),
-                    entry.agent_role.as_deref(),
-                    is_primary,
-                );
-                let uuid = thread_id.to_string();
-                SelectionItem {
-                    name: name.clone(),
-                    name_prefix_spans: agent_picker_status_dot_spans(entry.is_closed),
-                    description: Some(uuid.clone()),
-                    is_current: self.active_thread_id == Some(*thread_id),
-                    actions: vec![Box::new(move |tx| {
-                        tx.send(AppEvent::SelectAgentThread(id));
-                    })],
-                    dismiss_on_select: true,
-                    search_value: Some(format!("{name} {uuid}")),
-                    ..Default::default()
+                crate::bottom_pane::AgentMenuItem {
+                    thread_id: *thread_id,
+                    label: format_agent_picker_item_name(
+                        entry.agent_nickname.as_deref(),
+                        entry.agent_role.as_deref(),
+                        is_primary,
+                    ),
+                    is_closed: entry.is_closed,
                 }
             })
             .collect();
 
-        self.chat_widget.show_selection_view(SelectionViewParams {
-            title: Some("Subagents".to_string()),
-            subtitle: Some(AgentNavigationState::picker_subtitle()),
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            initial_selected_idx,
-            ..Default::default()
-        });
+        self.chat_widget
+            .show_agent_menu(items, self.active_thread_id);
     }
 
     pub(super) fn is_terminal_thread_read_error(err: &color_eyre::Report) -> bool {

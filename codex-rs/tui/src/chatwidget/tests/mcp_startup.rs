@@ -61,7 +61,7 @@ async fn mcp_startup_complete_does_not_clear_running_task() {
 }
 
 #[tokio::test]
-async fn turn_start_preserves_active_mcp_startup_header() {
+async fn turn_start_keeps_mcp_startup_in_footer() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_mcp_startup_expected_servers(["schaltwerk".to_string()]);
 
@@ -69,10 +69,7 @@ async fn turn_start_preserves_active_mcp_startup_header() {
     handle_turn_started(&mut chat, "turn-1");
 
     assert!(chat.bottom_pane.is_task_running());
-    assert_eq!(
-        chat.status_state.current_status.header,
-        "Booting MCP server: schaltwerk"
-    );
+    assert_eq!(chat.status_state.current_status.header, "Working");
 
     notify_mcp_status(&mut chat, "schaltwerk", McpServerStartupState::Ready);
 
@@ -80,7 +77,7 @@ async fn turn_start_preserves_active_mcp_startup_header() {
 }
 
 #[tokio::test]
-async fn turn_start_replaces_idle_completed_mcp_startup_header() {
+async fn turn_start_after_idle_mcp_startup_sets_working_status() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_mcp_startup_expected_servers(["schaltwerk".to_string()]);
 
@@ -88,11 +85,6 @@ async fn turn_start_replaces_idle_completed_mcp_startup_header() {
     notify_mcp_status(&mut chat, "schaltwerk", McpServerStartupState::Ready);
 
     assert!(!chat.bottom_pane.is_task_running());
-    assert_eq!(
-        chat.status_state.current_status.header,
-        "Booting MCP server: schaltwerk"
-    );
-
     handle_turn_started(&mut chat, "turn-1");
 
     assert!(chat.bottom_pane.is_task_running());
@@ -174,12 +166,7 @@ async fn mcp_startup_failure_restores_running_status_header() {
 
     notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
     notify_mcp_status(&mut chat, "beta", McpServerStartupState::Starting);
-    assert!(
-        chat.status_state
-            .current_status
-            .header
-            .starts_with("Starting MCP servers")
-    );
+    assert_eq!(chat.status_state.current_status.header, "Working");
 
     notify_mcp_status_error(
         &mut chat,
@@ -202,12 +189,7 @@ async fn mcp_startup_complete_preserves_review_status() {
     handle_turn_started(&mut chat, "turn-1");
 
     notify_mcp_status(&mut chat, "alpha", McpServerStartupState::Starting);
-    assert!(
-        chat.status_state
-            .current_status
-            .header
-            .starts_with("Booting MCP server")
-    );
+    assert_eq!(chat.status_state.current_status.header, "Working");
 
     chat.on_guardian_assessment(GuardianAssessmentEvent {
         id: "guardian-1".to_string(),

@@ -49,6 +49,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 mod action_required_title;
+mod agent_menu;
 mod app_link_view;
 mod approval_overlay;
 mod mcp_server_elicitation;
@@ -60,6 +61,7 @@ mod status_surface_preview;
 mod title_setup;
 pub(crate) use action_required_title::ACTION_REQUIRED_PREVIEW_PREFIX;
 pub(crate) use action_required_title::build_action_required_title_text;
+pub(crate) use agent_menu::AgentMenuItem;
 pub(crate) use app_link_view::AppLinkElicitationTarget;
 pub(crate) use app_link_view::AppLinkSuggestionType;
 pub(crate) use app_link_view::AppLinkView;
@@ -71,6 +73,7 @@ pub(crate) use mcp_server_elicitation::McpServerElicitationFormRequest;
 pub(crate) use mcp_server_elicitation::McpServerElicitationOverlay;
 pub(crate) use request_user_input::RequestUserInputOverlay;
 pub(crate) use status_line_style::status_line_from_segments;
+pub(crate) use status_line_style::status_line_from_segments_with_muting;
 mod bottom_pane_view;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -205,6 +208,8 @@ pub(crate) struct BottomPane {
 
     /// Stack of views displayed instead of the composer (e.g. popups/modals).
     view_stack: Vec<Box<dyn BottomPaneView>>,
+    /// Floating, composer-preserving agent chooser anchored over the footer.
+    agent_menu: Option<agent_menu::AgentMenu>,
     delayed_approval_requests: VecDeque<DelayedApprovalRequest>,
     last_composer_activity_at: Option<Instant>,
 
@@ -272,6 +277,7 @@ impl BottomPane {
         Self {
             composer,
             view_stack: Vec::new(),
+            agent_menu: None,
             delayed_approval_requests: VecDeque::new(),
             last_composer_activity_at: None,
             app_event_tx,
@@ -564,6 +570,18 @@ impl BottomPane {
 
     /// Forward a key event to the active view or the composer.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
+        if let Some(agent_menu) = self.agent_menu.as_mut() {
+            if key_event.kind == KeyEventKind::Release {
+                return InputResult::None;
+            }
+
+            if agent_menu.handle_key_event(key_event) {
+                self.agent_menu = None;
+            }
+            self.request_redraw();
+            return InputResult::None;
+        }
+
         // If a modal/view is active, handle it here; otherwise forward to composer.
         if !self.view_stack.is_empty() {
             if key_event.kind == KeyEventKind::Release {
@@ -668,7 +686,10 @@ impl BottomPane {
     /// was received, but it does not decide whether the process should exit; `ChatWidget` owns the
     /// quit/interrupt state machine and uses the result to decide what happens next.
     pub(crate) fn on_ctrl_c(&mut self) -> CancellationEvent {
-        if let Some(view) = self.view_stack.last_mut() {
+        if self.agent_menu.take().is_some() {
+            self.request_redraw();
+            CancellationEvent::Handled
+        } else if let Some(view) = self.view_stack.last_mut() {
             let event = view.on_ctrl_c();
             let view_complete = view.is_complete();
             let completion = view.completion();
@@ -695,6 +716,10 @@ impl BottomPane {
     }
 
     pub fn handle_paste(&mut self, pasted: String) {
+        if self.agent_menu.is_some() {
+            return;
+        }
+
         let has_pasted_text = !pasted.is_empty();
         if let Some(view) = self.view_stack.last_mut() {
             let needs_redraw = view.handle_paste(pasted);
@@ -812,6 +837,15 @@ impl BottomPane {
     /// Get the current composer text (for tests and programmatic checks).
     pub(crate) fn composer_text(&self) -> String {
         self.composer.current_text()
+    }
+
+    pub(crate) fn composer_cursor(&self) -> usize {
+        self.composer.current_cursor()
+    }
+
+    pub(crate) fn set_composer_cursor(&mut self, cursor: usize) {
+        self.composer.set_current_cursor(cursor);
+        self.request_redraw();
     }
 
     pub(crate) fn composer_draft_snapshot(&self) -> chat_composer::ComposerDraftSnapshot {
@@ -957,6 +991,11 @@ impl BottomPane {
         self.composer.status_line_text()
     }
 
+    #[cfg(test)]
+    pub(crate) fn status_line_right_text(&self) -> Option<String> {
+        self.composer.status_line_right_text()
+    }
+
     pub(crate) fn show_esc_backtrack_hint(&mut self) {
         self.esc_backtrack_hint = true;
         self.composer.set_esc_backtrack_hint(/*show*/ true);
@@ -1050,6 +1089,20 @@ impl BottomPane {
             self.keymap.list.clone(),
         );
         self.push_view(Box::new(view));
+    }
+
+    /// Show the compact floating agent chooser without replacing the composer.
+    pub(crate) fn show_agent_menu(
+        &mut self,
+        items: Vec<AgentMenuItem>,
+        selected_thread_id: Option<codex_protocol::ThreadId>,
+    ) {
+        self.agent_menu = Some(agent_menu::AgentMenu::new(
+            items,
+            selected_thread_id,
+            self.app_event_tx.clone(),
+        ));
+        self.request_redraw();
     }
 
     fn apply_standard_popup_hint(&self, params: &mut list_selection_view::SelectionViewParams) {
@@ -1236,12 +1289,15 @@ impl BottomPane {
     /// overlays or popups and not running a task. This is the safe context to
     /// use Esc-Esc for backtracking from the main view.
     pub(crate) fn is_normal_backtrack_mode(&self) -> bool {
-        !self.is_task_running && self.view_stack.is_empty() && !self.composer.popup_active()
+        !self.is_task_running
+            && self.agent_menu.is_none()
+            && self.view_stack.is_empty()
+            && !self.composer.popup_active()
     }
 
     /// Return true when no popups or modal views are active, regardless of task state.
     pub(crate) fn can_launch_external_editor(&self) -> bool {
-        self.view_stack.is_empty() && !self.composer.popup_active()
+        self.agent_menu.is_none() && self.view_stack.is_empty() && !self.composer.popup_active()
     }
 
     /// Returns true when the bottom pane has no active modal view and no active composer popup.
@@ -1532,7 +1588,7 @@ impl BottomPane {
     }
 
     pub(crate) fn attach_image(&mut self, path: PathBuf) {
-        if self.view_stack.is_empty() {
+        if self.agent_menu.is_none() && self.view_stack.is_empty() {
             self.composer.attach_image(path);
             self.request_redraw();
         }
@@ -1662,6 +1718,12 @@ impl BottomPane {
         }
     }
 
+    pub(crate) fn set_status_line_right(&mut self, status_line: Option<Line<'static>>) {
+        if self.composer.set_status_line_right(status_line) {
+            self.request_redraw();
+        }
+    }
+
     pub(crate) fn set_status_line_hyperlink(&mut self, url: Option<String>) {
         if self.composer.set_status_line_hyperlink(url) {
             self.request_redraw();
@@ -1754,11 +1816,30 @@ impl Renderable for BottomPane {
         self.as_renderable().desired_height(width)
     }
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        self.as_renderable().cursor_pos(area)
+        if self.agent_menu.is_some() {
+            None
+        } else {
+            self.as_renderable().cursor_pos(area)
+        }
     }
 
     fn cursor_style(&self, area: Rect) -> crossterm::cursor::SetCursorStyle {
         self.as_renderable().cursor_style(area)
+    }
+}
+
+impl BottomPane {
+    /// Render the agent chooser over the already-laid-out chat surface.
+    pub(crate) fn render_agent_menu_overlay(&self, area: Rect, buf: &mut Buffer) {
+        if let Some(agent_menu) = &self.agent_menu {
+            agent_menu.render(area, buf);
+        }
+    }
+
+    pub(crate) fn agent_menu_overlay_height(&self) -> Option<u16> {
+        self.agent_menu
+            .as_ref()
+            .map(agent_menu::AgentMenu::preferred_overlay_height)
     }
 }
 
