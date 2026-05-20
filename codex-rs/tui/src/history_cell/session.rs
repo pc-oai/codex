@@ -146,22 +146,10 @@ pub(crate) fn new_session_info(
     auth_plan: Option<PlanType>,
     show_fast_status: bool,
 ) -> SessionInfoCell {
-    // Header box rendered as history (so it appears at the very top)
-    let header = SessionHeaderHistoryCell::new(
-        session.model.clone(),
-        session.reasoning_effort,
-        show_fast_status,
-        config.cwd.to_path_buf(),
-        CODEX_CLI_VERSION,
-    )
-    .with_yolo_mode(has_yolo_permissions(
-        session.approval_policy,
-        &session.permission_profile,
-    ));
-    let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
+    let mut parts: Vec<Box<dyn HistoryCell>> = Vec::new();
 
     if is_first_event {
-        // Help lines below the header (new copy and list)
+        // Help lines for the first prompt surface (new copy and list).
         let help_lines: Vec<Line<'static>> = vec![
             "  To get started, describe a task or try one of these commands:"
                 .dim()
