@@ -91,6 +91,10 @@ pub(crate) struct ChatKeymap {
     pub(crate) retitle_current_session: Vec<KeyBinding>,
     /// Edit the most recently queued message.
     pub(crate) edit_queued_message: Vec<KeyBinding>,
+    /// Discard the most recently queued message.
+    pub(crate) discard_queued_message: Vec<KeyBinding>,
+    /// Promote the most recently queued message into an immediate steer.
+    pub(crate) steer_queued_message: Vec<KeyBinding>,
 }
 
 /// Composer-level keybindings validated in the second app-scope conflict pass.
@@ -444,6 +448,16 @@ impl RuntimeKeymap {
                 &defaults.chat.edit_queued_message,
                 "tui.keymap.chat.edit_queued_message",
             )?,
+            discard_queued_message: resolve_bindings(
+                keymap.chat.discard_queued_message.as_ref(),
+                &defaults.chat.discard_queued_message,
+                "tui.keymap.chat.discard_queued_message",
+            )?,
+            steer_queued_message: resolve_bindings(
+                keymap.chat.steer_queued_message.as_ref(),
+                &defaults.chat.steer_queued_message,
+                "tui.keymap.chat.steer_queued_message",
+            )?,
         };
 
         let composer = ComposerKeymap {
@@ -729,6 +743,12 @@ impl RuntimeKeymap {
                     ctrl(KeyCode::Char('e')),
                     shift(KeyCode::Left)
                 ],
+                discard_queued_message: default_bindings![ctrl(KeyCode::Char('x'))],
+                steer_queued_message: default_bindings![
+                    alt(KeyCode::Enter),
+                    alt(KeyCode::Down),
+                    shift(KeyCode::Right)
+                ],
             },
             composer: ComposerKeymap {
                 submit: default_bindings![plain(KeyCode::Enter)],
@@ -972,6 +992,14 @@ impl RuntimeKeymap {
                     "chat.edit_queued_message",
                     self.chat.edit_queued_message.as_slice(),
                 ),
+                (
+                    "chat.discard_queued_message",
+                    self.chat.discard_queued_message.as_slice(),
+                ),
+                (
+                    "chat.steer_queued_message",
+                    self.chat.steer_queued_message.as_slice(),
+                ),
                 ("composer.submit", self.composer.submit.as_slice()),
                 ("composer.queue", self.composer.queue.as_slice()),
                 (
@@ -1029,6 +1057,14 @@ impl RuntimeKeymap {
                 (
                     "chat.edit_queued_message",
                     self.chat.edit_queued_message.as_slice(),
+                ),
+                (
+                    "chat.discard_queued_message",
+                    self.chat.discard_queued_message.as_slice(),
+                ),
+                (
+                    "chat.steer_queued_message",
+                    self.chat.steer_queued_message.as_slice(),
                 ),
                 ("composer.submit", self.composer.submit.as_slice()),
                 ("composer.queue", self.composer.queue.as_slice()),

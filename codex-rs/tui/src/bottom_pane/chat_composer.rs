@@ -1164,6 +1164,11 @@ impl ChatComposer {
         self.footer.hint_override = items;
     }
 
+    #[cfg(test)]
+    pub(crate) fn footer_hint_override_items(&self) -> Option<Vec<(String, String)>> {
+        self.footer.hint_override.clone()
+    }
+
     /// Updates whether the Plan-mode nudge replaces the ambient footer row.
     ///
     /// Returns `true` only when the rendered footer can change so callers can avoid scheduling
@@ -5036,8 +5041,10 @@ mod tests {
                 composer
                     .history
                     .record_local_submission(HistoryEntry::new("cargo test".to_string()));
-                let _ = composer
-                    .handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+                let _ = composer.handle_key_event(KeyEvent::new(
+                    KeyCode::Char('r'),
+                    KeyModifiers::ALT | KeyModifiers::SHIFT,
+                ));
                 let _ = composer
                     .handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
             },

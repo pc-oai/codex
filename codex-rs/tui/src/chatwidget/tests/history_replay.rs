@@ -976,6 +976,7 @@ async fn replayed_completed_exec_turn_rehydrates_tool_output() {
     chat.replay_thread_turns(
         vec![AppServerTurn {
             id: "turn-1".to_string(),
+            items_view: Default::default(),
             items: vec![AppServerThreadItem::CommandExecution {
                 id: "exec-1".to_string(),
                 command: "printf replay-output".to_string(),
@@ -1041,6 +1042,7 @@ async fn completed_work_turn_replay_preserves_durable_rendered_shape() {
     replayed.replay_thread_turns(
         vec![AppServerTurn {
             id: "turn-1".to_string(),
+            items_view: Default::default(),
             items: vec![
                 AppServerThreadItem::CommandExecution {
                     id: "call-1".to_string(),

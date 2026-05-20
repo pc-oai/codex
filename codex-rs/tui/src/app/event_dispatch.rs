@@ -2204,6 +2204,20 @@ impl App {
         app_server: &mut AppServerSession,
         mode: ExitMode,
     ) -> AppRunControl {
+        if let Some(thread_id) = self.chat_widget.thread_id() {
+            let draft = self.chat_widget.capture_reload_draft();
+            if let Err(err) = crate::reload_handoff::replace_resume(
+                self.config.codex_home.as_path(),
+                thread_id,
+                draft.as_ref(),
+            ) {
+                tracing::warn!(
+                    error = %err,
+                    "failed to persist composer draft for later resume"
+                );
+            }
+        }
+
         match mode {
             ExitMode::ShutdownFirst => {
                 // Mark the thread we are explicitly shutting down for exit so

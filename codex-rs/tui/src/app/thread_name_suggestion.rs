@@ -90,6 +90,7 @@ impl App {
                     text: prompt,
                     text_elements: Vec::new(),
                 }],
+                /*rollback_num_turns*/ None,
                 child_session.cwd.to_path_buf(),
                 child_session.approval_policy,
                 child_session.approvals_reviewer,

@@ -252,6 +252,14 @@ fn queued_message_edit_hint_binding(
         .or_else(|| bindings.first().copied())
 }
 
+fn queued_message_steer_hint_binding(bindings: &[KeyBinding]) -> Option<KeyBinding> {
+    bindings.first().copied()
+}
+
+fn queued_message_discard_hint_binding(bindings: &[KeyBinding]) -> Option<KeyBinding> {
+    bindings.first().copied()
+}
+
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 use crate::app_event::RateLimitRefreshOrigin;

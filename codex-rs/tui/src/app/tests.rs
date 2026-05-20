@@ -5438,12 +5438,13 @@ async fn cancel_edit_last_message_preview_preserves_transcript() {
 
 #[tokio::test]
 async fn commit_edit_last_message_preview_rolls_back_then_submits_edit() {
-    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
     app.chat_widget.handle_thread_session(test_thread_session(
         ThreadId::new(),
         test_path_buf("/home/user/project"),
     ));
     while op_rx.try_recv().is_ok() {}
+    while app_event_rx.try_recv().is_ok() {}
     app.transcript_cells = vec![
         Arc::new(UserHistoryCell {
             message: "original".to_string(),
@@ -5493,8 +5494,8 @@ async fn commit_edit_last_message_preview_rolls_back_then_submits_edit() {
     assert!(!app.backtrack_edit_preview_active());
     assert!(app.transcript_cells.is_empty());
     assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::AddToHistory { text }) if text == "edited"
+        app_event_rx.try_recv(),
+        Ok(AppEvent::AppendMessageHistoryEntry { text, .. }) if text == "edited"
     );
     assert!(op_rx.try_recv().is_err());
 }

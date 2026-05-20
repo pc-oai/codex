@@ -1,6 +1,5 @@
 ---
 source: tui/src/app/tests.rs
-assertion_line: 3101
 expression: "AgentNavigationState::picker_subtitle()"
 ---
-Select an agent to watch. ⌥ + [ previous, ⌥ + ] next, ctrl + s rotate.
+Select an agent to watch. ⌥ + [ previous, ⌥ + ] next.

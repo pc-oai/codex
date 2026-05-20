@@ -810,7 +810,10 @@ mod tests {
         composer.set_text_content("draft".to_string(), Vec::new(), Vec::new());
         composer.draft.textarea.set_cursor(/*pos*/ 2);
 
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        let _ = composer.handle_key_event(KeyEvent::new(
+            KeyCode::Char('r'),
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+        ));
         assert_eq!(composer.draft.textarea.text(), "draft");
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
         assert_eq!(composer.draft.textarea.text(), "remembered command");

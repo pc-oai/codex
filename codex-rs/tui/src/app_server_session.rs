@@ -581,6 +581,7 @@ impl AppServerSession {
         &mut self,
         thread_id: ThreadId,
         items: Vec<UserInput>,
+        rollback_num_turns: Option<u32>,
         cwd: PathBuf,
         approval_policy: AskForApproval,
         approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
@@ -603,7 +604,7 @@ impl AppServerSession {
                 params: TurnStartParams {
                     thread_id: thread_id.to_string(),
                     input: items,
-                    rollback_num_turns: None,
+                    rollback_num_turns,
                     responsesapi_client_metadata: None,
                     environments: None,
                     cwd: Some(cwd),
@@ -2174,6 +2175,8 @@ mod tests {
                 agent_role: None,
                 git_info: None,
                 name: None,
+                user_message_count: 0,
+                user_state: Default::default(),
                 turns: vec![Turn {
                     id: "turn-1".to_string(),
                     items_view: codex_app_server_protocol::TurnItemsView::Full,

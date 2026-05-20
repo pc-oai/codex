@@ -868,8 +868,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            paste_text_inline_char_limit:
-                codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT,
             animations_enabled: false,
             skills: Some(Vec::new()),
         });
@@ -1130,7 +1128,7 @@ mod tests {
         assert_eq!(unbound_tab.items[0].name, "Toggle Vim Mode");
         assert_eq!(unbound_tab.items[0].description.as_deref(), Some("unbound"));
         assert!(!unbound_tab.items[0].is_disabled);
-        assert_eq!(unbound_tab.items[1].name, "History Search Next");
+        assert_eq!(unbound_tab.items[1].name, "Rename Current Session");
         assert_eq!(unbound_tab.items[1].description.as_deref(), Some("unbound"));
         assert!(!unbound_tab.items[1].is_disabled);
         assert_eq!(unbound_tab.items[2].name, "Kill Whole Line");
@@ -1387,11 +1385,15 @@ mod tests {
     #[test]
     fn debug_view_uses_custom_binding_source() {
         let keymap =
-            keymap_with_replacement(&TuiKeymap::default(), "global", "copy", "ctrl-x").unwrap();
+            keymap_with_replacement(&TuiKeymap::default(), "global", "copy", "ctrl-shift-x")
+                .unwrap();
         let runtime = RuntimeKeymap::from_config(&keymap).unwrap();
         let mut view = build_keymap_debug_view(&runtime, &keymap);
 
-        view.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        view.handle_key_event(KeyEvent::new(
+            KeyCode::Char('x'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ));
 
         let rendered = render_debug(&view, /*width*/ 100);
         assert!(rendered.contains("global.copy (Copy)"));

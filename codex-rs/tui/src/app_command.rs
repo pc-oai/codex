@@ -39,6 +39,7 @@ pub(crate) enum AppCommand {
     },
     UserTurn {
         items: Vec<UserInput>,
+        rollback_num_turns: Option<u32>,
         cwd: PathBuf,
         approval_policy: AskForApproval,
         approvals_reviewer: Option<ApprovalsReviewer>,
@@ -157,6 +158,7 @@ impl AppCommand {
     ) -> Self {
         Self::UserTurn {
             items,
+            rollback_num_turns: None,
             cwd,
             approval_policy,
             approvals_reviewer: None,
@@ -168,6 +170,41 @@ impl AppCommand {
             final_output_json_schema,
             collaboration_mode,
             personality,
+        }
+    }
+
+    pub(crate) fn with_rollback_num_turns(self, rollback_num_turns: u32) -> Self {
+        match self {
+            Self::UserTurn {
+                items,
+                cwd,
+                approval_policy,
+                approvals_reviewer,
+                active_permission_profile,
+                model,
+                effort,
+                summary,
+                service_tier,
+                final_output_json_schema,
+                collaboration_mode,
+                personality,
+                ..
+            } => Self::UserTurn {
+                items,
+                rollback_num_turns: Some(rollback_num_turns),
+                cwd,
+                approval_policy,
+                approvals_reviewer,
+                active_permission_profile,
+                model,
+                effort,
+                summary,
+                service_tier,
+                final_output_json_schema,
+                collaboration_mode,
+                personality,
+            },
+            op => op,
         }
     }
 

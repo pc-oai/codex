@@ -56,6 +56,25 @@ impl ChatWidget {
                 modifiers,
                 kind: KeyEventKind::Press,
                 ..
+            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'x') => {
+                let discard_queued_message = self
+                    .chat_keymap
+                    .discard_queued_message
+                    .is_pressed(key_event)
+                    && self.has_queued_follow_up_messages()
+                    && self.bottom_pane.no_modal_or_popup_active();
+                if !discard_queued_message {
+                    if !self.composer_is_empty() {
+                        self.clear_composer_draft();
+                    }
+                    return;
+                }
+            }
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
             } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'d') => {
                 if self.on_ctrl_d() {
                     return;
@@ -154,6 +173,35 @@ impl ChatWidget {
             return;
         }
 
+        if key_event.kind == KeyEventKind::Press
+            && self
+                .chat_keymap
+                .discard_queued_message
+                .is_pressed(key_event)
+            && self.has_queued_follow_up_messages()
+            && self.bottom_pane.no_modal_or_popup_active()
+        {
+            if self.pop_latest_queued_user_message().is_some() {
+                self.refresh_pending_input_preview();
+                self.request_redraw();
+            }
+            return;
+        }
+
+        if key_event.kind == KeyEventKind::Press
+            && self.chat_keymap.steer_queued_message.is_pressed(key_event)
+            && self.has_queued_follow_up_messages()
+            && self.turn_lifecycle.agent_turn_running
+            && self.bottom_pane.no_modal_or_popup_active()
+        {
+            if let Some(user_message) = self.pop_latest_queued_user_message() {
+                self.submit_user_message(user_message);
+                self.refresh_pending_input_preview();
+                self.request_redraw();
+            }
+            return;
+        }
+
         if matches!(key_event.code, KeyCode::Esc)
             && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
             && !self.input_queue.pending_steers.is_empty()
@@ -239,6 +287,11 @@ impl ChatWidget {
         self.bottom_pane.set_footer_hint_override(items);
     }
 
+    #[cfg(test)]
+    pub(crate) fn footer_hint_override_items(&self) -> Option<Vec<(String, String)>> {
+        self.bottom_pane.footer_hint_override_items()
+    }
+
     pub(crate) fn show_edit_last_message_hint(&mut self, target: String) {
         self.bottom_pane.set_footer_hint_override(Some(vec![
             ("Editing".to_string(), target),
@@ -264,6 +317,10 @@ impl ChatWidget {
 
     pub(crate) fn no_modal_or_popup_active(&self) -> bool {
         self.bottom_pane.no_modal_or_popup_active()
+    }
+
+    pub(crate) fn is_task_running(&self) -> bool {
+        self.bottom_pane.is_task_running()
     }
 
     pub(crate) fn can_launch_external_editor(&self) -> bool {
