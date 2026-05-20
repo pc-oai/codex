@@ -342,3 +342,5 @@ current fork contract.
 | `62e3ef8067cc` | Drop stale merged state-test import | Merge repair |
 | `d493d92da968` | Remap conflicting old local state migrations | State compatibility |
 | `e6dda1d1ee04` | Advance the local build marker after the archived build | Local runtime |
+| `7c89664f2092` | Restore split footer status, compact agent picker, and direct edit shortcuts after merge | Footer, agents, editing |
+| `fafeb52f2fc3` | Advance the local build marker after `v60` verification | Local runtime |
