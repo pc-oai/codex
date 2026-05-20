@@ -21,6 +21,14 @@ path = "src/bin/talon_send.rs"
 name = "talon-sim"
 path = "src/bin/talon_sim.rs"
 
+[[bin]]
+name = "transcript-tree"
+path = "src/bin/transcript_tree.rs"
+
+[[bin]]
+name = "transcript-outline"
+path = "src/bin/transcript_outline.rs"
+
 [lib]
 name = "codex_tui"
 path = "src/lib.rs"
