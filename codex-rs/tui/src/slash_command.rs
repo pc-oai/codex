@@ -31,6 +31,8 @@ pub enum SlashCommand {
     Rename,
     New,
     Resume,
+    #[strum(to_string = "reload", serialize = "r")]
+    Reload,
     Fork,
     Init,
     Compact,
@@ -85,6 +87,7 @@ impl SlashCommand {
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Rename => "rename the current thread",
             SlashCommand::Resume => "resume a saved chat",
+            SlashCommand::Reload => "restart Codex and resume this chat",
             SlashCommand::Clear => "clear the terminal and start a new chat",
             SlashCommand::Fork => "fork the current chat",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
@@ -177,6 +180,7 @@ impl SlashCommand {
         match self {
             SlashCommand::New
             | SlashCommand::Resume
+            | SlashCommand::Reload
             | SlashCommand::Fork
             | SlashCommand::Init
             | SlashCommand::Compact

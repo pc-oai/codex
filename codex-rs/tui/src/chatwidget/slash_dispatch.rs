@@ -169,6 +169,16 @@ impl ChatWidget {
             SlashCommand::Resume => {
                 self.app_event_tx.send(AppEvent::OpenResumePicker);
             }
+            SlashCommand::Reload => {
+                if self.thread_id.is_some() {
+                    self.app_event_tx.send(AppEvent::ReloadCurrentSession);
+                } else {
+                    self.add_error_message(
+                        "'/reload' is unavailable before the session starts.".to_string(),
+                    );
+                    self.request_redraw();
+                }
+            }
             SlashCommand::Fork => {
                 self.app_event_tx.send(AppEvent::ForkCurrentSession);
             }
@@ -946,6 +956,7 @@ impl ChatWidget {
             | SlashCommand::New
             | SlashCommand::Clear
             | SlashCommand::Resume
+            | SlashCommand::Reload
             | SlashCommand::Fork
             | SlashCommand::Init
             | SlashCommand::Compact

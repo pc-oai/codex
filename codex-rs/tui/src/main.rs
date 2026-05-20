@@ -64,6 +64,9 @@ fn main() -> anyhow::Result<()> {
                 eprintln!("ERROR: {message}");
                 std::process::exit(1);
             }
+            ExitReason::ReloadRequested => {
+                anyhow::bail!("reload requires the top-level `codex` CLI")
+            }
             ExitReason::UserRequested => {}
         }
 

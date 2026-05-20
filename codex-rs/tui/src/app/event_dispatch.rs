@@ -292,6 +292,46 @@ impl App {
             AppEvent::CommitTick => {
                 self.chat_widget.on_commit_tick();
             }
+            AppEvent::ReloadCurrentSession => {
+                if let Some(selected_thread_id) = self.chat_widget.thread_id()
+                    && let Err(err) = crate::reload_handoff::save_tree(
+                        self.chat_widget.config_ref().codex_home.as_path(),
+                        self.primary_thread_id.unwrap_or(selected_thread_id),
+                        selected_thread_id,
+                        self.chat_widget.capture_reload_draft().as_ref(),
+                    )
+                {
+                    tracing::warn!(
+                        error = %err,
+                        %selected_thread_id,
+                        "failed to preserve reload tree context before reload"
+                    );
+                }
+                match std::env::current_dir() {
+                    Ok(current_cwd) => {
+                        let reload_cwd = crate::session_resume::resume_cwd_or_current(
+                            &current_cwd,
+                            self.chat_widget.config_ref().cwd.as_path(),
+                        );
+                        if reload_cwd != current_cwd
+                            && let Err(err) = std::env::set_current_dir(&reload_cwd)
+                        {
+                            tracing::warn!(
+                                error = %err,
+                                reload_cwd = %reload_cwd.display(),
+                                "failed to switch into session cwd before reload; keeping current cwd"
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            "failed to resolve current cwd before reload; keeping inherited cwd"
+                        );
+                    }
+                }
+                return Ok(AppRunControl::Exit(ExitReason::ReloadRequested));
+            }
             AppEvent::Exit(mode) => {
                 if mode == ExitMode::ShutdownFirst {
                     self.show_shutdown_feedback(tui)?;

@@ -97,18 +97,10 @@ impl App {
         app_server: &mut AppServerSession,
         key_event: KeyEvent,
     ) {
-        // Some terminals, especially on macOS, encode Option+Left/Right as Option+b/f unless
-        // enhanced keyboard reporting is available. We only treat those word-motion fallbacks as
-        // agent-switch shortcuts when the composer is empty so we never steal the expected
-        // editing behavior for moving across words inside a draft.
-        let _allow_agent_word_motion_fallback = !self.enhanced_keys_supported
-            && self.chat_widget.composer_text_with_pending().is_empty();
+        // Thread switching snapshots the active composer with the current thread before replaying
+        // the target one, so these explicit bracket shortcuts can stay live while a draft exists.
         if self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
-            // Alt+Left/Right are also natural word-motion keys in the composer. Keep agent
-            // fast-switch available only once the draft is empty so editing behavior wins whenever
-            // there is text on screen.
-            && self.chat_widget.composer_text_with_pending().is_empty()
             && previous_agent_shortcut_matches(key_event)
         {
             if let Some(thread_id) = self
@@ -123,9 +115,6 @@ impl App {
         }
         if self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
-            // Mirror the previous-agent rule above: empty drafts may use these keys for thread
-            // switching, but non-empty drafts keep them for expected word-wise cursor motion.
-            && self.chat_widget.composer_text_with_pending().is_empty()
             && next_agent_shortcut_matches(key_event)
         {
             if let Some(thread_id) = self
@@ -198,6 +187,20 @@ impl App {
                 self.keymap.pager.clone(),
             ));
             tui.frame_requester().schedule_frame();
+            return;
+        }
+
+        if app_keymap_shortcuts_available
+            && self.keymap.app.reload_current_session.is_pressed(key_event)
+        {
+            if self.chat_widget.thread_id().is_some() {
+                self.app_event_tx.send(AppEvent::ReloadCurrentSession);
+            } else {
+                self.chat_widget.add_error_message(
+                    "Reload is unavailable before the session starts.".to_string(),
+                );
+                tui.frame_requester().schedule_frame();
+            }
             return;
         }
 
