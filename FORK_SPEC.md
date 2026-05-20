@@ -155,6 +155,9 @@ properties, treat that as a fork regression even if the merged tree compiles.
   preview advertising an older default.
 - Local slash helpers keep repeated dogfooding work close to the session:
   `/id`, `/copy-last-request`, `/delete`, `/effort`, and `/reload`.
+- Slash autocomplete keeps short command aliases visible alongside their long
+  spellings, including aliases such as `/m`, `/e`, `/r`, `/c`, `/i`, `/rev`,
+  `/t`, `/rt`, and `/em`.
 - The local default queued-message edit bindings keep both `Ctrl-E` and
   `Alt-E`, not only the upstream arrow-key paths.
 - Pasted text stays intact for submission while the inline display threshold is
