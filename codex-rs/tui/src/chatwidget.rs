@@ -558,6 +558,8 @@ pub(crate) struct ChatWidget {
     last_unified_wait: Option<UnifiedExecWaitState>,
     unified_exec_wait_streak: Option<UnifiedExecWaitStreak>,
     turn_lifecycle: TurnLifecycleState,
+    /// Whether Codex currently owns Ghostty's OSC 9;4 progress-bar surface.
+    managed_terminal_progress_active: bool,
     task_complete_pending: bool,
     unified_exec_processes: Vec<UnifiedExecProcessSummary>,
     /// Tracks per-server MCP startup state while startup is in progress.
@@ -1894,6 +1896,9 @@ fn has_websocket_timing_metrics(summary: RuntimeMetricsSummary) -> bool {
 
 impl Drop for ChatWidget {
     fn drop(&mut self) {
+        if let Err(err) = self.clear_managed_terminal_progress() {
+            tracing::debug!(error = %err, "failed to clear terminal progress bar on widget drop");
+        }
         self.reset_realtime_conversation_state();
         self.stop_rate_limit_poller();
     }

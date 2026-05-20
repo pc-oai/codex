@@ -13,8 +13,56 @@ impl ChatWidget {
     pub(super) fn update_task_running_state(&mut self) {
         self.bottom_pane
             .set_task_running(self.turn_lifecycle.agent_turn_running);
+        self.sync_managed_terminal_progress();
         self.refresh_plan_mode_nudge();
         self.refresh_status_surfaces();
+    }
+
+    fn sync_managed_terminal_progress(&mut self) {
+        let should_show_progress =
+            self.config.tui_terminal_progress_bar && self.turn_lifecycle.agent_turn_running;
+        if self.managed_terminal_progress_active == should_show_progress {
+            return;
+        }
+
+        let progress_update = if should_show_progress {
+            crate::terminal_progress::show_terminal_progress_indeterminate()
+        } else {
+            crate::terminal_progress::clear_terminal_progress()
+        };
+
+        match progress_update {
+            Ok(()) => {
+                self.managed_terminal_progress_active = should_show_progress;
+            }
+            Err(err) => {
+                tracing::debug!(error = %err, "failed to update terminal progress bar");
+            }
+        }
+    }
+
+    /// Transfer live Ghostty progress ownership away from this widget without clearing it.
+    ///
+    /// Thread switches rebuild the whole `ChatWidget`. If the destination thread is also running,
+    /// clearing OSC 9;4 during the old widget's drop and immediately showing it again from the new
+    /// widget creates a tiny tab-bar/progress flicker. The app can move ownership across that swap
+    /// instead when it already knows the destination should keep the bar visible.
+    pub(crate) fn take_managed_terminal_progress(&mut self) -> bool {
+        std::mem::take(&mut self.managed_terminal_progress_active)
+    }
+
+    /// Reuse an already-visible Ghostty progress bar after a thread-widget replacement.
+    pub(crate) fn inherit_managed_terminal_progress(&mut self, progress_active: bool) {
+        self.managed_terminal_progress_active = progress_active;
+    }
+
+    pub(crate) fn clear_managed_terminal_progress(&mut self) -> std::io::Result<()> {
+        if self.managed_terminal_progress_active {
+            crate::terminal_progress::clear_terminal_progress()?;
+            self.managed_terminal_progress_active = false;
+        }
+
+        Ok(())
     }
 
     pub(super) fn collect_runtime_metrics_delta(&mut self) {
@@ -26,15 +74,23 @@ impl ChatWidget {
     pub(super) fn apply_runtime_metrics_delta(&mut self, delta: RuntimeMetricsSummary) {
         let should_log_timing = has_websocket_timing_metrics(delta);
         self.turn_runtime_metrics.merge(delta);
+        self.refresh_status_line();
         if should_log_timing {
             self.log_websocket_timing_totals(delta);
         }
     }
 
     pub(super) fn log_websocket_timing_totals(&mut self, delta: RuntimeMetricsSummary) {
-        if let Some(label) = history_cell::runtime_metrics_label(delta.responses_api_summary()) {
+        if self
+            .configured_status_line_items()
+            .iter()
+            .any(|item| item == "timing")
+        {
+            return;
+        }
+        if let Some(label) = history_cell::runtime_metrics_label(delta) {
             self.add_plain_history_lines(vec![
-                vec!["• ".dim(), format!("WebSocket timing: {label}").dark_gray()].into(),
+                vec!["• ".dim(), format!("Timing: {label}").dark_gray()].into(),
             ]);
         }
     }
@@ -126,36 +182,47 @@ impl ChatWidget {
             }
         }
         self.flush_unified_exec_wait_streak();
-        if !from_replay {
+        let runtime_metrics = if !from_replay {
             self.collect_runtime_metrics_delta();
-            let runtime_metrics =
-                (!self.turn_runtime_metrics.is_empty()).then_some(self.turn_runtime_metrics);
-            let show_work_separator = self.transcript.had_work_activity
-                && (self.transcript.needs_final_message_separator || runtime_metrics.is_some());
-            if show_work_separator || runtime_metrics.is_some() {
-                let elapsed_seconds = if show_work_separator {
-                    duration_ms
-                        .and_then(|duration_ms| u64::try_from(duration_ms).ok())
-                        .map(|duration_ms| duration_ms / 1_000)
-                        .or_else(|| {
-                            self.bottom_pane
-                                .status_widget()
-                                .map(crate::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
-                        })
-                } else {
-                    None
-                };
-                self.add_to_history(history_cell::FinalMessageSeparator::new(
-                    elapsed_seconds,
-                    runtime_metrics,
-                ));
+            if !self.turn_runtime_metrics.is_empty() {
+                self.last_turn_runtime_metrics = Some(self.turn_runtime_metrics);
             }
-            self.last_turn_runtime_metrics = runtime_metrics;
-            self.turn_runtime_metrics = RuntimeMetricsSummary::default();
+            (!self.turn_runtime_metrics.is_empty()).then_some(self.turn_runtime_metrics)
+        } else {
+            None
+        };
+        let show_work_separator = self.transcript.had_work_activity
+            && (self.transcript.needs_final_message_separator || runtime_metrics.is_some());
+        if show_work_separator || runtime_metrics.is_some() {
+            let elapsed_seconds = if show_work_separator {
+                duration_ms
+                    .and_then(|duration_ms| u64::try_from(duration_ms).ok())
+                    .map(|duration_ms| duration_ms / 1_000)
+                    .or_else(|| {
+                        if from_replay {
+                            None
+                        } else {
+                            self.bottom_pane.status_widget().map(
+                                crate::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds,
+                            )
+                        }
+                    })
+            } else {
+                None
+            };
+            self.add_to_history(history_cell::FinalMessageSeparator::new(
+                elapsed_seconds,
+                runtime_metrics,
+            ));
+        }
+        if !from_replay {
             self.transcript.needs_final_message_separator = false;
             self.transcript.had_work_activity = false;
             self.request_status_line_branch_refresh();
             self.request_status_line_git_summary_refresh();
+        } else {
+            self.transcript.needs_final_message_separator = false;
+            self.transcript.had_work_activity = false;
         }
         // Mark task stopped and request redraw now that all content is in history.
         self.status_state.pending_status_indicator_restore = false;
@@ -273,7 +340,7 @@ impl ChatWidget {
         None
     }
 
-    pub(super) fn has_queued_follow_up_messages(&self) -> bool {
+    pub(crate) fn has_queued_follow_up_messages(&self) -> bool {
         self.input_queue.has_queued_follow_up_messages()
     }
 

@@ -327,6 +327,21 @@ impl App {
             &mut snapshot,
         )
         .await;
+        let snapshot_keeps_terminal_progress =
+            Self::thread_switch_snapshot_keeps_terminal_progress(&snapshot);
+        let transferred_terminal_progress = if snapshot_keeps_terminal_progress {
+            self.chat_widget.take_managed_terminal_progress()
+        } else {
+            self.chat_widget
+                .clear_managed_terminal_progress()
+                .unwrap_or_else(|err| {
+                    tracing::debug!(
+                        error = %err,
+                        "failed to clear terminal progress bar before idle thread switch"
+                    );
+                });
+            false
+        };
 
         self.active_thread_id = Some(thread_id);
         self.active_thread_rx = Some(receiver);
@@ -338,6 +353,10 @@ impl App {
         );
         self.replace_chat_widget(ChatWidget::new_with_app_event(init))
             .await;
+        if transferred_terminal_progress {
+            self.chat_widget
+                .inherit_managed_terminal_progress(transferred_terminal_progress);
+        }
 
         self.reset_for_thread_switch(tui)?;
         self.replay_thread_snapshot(snapshot, !is_replay_only);
@@ -355,6 +374,20 @@ impl App {
         self.refresh_pending_thread_approvals().await;
 
         Ok(())
+    }
+
+    pub(super) fn thread_switch_snapshot_keeps_terminal_progress(
+        snapshot: &ThreadEventSnapshot,
+    ) -> bool {
+        snapshot
+            .input_state
+            .as_ref()
+            .is_some_and(ThreadInputState::agent_turn_running)
+            || snapshot
+                .turns
+                .iter()
+                .rev()
+                .any(|turn| matches!(turn.status, TurnStatus::InProgress))
     }
 
     pub(super) fn should_attach_live_thread_for_selection(&self, thread_id: ThreadId) -> bool {

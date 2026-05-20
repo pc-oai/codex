@@ -134,6 +134,7 @@ pub(crate) use status_surface_preview::StatusSurfacePreviewData;
 pub(crate) use status_surface_preview::StatusSurfacePreviewItem;
 pub(crate) use title_setup::TerminalTitleItem;
 pub(crate) use title_setup::TerminalTitleSetupView;
+pub(crate) use title_setup::compact_title_items_for_thread_title;
 #[cfg(test)]
 pub(crate) use title_setup::preview_line_for_title_items;
 mod paste_burst;
