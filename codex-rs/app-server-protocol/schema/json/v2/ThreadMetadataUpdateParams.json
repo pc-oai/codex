@@ -26,6 +26,14 @@
         }
       },
       "type": "object"
+    },
+    "ThreadUserState": {
+      "enum": [
+        "active",
+        "done",
+        "parked"
+      ],
+      "type": "string"
     }
   },
   "properties": {
@@ -42,6 +50,17 @@
     },
     "threadId": {
       "type": "string"
+    },
+    "userState": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ThreadUserState"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Replace the user-controlled lifecycle state for this thread."
     }
   },
   "required": [

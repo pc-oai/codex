@@ -191,6 +191,7 @@ mod tests {
                 model_providers: Some(vec!["openai".to_string()]),
                 cwd_filters: Some(vec![PathBuf::from("/workspace")]),
                 archived: true,
+                user_states: None,
                 search_term: Some("needle".to_string()),
                 use_state_db_only: true,
             })

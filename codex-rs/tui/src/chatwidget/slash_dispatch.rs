@@ -11,6 +11,7 @@ use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::bottom_pane::slash_commands;
 use crate::thread_name_suggestion::ThreadNameSuggestionKind;
 use crate::thread_name_suggestion::thread_name_is_meaningful;
+use codex_app_server_protocol::ThreadUserState;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {
@@ -225,6 +226,18 @@ impl ChatWidget {
                 self.session_telemetry
                     .counter("codex.thread.rename", /*inc*/ 1, &[]);
                 self.show_rename_prompt();
+            }
+            SlashCommand::Park => {
+                self.app_event_tx
+                    .set_thread_user_state(ThreadUserState::Parked);
+            }
+            SlashCommand::Done => {
+                self.app_event_tx
+                    .set_thread_user_state(ThreadUserState::Done);
+            }
+            SlashCommand::Active => {
+                self.app_event_tx
+                    .set_thread_user_state(ThreadUserState::Active);
             }
             SlashCommand::Retitle => {
                 self.request_retitle_suggestion();
@@ -935,6 +948,9 @@ impl ChatWidget {
             | SlashCommand::Vim
             | SlashCommand::Diff
             | SlashCommand::Rename
+            | SlashCommand::Park
+            | SlashCommand::Done
+            | SlashCommand::Active
             | SlashCommand::Retitle
             | SlashCommand::Emoji
             | SlashCommand::Condensed

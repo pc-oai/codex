@@ -9,6 +9,7 @@ struct ThreadListFilters {
     archived: bool,
     cwd_filters: Option<Vec<PathBuf>>,
     search_term: Option<String>,
+    user_states: Option<Vec<codex_protocol::protocol::ThreadUserState>>,
     use_state_db_only: bool,
 }
 
@@ -1461,36 +1462,54 @@ impl ThreadRequestProcessor {
         let ThreadMetadataUpdateParams {
             thread_id,
             git_info,
+            user_state,
         } = params;
 
         let thread_uuid = ThreadId::from_string(&thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
 
-        let Some(ThreadMetadataGitInfoUpdateParams {
-            sha,
-            branch,
-            origin_url,
-        }) = git_info
-        else {
-            return Err(invalid_request("gitInfo must include at least one field"));
-        };
+        let patch = match (git_info, user_state) {
+            (
+                Some(ThreadMetadataGitInfoUpdateParams {
+                    sha,
+                    branch,
+                    origin_url,
+                }),
+                None,
+            ) => {
+                if sha.is_none() && branch.is_none() && origin_url.is_none() {
+                    return Err(invalid_request("gitInfo must include at least one field"));
+                }
 
-        if sha.is_none() && branch.is_none() && origin_url.is_none() {
-            return Err(invalid_request("gitInfo must include at least one field"));
-        }
+                let git_sha = Self::normalize_thread_metadata_git_field(sha, "gitInfo.sha")?;
+                let git_branch =
+                    Self::normalize_thread_metadata_git_field(branch, "gitInfo.branch")?;
+                let git_origin_url =
+                    Self::normalize_thread_metadata_git_field(origin_url, "gitInfo.originUrl")?;
 
-        let git_sha = Self::normalize_thread_metadata_git_field(sha, "gitInfo.sha")?;
-        let git_branch = Self::normalize_thread_metadata_git_field(branch, "gitInfo.branch")?;
-        let git_origin_url =
-            Self::normalize_thread_metadata_git_field(origin_url, "gitInfo.originUrl")?;
-
-        let patch = StoreThreadMetadataPatch {
-            git_info: Some(StoreGitInfoPatch {
-                sha: git_sha,
-                branch: git_branch,
-                origin_url: git_origin_url,
-            }),
-            ..Default::default()
+                StoreThreadMetadataPatch {
+                    git_info: Some(StoreGitInfoPatch {
+                        sha: git_sha,
+                        branch: git_branch,
+                        origin_url: git_origin_url,
+                    }),
+                    ..Default::default()
+                }
+            }
+            (None, Some(user_state)) => StoreThreadMetadataPatch {
+                user_state: Some(user_state.to_core()),
+                ..Default::default()
+            },
+            (None, None) => {
+                return Err(invalid_request(
+                    "metadata update must include gitInfo or userState",
+                ));
+            }
+            (Some(_), Some(_)) => {
+                return Err(invalid_request(
+                    "metadata update accepts gitInfo or userState, not both",
+                ));
+            }
         };
 
         let updated_thread = {
@@ -1740,6 +1759,7 @@ impl ThreadRequestProcessor {
             cwd,
             use_state_db_only,
             search_term,
+            user_states,
         } = params;
         let cwd_filters = normalize_thread_list_cwd_filters(cwd)?;
 
@@ -1764,6 +1784,8 @@ impl ThreadRequestProcessor {
                     archived: archived.unwrap_or(false),
                     cwd_filters,
                     search_term,
+                    user_states: user_states
+                        .map(|states| states.into_iter().map(ThreadUserState::to_core).collect()),
                     use_state_db_only,
                 },
             )
@@ -3173,6 +3195,7 @@ impl ThreadRequestProcessor {
             archived,
             cwd_filters,
             search_term,
+            user_states,
             use_state_db_only,
         } = filters;
         let mut cursor_obj = cursor;
@@ -3211,6 +3234,7 @@ impl ThreadRequestProcessor {
                     model_providers: model_provider_filter.clone(),
                     cwd_filters: cwd_filters.clone(),
                     archived,
+                    user_states: user_states.clone(),
                     search_term: search_term.clone(),
                     use_state_db_only,
                 })
@@ -3704,6 +3728,7 @@ fn thread_from_stored_thread(
         git_info,
         name: thread.name,
         user_message_count: thread.user_message_count,
+        user_state: thread.user_state.into(),
         turns: Vec::new(),
     };
     (thread, history)
@@ -3900,6 +3925,7 @@ fn build_thread_from_snapshot(
         git_info: None,
         name: None,
         user_message_count: 0,
+        user_state: ThreadUserState::Active,
         turns: Vec::new(),
     }
 }

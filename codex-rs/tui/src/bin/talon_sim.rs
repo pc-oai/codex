@@ -59,6 +59,9 @@ enum TalonCommand {
         name: String,
     },
     EmojiCurrentSession,
+    ParkCurrentSession,
+    DoneCurrentSession,
+    ActivateCurrentSession,
     InterruptCurrentTurn,
     ExitCurrentSession,
     SetModel {
@@ -191,6 +194,15 @@ fn main() -> Result<()> {
                 }
                 TalonCommand::EmojiCurrentSession => {
                     applied.push("emoji_current_session".to_string());
+                }
+                TalonCommand::ParkCurrentSession => {
+                    applied.push("park_current_session".to_string());
+                }
+                TalonCommand::DoneCurrentSession => {
+                    applied.push("done_current_session".to_string());
+                }
+                TalonCommand::ActivateCurrentSession => {
+                    applied.push("activate_current_session".to_string());
                 }
                 TalonCommand::InterruptCurrentTurn => {
                     if state.is_task_running {

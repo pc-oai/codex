@@ -289,6 +289,7 @@ pub(crate) fn summary_to_thread(
         git_info,
         name: None,
         user_message_count: 0,
+        user_state: ThreadUserState::Active,
         turns: Vec::new(),
     }
 }

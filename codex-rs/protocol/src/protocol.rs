@@ -3624,6 +3624,39 @@ pub enum ThreadGoalStatus {
     Complete,
 }
 
+#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "protocol/")]
+pub enum ThreadUserState {
+    #[default]
+    Active,
+    Done,
+    Parked,
+}
+
+impl ThreadUserState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ThreadUserState::Active => "active",
+            ThreadUserState::Done => "done",
+            ThreadUserState::Parked => "parked",
+        }
+    }
+}
+
+impl TryFrom<&str> for ThreadUserState {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "active" => Ok(Self::Active),
+            "done" => Ok(Self::Done),
+            "parked" => Ok(Self::Parked),
+            other => Err(format!("unknown thread user state `{other}`")),
+        }
+    }
+}
+
 pub const MAX_THREAD_GOAL_OBJECTIVE_CHARS: usize = 4_000;
 
 pub fn validate_thread_goal_objective(value: &str) -> Result<(), String> {

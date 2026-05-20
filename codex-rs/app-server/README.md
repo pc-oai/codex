@@ -146,11 +146,11 @@ Example with notification opt-out:
 - `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it. Accepts the same permission override rules as `thread/start`.
 - `thread/fork` — fork an existing thread into a new thread id by copying the stored history; if the source thread is currently mid-turn, the fork starts from the last completed turn instead of inheriting the unfinished turn suffix. The returned `thread.forkedFromId` points at the source thread when known. Accepts `ephemeral: true` for an in-memory temporary fork, emits `thread/started` (including the current `thread.status`), and auto-subscribes you to turn/item events for the new thread. Experimental clients can pass `excludeTurns: true` when they plan to page fork history via `thread/turns/list` instead of receiving the full turn array immediately. Accepts the same permission override rules as `thread/start`.
 - `thread/start`, `thread/resume`, and `thread/fork` responses include the legacy `sandbox` compatibility projection. Experimental clients can read response `permissionProfile` for the exact active runtime permissions and `activePermissionProfile` for the named or implicit built-in profile identity/provenance when known.
-- `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
+- `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, `searchTerm`, and `userStates` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/turns/list` — experimental; page through a stored thread’s turn history without resuming it; supports cursor-based pagination with `sortDirection`, `nextCursor`, and `backwardsCursor`.
-- `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
+- `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields or `userState` (`active`, `done`, or `parked`) and returns the refreshed `thread`.
 - `thread/memoryMode/set` — experimental; set a thread’s persisted memory eligibility to `"enabled"` or `"disabled"` for either a loaded thread or a stored rollout; returns `{}` on success.
 - `memory/reset` — experimental; clear the current `CODEX_HOME/memories` directory and reset persisted memory stage data in sqlite while preserving existing thread memory modes; returns `{}` on success.
 - `thread/goal/set` — create, replace, or update the single persisted goal for a materialized thread; returns the current goal and emits `thread/goal/updated`. Supplying a new `objective` replaces the goal and resets usage accounting. Supplying the current non-terminal objective or omitting `objective` updates the existing goal’s status and/or token budget while preserving usage.
@@ -443,7 +443,7 @@ Use `thread/turns/list` with `capabilities.experimentalApi = true` to page a sto
 
 ### Example: Update stored thread metadata
 
-Use `thread/metadata/update` to patch sqlite-backed metadata for a thread without resuming it. Today this supports persisted `gitInfo`; omitted fields are left unchanged, while explicit `null` clears a stored value.
+Use `thread/metadata/update` to patch sqlite-backed metadata for a thread without resuming it. Today this supports either persisted `gitInfo` or the thread `userState`; omitted Git fields are left unchanged, while explicit `null` clears a stored Git value.
 
 ```json
 { "method": "thread/metadata/update", "id": 24, "params": {
@@ -467,16 +467,27 @@ Use `thread/metadata/update` to patch sqlite-backed metadata for a thread withou
         "gitInfo": null
     }
 } }
+
+{ "method": "thread/metadata/update", "id": 26, "params": {
+    "threadId": "thr_123",
+    "userState": "parked"
+} }
+{ "id": 26, "result": {
+    "thread": {
+        "id": "thr_123",
+        "userState": "parked"
+    }
+} }
 ```
 
 Experimental: use `thread/memoryMode/set` to change whether a thread remains eligible for future memory generation.
 
 ```json
-{ "method": "thread/memoryMode/set", "id": 26, "params": {
+{ "method": "thread/memoryMode/set", "id": 27, "params": {
     "threadId": "thr_123",
     "mode": "disabled"
 } }
-{ "id": 26, "result": {} }
+{ "id": 27, "result": {} }
 ```
 
 Experimental: use `memory/reset` to clear local memory artifacts and sqlite-backed memory stage data for the current Codex home. This preserves existing thread memory modes; use `thread/memoryMode/set` separately when a thread's future memory eligibility should change.

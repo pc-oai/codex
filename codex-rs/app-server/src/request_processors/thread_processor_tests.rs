@@ -286,6 +286,7 @@ mod thread_processor_behavior_tests {
             agent_path: None,
             git_info: None,
             user_message_count: 0,
+            user_state: codex_protocol::protocol::ThreadUserState::Active,
             approval_mode: AskForApproval::OnRequest,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             token_usage: None,

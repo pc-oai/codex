@@ -73,6 +73,8 @@ use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadMemoryMode;
 use codex_app_server_protocol::ThreadMemoryModeSetParams;
 use codex_app_server_protocol::ThreadMemoryModeSetResponse;
+use codex_app_server_protocol::ThreadMetadataUpdateParams;
+use codex_app_server_protocol::ThreadMetadataUpdateResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
@@ -96,6 +98,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
+use codex_app_server_protocol::ThreadUserState;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
@@ -670,6 +673,25 @@ impl AppServerSession {
             .await
             .wrap_err("thread/delete failed in TUI")?;
         Ok(())
+    }
+
+    pub(crate) async fn thread_user_state_set(
+        &mut self,
+        thread_id: ThreadId,
+        user_state: ThreadUserState,
+    ) -> Result<ThreadMetadataUpdateResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadMetadataUpdate {
+                request_id,
+                params: ThreadMetadataUpdateParams {
+                    thread_id: thread_id.to_string(),
+                    user_state: Some(user_state),
+                    git_info: None,
+                },
+            })
+            .await
+            .wrap_err("thread/metadata/update failed in TUI")
     }
 
     pub(crate) async fn thread_memory_mode_set(
@@ -1975,6 +1997,7 @@ mod tests {
                 git_info: None,
                 name: None,
                 user_message_count: 0,
+                user_state: codex_app_server_protocol::ThreadUserState::Active,
                 turns: vec![Turn {
                     id: "turn-1".to_string(),
                     items: vec![

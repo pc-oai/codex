@@ -7,6 +7,7 @@ use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadNameUpdatedEvent;
+use codex_protocol::protocol::ThreadUserState;
 use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
 use codex_rollout::append_rollout_item_to_path;
 use codex_rollout::append_thread_name;
@@ -36,6 +37,7 @@ pub(super) async fn update_thread_metadata(
 ) -> ThreadStoreResult<StoredThread> {
     let field_count = usize::from(params.patch.name.is_some())
         + usize::from(params.patch.memory_mode.is_some())
+        + usize::from(params.patch.user_state.is_some())
         + usize::from(params.patch.git_info.is_some());
     if field_count > 1 {
         return Err(ThreadStoreError::InvalidRequest {
@@ -51,6 +53,7 @@ pub(super) async fn update_thread_metadata(
     let resolved_rollout_path =
         resolve_rollout_path(store, thread_id, params.include_archived).await?;
     let git_info = params.patch.git_info;
+    let user_state = params.patch.user_state;
     if let Some(name) = params.patch.name {
         apply_thread_name(store, resolved_rollout_path.path.as_path(), thread_id, name).await?;
     }
@@ -122,6 +125,9 @@ pub(super) async fn update_thread_metadata(
         .await?;
         apply_thread_git_info(store, thread_id, sha, branch, origin_url).await?;
     }
+    if let Some(user_state) = user_state {
+        apply_thread_user_state(store, thread_id, user_state).await?;
+    }
 
     let mut thread = match read_thread::read_thread(
         store,
@@ -148,6 +154,31 @@ pub(super) async fn update_thread_metadata(
         thread.git_info = git_info_from_parts(sha, branch, origin_url);
     }
     Ok(thread)
+}
+
+async fn apply_thread_user_state(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+    user_state: ThreadUserState,
+) -> ThreadStoreResult<()> {
+    let Some(state_db) = store.state_db().await else {
+        return Err(ThreadStoreError::Internal {
+            message: format!("sqlite state db unavailable for thread {thread_id}"),
+        });
+    };
+    let updated = state_db
+        .update_thread_user_state(thread_id, user_state)
+        .await
+        .map_err(|err| ThreadStoreError::Internal {
+            message: format!("failed to update user state for thread {thread_id}: {err}"),
+        })?;
+    if updated {
+        Ok(())
+    } else {
+        Err(ThreadStoreError::Internal {
+            message: format!("thread metadata disappeared before update completed: {thread_id}"),
+        })
+    }
 }
 
 async fn apply_thread_git_info(

@@ -11,6 +11,8 @@ use codex_protocol::protocol::AskForApproval;
 #[cfg(test)]
 use codex_protocol::protocol::SandboxPolicy;
 #[cfg(test)]
+use codex_protocol::protocol::ThreadUserState;
+#[cfg(test)]
 use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
@@ -63,6 +65,7 @@ pub(super) fn test_thread_metadata(
         first_user_message: Some("hello".to_string()),
         user_message_count: 1,
         user_message_count_known: true,
+        user_state: ThreadUserState::Active,
         archived_at: None,
         git_sha: None,
         git_branch: None,

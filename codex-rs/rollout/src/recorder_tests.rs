@@ -612,6 +612,7 @@ async fn list_threads_db_disabled_does_not_skip_paginated_items() -> std::io::Re
         /*cwd_filters*/ None,
         default_provider.as_str(),
         /*search_term*/ None,
+        /*user_states*/ None,
     )
     .await?;
     assert_eq!(page1.items.len(), 1);
@@ -630,6 +631,7 @@ async fn list_threads_db_disabled_does_not_skip_paginated_items() -> std::io::Re
         /*cwd_filters*/ None,
         default_provider.as_str(),
         /*search_term*/ None,
+        /*user_states*/ None,
     )
     .await?;
     assert_eq!(page2.items.len(), 1);
@@ -690,6 +692,7 @@ async fn list_threads_db_enabled_drops_missing_rollout_paths() -> std::io::Resul
         /*cwd_filters*/ None,
         default_provider.as_str(),
         /*search_term*/ None,
+        /*user_states*/ None,
     )
     .await?;
     assert_eq!(page.items.len(), 0);
@@ -755,6 +758,7 @@ async fn list_threads_db_enabled_repairs_stale_rollout_paths() -> std::io::Resul
         /*cwd_filters*/ None,
         default_provider.as_str(),
         /*search_term*/ None,
+        /*user_states*/ None,
     )
     .await?;
     assert_eq!(page.items.len(), 1);
@@ -828,6 +832,7 @@ async fn list_threads_state_db_only_skips_jsonl_repair_scan() -> std::io::Result
         /*cwd_filters*/ Some(cwd_filters.as_slice()),
         config.model_provider_id.as_str(),
         /*search_term*/ None,
+        /*user_states*/ None,
     )
     .await?;
     assert_eq!(state_db_only_page.items.len(), 0);
@@ -844,6 +849,7 @@ async fn list_threads_state_db_only_skips_jsonl_repair_scan() -> std::io::Result
         /*cwd_filters*/ Some(cwd_filters.as_slice()),
         config.model_provider_id.as_str(),
         /*search_term*/ None,
+        /*user_states*/ None,
     )
     .await?;
     assert_eq!(repaired_page.items.len(), 1);
@@ -860,6 +866,7 @@ async fn list_threads_state_db_only_skips_jsonl_repair_scan() -> std::io::Result
         /*cwd_filters*/ Some(cwd_filters.as_slice()),
         config.model_provider_id.as_str(),
         /*search_term*/ None,
+        /*user_states*/ None,
     )
     .await?;
     assert_eq!(repaired_state_db_only_page.items.len(), 1);
@@ -918,6 +925,7 @@ async fn list_threads_default_filter_returns_filesystem_scan_results() -> std::i
         /*cwd_filters*/ Some(cwd_filters.as_slice()),
         config.model_provider_id.as_str(),
         /*search_term*/ None,
+        /*user_states*/ None,
     )
     .await?;
     assert_eq!(state_db_only_page.items.len(), 1);
@@ -934,6 +942,7 @@ async fn list_threads_default_filter_returns_filesystem_scan_results() -> std::i
         /*cwd_filters*/ Some(cwd_filters.as_slice()),
         config.model_provider_id.as_str(),
         /*search_term*/ None,
+        /*user_states*/ None,
     )
     .await?;
     assert_eq!(scanned_page.items.len(), 0);
@@ -950,6 +959,7 @@ async fn list_threads_default_filter_returns_filesystem_scan_results() -> std::i
         /*cwd_filters*/ Some(cwd_filters.as_slice()),
         config.model_provider_id.as_str(),
         /*search_term*/ None,
+        /*user_states*/ None,
     )
     .await?;
     assert_eq!(repaired_state_db_only_page.items.len(), 0);
@@ -1009,6 +1019,7 @@ async fn list_threads_metadata_filter_overlays_state_db_list_metadata() -> std::
         /*cwd_filters*/ None,
         config.model_provider_id.as_str(),
         /*search_term*/ None,
+        /*user_states*/ None,
     )
     .await?;
 
@@ -1136,6 +1147,7 @@ async fn list_threads_search_repairs_stale_state_db_hits_before_returning() -> s
         /*cwd_filters*/ None,
         config.model_provider_id.as_str(),
         Some("needle"),
+        /*user_states*/ None,
     )
     .await?;
     assert_eq!(stale_state_db_only_page.items.len(), 1);
@@ -1152,6 +1164,7 @@ async fn list_threads_search_repairs_stale_state_db_hits_before_returning() -> s
         /*cwd_filters*/ None,
         config.model_provider_id.as_str(),
         Some("needle"),
+        /*user_states*/ None,
     )
     .await?;
     assert_eq!(scanned_page.items.len(), 0);
@@ -1168,6 +1181,7 @@ async fn list_threads_search_repairs_stale_state_db_hits_before_returning() -> s
         /*cwd_filters*/ None,
         config.model_provider_id.as_str(),
         Some("needle"),
+        /*user_states*/ None,
     )
     .await?;
     assert_eq!(repaired_state_db_only_page.items.len(), 0);

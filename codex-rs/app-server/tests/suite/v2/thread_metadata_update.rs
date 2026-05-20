@@ -18,6 +18,7 @@ use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::ThreadUserState;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use codex_git_utils::GitSha;
 use codex_protocol::ThreadId;
@@ -60,6 +61,7 @@ async fn thread_metadata_update_patches_git_branch_and_returns_updated_thread() 
     let update_id = mcp
         .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
             thread_id: thread.id.clone(),
+            user_state: None,
             git_info: Some(ThreadMetadataGitInfoUpdateParams {
                 sha: None,
                 branch: Some(Some("feature/sidebar-pr".to_string())),
@@ -101,7 +103,7 @@ async fn thread_metadata_update_patches_git_branch_and_returns_updated_thread() 
 
     let read_id = mcp
         .send_thread_read_request(ThreadReadParams {
-            thread_id: thread.id,
+            thread_id: thread.id.clone(),
             include_turns: false,
         })
         .await?;
@@ -121,6 +123,61 @@ async fn thread_metadata_update_patches_git_branch_and_returns_updated_thread() 
         })
     );
     assert_eq!(read.status, ThreadStatus::Idle);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_metadata_update_sets_user_state_and_thread_read_preserves_it() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let update_id = mcp
+        .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
+            thread_id: thread.id.clone(),
+            user_state: Some(ThreadUserState::Parked),
+            git_info: None,
+        })
+        .await?;
+    let update_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(update_id)),
+    )
+    .await??;
+    let ThreadMetadataUpdateResponse { thread: updated } =
+        to_response::<ThreadMetadataUpdateResponse>(update_resp)?;
+    assert_eq!(updated.user_state, ThreadUserState::Parked);
+
+    let read_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: thread.id,
+            include_turns: false,
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let ThreadReadResponse { thread: read, .. } = to_response::<ThreadReadResponse>(read_resp)?;
+    assert_eq!(read.user_state, ThreadUserState::Parked);
 
     Ok(())
 }
@@ -150,6 +207,7 @@ async fn thread_metadata_update_rejects_empty_git_info_patch() -> Result<()> {
     let update_id = mcp
         .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
             thread_id: thread.id,
+            user_state: None,
             git_info: Some(ThreadMetadataGitInfoUpdateParams {
                 sha: None,
                 branch: None,
@@ -197,6 +255,7 @@ async fn thread_metadata_update_rejects_ephemeral_thread() -> Result<()> {
     let update_id = mcp
         .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
             thread_id: thread.id.clone(),
+            user_state: None,
             git_info: Some(ThreadMetadataGitInfoUpdateParams {
                 sha: None,
                 branch: Some(Some("feature/ephemeral".to_string())),
@@ -245,6 +304,7 @@ async fn thread_metadata_update_repairs_missing_sqlite_row_for_stored_thread() -
     let update_id = mcp
         .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
             thread_id: thread_id.clone(),
+            user_state: None,
             git_info: Some(ThreadMetadataGitInfoUpdateParams {
                 sha: None,
                 branch: Some(Some("feature/stored-thread".to_string())),
@@ -325,6 +385,7 @@ async fn thread_metadata_update_repairs_loaded_thread_without_resetting_summary(
     let update_id = mcp
         .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
             thread_id: thread_id.clone(),
+            user_state: None,
             git_info: Some(ThreadMetadataGitInfoUpdateParams {
                 sha: None,
                 branch: Some(Some("feature/loaded-thread".to_string())),
@@ -388,6 +449,7 @@ async fn thread_metadata_update_repairs_missing_sqlite_row_for_archived_thread()
     let update_id = mcp
         .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
             thread_id: thread_id.clone(),
+            user_state: None,
             git_info: Some(ThreadMetadataGitInfoUpdateParams {
                 sha: None,
                 branch: Some(Some("feature/archived-thread".to_string())),
@@ -444,6 +506,7 @@ async fn thread_metadata_update_can_clear_stored_git_fields() -> Result<()> {
     let update_id = mcp
         .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
             thread_id: thread_id.clone(),
+            user_state: None,
             git_info: Some(ThreadMetadataGitInfoUpdateParams {
                 sha: Some(None),
                 branch: Some(None),

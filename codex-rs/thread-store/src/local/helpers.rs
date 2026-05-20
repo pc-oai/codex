@@ -13,6 +13,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadUserState;
 use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
 use codex_rollout::ThreadItem;
 use codex_state::ThreadMetadata;
@@ -139,6 +140,7 @@ pub(super) fn stored_thread_from_rollout_item(
         token_usage: None,
         first_user_message: item.first_user_message,
         user_message_count: 0,
+        user_state: ThreadUserState::Active,
         history: None,
     })
 }

@@ -92,6 +92,7 @@ async fn has_threads(store: &LocalThreadStore, archived: bool) -> io::Result<boo
             model_providers: None,
             cwd_filters: None,
             archived,
+            user_states: None,
             search_term: None,
             use_state_db_only: false,
         })

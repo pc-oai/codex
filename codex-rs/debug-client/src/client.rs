@@ -185,6 +185,7 @@ impl AppServerClient {
                 cwd: None,
                 use_state_db_only: false,
                 search_term: None,
+                user_states: None,
             },
         };
         self.send(&request)?;

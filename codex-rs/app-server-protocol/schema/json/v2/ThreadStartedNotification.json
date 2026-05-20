@@ -886,6 +886,15 @@
           "description": "Number of user messages observed in this thread.",
           "format": "int64",
           "type": "integer"
+        },
+        "userState": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ThreadUserState"
+            }
+          ],
+          "default": "active",
+          "description": "User-controlled lifecycle state used by resume-oriented workflows."
         }
       },
       "required": [
@@ -1647,6 +1656,14 @@
           "type": "object"
         }
       ]
+    },
+    "ThreadUserState": {
+      "enum": [
+        "active",
+        "done",
+        "parked"
+      ],
+      "type": "string"
     },
     "Turn": {
       "properties": {

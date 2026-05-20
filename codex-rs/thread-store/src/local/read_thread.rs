@@ -4,6 +4,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadUserState;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::find_archived_thread_path_by_id_str;
 use codex_rollout::find_thread_name_by_id;
@@ -309,6 +310,7 @@ async fn stored_thread_from_sqlite_metadata(
         token_usage: None,
         first_user_message: metadata.first_user_message,
         user_message_count: metadata.user_message_count,
+        user_state: metadata.user_state,
         history: None,
     }
 }
@@ -368,6 +370,7 @@ fn stored_thread_from_meta_line(
         token_usage: None,
         first_user_message: None,
         user_message_count: 0,
+        user_state: ThreadUserState::Active,
         history: None,
     }
 }

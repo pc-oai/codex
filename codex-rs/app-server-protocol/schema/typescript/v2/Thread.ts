@@ -5,6 +5,7 @@ import type { AbsolutePathBuf } from "../AbsolutePathBuf";
 import type { GitInfo } from "./GitInfo";
 import type { SessionSource } from "./SessionSource";
 import type { ThreadStatus } from "./ThreadStatus";
+import type { ThreadUserState } from "./ThreadUserState";
 import type { Turn } from "./Turn";
 
 export type Thread = { id: string,
@@ -72,6 +73,10 @@ name: string | null,
  * Number of user messages observed in this thread.
  */
 userMessageCount: bigint,
+/**
+ * User-controlled lifecycle state used by resume-oriented workflows.
+ */
+userState: ThreadUserState,
 /**
  * Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read`
  * (when `includeTurns` is true) responses.

@@ -16,6 +16,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadMemoryMode;
+use codex_protocol::protocol::ThreadUserState;
 
 use super::proto;
 use crate::GitInfoPatch;
@@ -319,6 +320,7 @@ pub(super) fn stored_thread_from_proto(
             .transpose()?,
         first_user_message: thread.first_user_message,
         user_message_count: 0,
+        user_state: ThreadUserState::Active,
         history: thread
             .history
             .map(stored_thread_history_from_proto)

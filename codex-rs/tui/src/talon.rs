@@ -96,6 +96,12 @@ pub(crate) enum TalonCommand {
     RenameCurrentSession { name: String },
     /// Generate or refresh the leading emoji for the current thread title.
     EmojiCurrentSession,
+    /// Mark the current thread as parked.
+    ParkCurrentSession,
+    /// Mark the current thread as done.
+    DoneCurrentSession,
+    /// Mark the current thread as active again.
+    ActivateCurrentSession,
     /// Interrupt the currently running turn, if any.
     InterruptCurrentTurn,
     /// Exit Codex after graceful shutdown.

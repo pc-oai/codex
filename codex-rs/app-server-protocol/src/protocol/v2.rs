@@ -102,6 +102,7 @@ use codex_protocol::protocol::SkillScope as CoreSkillScope;
 use codex_protocol::protocol::SkillToolDependency as CoreSkillToolDependency;
 use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use codex_protocol::protocol::ThreadGoalStatus as CoreThreadGoalStatus;
+use codex_protocol::protocol::ThreadUserState as CoreThreadUserState;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
@@ -4236,6 +4237,20 @@ v2_enum_from_core! {
     }
 }
 
+v2_enum_from_core! {
+    pub enum ThreadUserState from CoreThreadUserState {
+        Active,
+        Done,
+        Parked,
+    }
+}
+
+impl Default for ThreadUserState {
+    fn default() -> Self {
+        Self::Active
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -4329,6 +4344,9 @@ pub struct ThreadGoalClearResponse {
 #[ts(export_to = "v2/")]
 pub struct ThreadMetadataUpdateParams {
     pub thread_id: String,
+    /// Replace the user-controlled lifecycle state for this thread.
+    #[ts(optional = nullable)]
+    pub user_state: Option<ThreadUserState>,
     /// Patch the stored Git metadata for this thread.
     /// Omit a field to leave it unchanged, set it to `null` to clear it, or
     /// provide a string to replace the stored value.
@@ -4547,6 +4565,9 @@ pub struct ThreadListParams {
     /// Optional substring filter for the extracted thread title.
     #[ts(optional = nullable)]
     pub search_term: Option<String>,
+    /// Optional filter for the user-controlled lifecycle state.
+    #[ts(optional = nullable)]
+    pub user_states: Option<Vec<ThreadUserState>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
@@ -5362,6 +5383,9 @@ pub struct Thread {
     /// Number of user messages observed in this thread.
     #[serde(default)]
     pub user_message_count: i64,
+    /// User-controlled lifecycle state used by resume-oriented workflows.
+    #[serde(default)]
+    pub user_state: ThreadUserState,
     /// Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read`
     /// (when `includeTurns` is true) responses.
     /// For all other responses and notifications returning a Thread,

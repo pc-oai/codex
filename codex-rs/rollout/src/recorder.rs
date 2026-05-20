@@ -61,6 +61,7 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadUserState;
 use codex_state::StateRuntime;
 use codex_state::ThreadMetadataBuilder;
 use codex_utils_path as path_utils;
@@ -240,6 +241,7 @@ impl RolloutRecorder {
         cwd_filters: Option<&[PathBuf]>,
         default_provider: &str,
         search_term: Option<&str>,
+        user_states: Option<&[ThreadUserState]>,
     ) -> std::io::Result<ThreadsPage> {
         Self::list_threads_with_db_fallback(
             state_db_ctx,
@@ -255,6 +257,7 @@ impl RolloutRecorder {
             ThreadListArchiveFilter::Active,
             ThreadListRepairMode::ScanAndRepair,
             search_term,
+            user_states,
         )
         .await
     }
@@ -272,6 +275,7 @@ impl RolloutRecorder {
         cwd_filters: Option<&[PathBuf]>,
         default_provider: &str,
         search_term: Option<&str>,
+        user_states: Option<&[ThreadUserState]>,
     ) -> std::io::Result<ThreadsPage> {
         Self::list_threads_with_db_fallback(
             state_db_ctx,
@@ -287,6 +291,7 @@ impl RolloutRecorder {
             ThreadListArchiveFilter::Active,
             ThreadListRepairMode::StateDbOnly,
             search_term,
+            user_states,
         )
         .await
     }
@@ -305,6 +310,7 @@ impl RolloutRecorder {
         cwd_filters: Option<&[PathBuf]>,
         default_provider: &str,
         search_term: Option<&str>,
+        user_states: Option<&[ThreadUserState]>,
     ) -> std::io::Result<ThreadsPage> {
         Self::list_threads_with_db_fallback(
             state_db_ctx,
@@ -320,6 +326,7 @@ impl RolloutRecorder {
             ThreadListArchiveFilter::Archived,
             ThreadListRepairMode::ScanAndRepair,
             search_term,
+            user_states,
         )
         .await
     }
@@ -337,6 +344,7 @@ impl RolloutRecorder {
         cwd_filters: Option<&[PathBuf]>,
         default_provider: &str,
         search_term: Option<&str>,
+        user_states: Option<&[ThreadUserState]>,
     ) -> std::io::Result<ThreadsPage> {
         Self::list_threads_with_db_fallback(
             state_db_ctx,
@@ -352,6 +360,7 @@ impl RolloutRecorder {
             ThreadListArchiveFilter::Archived,
             ThreadListRepairMode::StateDbOnly,
             search_term,
+            user_states,
         )
         .await
     }
@@ -371,6 +380,7 @@ impl RolloutRecorder {
         archive_filter: ThreadListArchiveFilter,
         repair_mode: ThreadListRepairMode,
         search_term: Option<&str>,
+        user_states: Option<&[ThreadUserState]>,
     ) -> std::io::Result<ThreadsPage> {
         let codex_home = config.codex_home();
         let archived = match archive_filter {
@@ -381,7 +391,9 @@ impl RolloutRecorder {
             return Ok(ThreadsPage::default());
         }
 
-        if matches!(repair_mode, ThreadListRepairMode::StateDbOnly) {
+        if matches!(repair_mode, ThreadListRepairMode::StateDbOnly)
+            || (user_states.is_some() && state_db_ctx.is_some())
+        {
             return Ok(state_db::list_threads_db(
                 state_db_ctx.as_deref(),
                 codex_home,
@@ -394,6 +406,7 @@ impl RolloutRecorder {
                 cwd_filters,
                 archived,
                 search_term,
+                user_states,
             )
             .await
             .map(Into::into)
@@ -403,7 +416,8 @@ impl RolloutRecorder {
         let listing_has_metadata_filters = !allowed_sources.is_empty()
             || model_providers.is_some()
             || cwd_filters.is_some()
-            || search_term.is_some();
+            || search_term.is_some()
+            || user_states.is_some();
         // Filesystem-first listing intentionally overfetches so we can repair stale/missing
         // SQLite rows before returning the scan page for filtered listings or the DB page for
         // unfiltered listings.
@@ -497,6 +511,7 @@ impl RolloutRecorder {
             cwd_filters,
             archived,
             search_term,
+            user_states,
         )
         .await;
         if let Some(db_page) = db_page {
@@ -525,6 +540,7 @@ impl RolloutRecorder {
                     cwd_filters,
                     archived,
                     search_term,
+                    user_states,
                 )
                 .await
                 {
@@ -609,6 +625,7 @@ impl RolloutRecorder {
                     cwd_filter.as_ref().map(std::slice::from_ref),
                     /*archived*/ false,
                     /*search_term*/ None,
+                    /*user_states*/ None,
                 )
                 .await
                 else {

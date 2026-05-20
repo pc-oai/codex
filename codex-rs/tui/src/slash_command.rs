@@ -34,6 +34,10 @@ pub enum SlashCommand {
     #[strum(to_string = "review", serialize = "rev")]
     Review,
     Rename,
+    Park,
+    Done,
+    #[strum(to_string = "active", serialize = "reopen")]
+    Active,
     #[strum(to_string = "retitle", serialize = "rt")]
     Retitle,
     #[strum(to_string = "emoji", serialize = "em")]
@@ -103,6 +107,9 @@ impl SlashCommand {
             }
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Rename => "rename the current thread",
+            SlashCommand::Park => "mark the current thread as parked",
+            SlashCommand::Done => "mark the current thread as done",
+            SlashCommand::Active => "mark the current thread as active",
             SlashCommand::Retitle => "generate a concise title from this conversation",
             SlashCommand::Emoji => "prepend a representative emoji to the thread title",
             SlashCommand::Resume => "resume a saved chat",
@@ -194,6 +201,9 @@ impl SlashCommand {
             self,
             SlashCommand::Review
                 | SlashCommand::Rename
+                | SlashCommand::Park
+                | SlashCommand::Done
+                | SlashCommand::Active
                 | SlashCommand::Plan
                 | SlashCommand::Goal
                 | SlashCommand::Fast
@@ -253,6 +263,9 @@ impl SlashCommand {
             | SlashCommand::Copy
             | SlashCommand::CopyLastRequest
             | SlashCommand::Rename
+            | SlashCommand::Park
+            | SlashCommand::Done
+            | SlashCommand::Active
             | SlashCommand::Mention
             | SlashCommand::Skills
             | SlashCommand::Hooks

@@ -62,6 +62,7 @@ fn stored_thread(cwd: &str, title: &str, first_user_message: &str) -> StoredThre
         token_usage: None,
         first_user_message: Some(first_user_message.to_string()),
         user_message_count: 0,
+        user_state: codex_protocol::protocol::ThreadUserState::Active,
         history: None,
     }
 }

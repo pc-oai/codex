@@ -2190,6 +2190,7 @@ mod tests {
                     git_info: None,
                     name: None,
                     user_message_count: 0,
+                    user_state: v2::ThreadUserState::Active,
                     turns: Vec::new(),
                 },
                 model: "gpt-5".to_string(),
@@ -2233,6 +2234,7 @@ mod tests {
                         "gitInfo": null,
                         "name": null,
                         "userMessageCount": 0,
+                        "userState": "active",
                         "turns": []
                     },
                     "model": "gpt-5",

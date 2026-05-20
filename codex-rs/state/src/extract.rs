@@ -161,6 +161,7 @@ mod tests {
     use codex_protocol::protocol::SessionMetaLine;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::ThreadNameUpdatedEvent;
+    use codex_protocol::protocol::ThreadUserState;
     use codex_protocol::protocol::TurnContextItem;
     use codex_protocol::protocol::USER_MESSAGE_BEGIN;
     use codex_protocol::protocol::UserMessageEvent;
@@ -453,6 +454,7 @@ mod tests {
             first_user_message: None,
             user_message_count: 0,
             user_message_count_known: true,
+            user_state: ThreadUserState::Active,
             archived_at: None,
             git_sha: None,
             git_branch: None,

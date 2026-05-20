@@ -12,6 +12,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadMemoryMode as MemoryMode;
+use codex_protocol::protocol::ThreadUserState;
 use codex_protocol::protocol::TokenUsage;
 use serde::Deserialize;
 use serde::Serialize;
@@ -165,6 +166,8 @@ pub struct ListThreadsParams {
     pub cwd_filters: Option<Vec<PathBuf>>,
     /// Whether archived threads should be listed instead of active threads.
     pub archived: bool,
+    /// Optional user-state filter. `None` returns every persisted user state.
+    pub user_states: Option<Vec<ThreadUserState>>,
     /// Optional substring/full-text search term for thread title/preview.
     pub search_term: Option<String>,
     /// Return directly from the state DB without scanning JSONL rollouts to repair metadata.
@@ -229,6 +232,8 @@ pub struct StoredThread {
     pub first_user_message: Option<String>,
     /// Number of user messages observed in the thread.
     pub user_message_count: i64,
+    /// User-controlled lifecycle state for resume-oriented workflows.
+    pub user_state: ThreadUserState,
     /// Persisted history, populated only when requested.
     pub history: Option<StoredThreadHistory>,
 }
@@ -254,6 +259,8 @@ pub struct ThreadMetadataPatch {
     pub name: Option<String>,
     /// Replacement thread memory behavior.
     pub memory_mode: Option<MemoryMode>,
+    /// Replacement user-controlled lifecycle state.
+    pub user_state: Option<ThreadUserState>,
     /// Optional Git metadata patch.
     pub git_info: Option<GitInfoPatch>,
 }

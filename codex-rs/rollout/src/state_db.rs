@@ -10,6 +10,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadUserState;
 pub use codex_state::LogEntry;
 use codex_state::ThreadMetadataBuilder;
 use codex_utils_path::normalize_for_path_comparison;
@@ -318,6 +319,7 @@ pub async fn list_threads_db(
     cwd_filters: Option<&[PathBuf]>,
     archived: bool,
     search_term: Option<&str>,
+    user_states: Option<&[ThreadUserState]>,
 ) -> Option<codex_state::ThreadsPage> {
     let ctx = context?;
     if ctx.codex_home() != codex_home {
@@ -352,6 +354,7 @@ pub async fn list_threads_db(
                 allowed_sources: allowed_sources.as_slice(),
                 model_providers: model_providers.as_deref(),
                 cwd_filters: normalized_cwd_filters.as_deref(),
+                user_states,
                 anchor: anchor.as_ref(),
                 sort_key: match sort_key {
                     ThreadSortKey::CreatedAt => codex_state::SortKey::CreatedAt,

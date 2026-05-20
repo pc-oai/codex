@@ -3190,6 +3190,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
                 git_info: None,
                 name: Some("agent thread".to_string()),
                 user_message_count: 0,
+                user_state: codex_app_server_protocol::ThreadUserState::Active,
                 turns: Vec::new(),
             },
         }),
@@ -3272,6 +3273,7 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
                 git_info: None,
                 name: Some("agent thread".to_string()),
                 user_message_count: 0,
+                user_state: codex_app_server_protocol::ThreadUserState::Active,
                 turns: Vec::new(),
             },
         }),
@@ -3327,6 +3329,7 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
         git_info: None,
         name: Some("read thread".to_string()),
         user_message_count: 0,
+        user_state: codex_app_server_protocol::ThreadUserState::Active,
         turns: Vec::new(),
     };
 
@@ -5939,6 +5942,7 @@ async fn thread_rollback_response_discards_queued_active_thread_events() {
                 git_info: None,
                 name: None,
                 user_message_count: 0,
+                user_state: codex_app_server_protocol::ThreadUserState::Active,
                 turns: Vec::new(),
             },
         },

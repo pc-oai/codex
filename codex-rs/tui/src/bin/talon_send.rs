@@ -80,6 +80,12 @@ enum Command {
     },
     /// Generate or refresh the leading emoji for the current thread title.
     EmojiCurrentSession,
+    /// Mark the current thread as parked.
+    ParkCurrentSession,
+    /// Mark the current thread as done.
+    DoneCurrentSession,
+    /// Mark the current thread as active again.
+    ActivateCurrentSession,
     /// Interrupt the currently running turn, if any.
     InterruptCurrentTurn,
     /// Exit Codex after graceful shutdown.
@@ -130,6 +136,9 @@ enum TalonCommand {
         name: String,
     },
     EmojiCurrentSession,
+    ParkCurrentSession,
+    DoneCurrentSession,
+    ActivateCurrentSession,
     InterruptCurrentTurn,
     ExitCurrentSession,
     SetModel {
@@ -259,6 +268,36 @@ fn main() -> Result<()> {
             write_request(&request_path, request)?;
             format!(
                 "requested emoji_current_session via {}",
+                request_path.display()
+            )
+        }
+        Command::ParkCurrentSession => {
+            let request = TalonRequest {
+                commands: vec![TalonCommand::ParkCurrentSession],
+            };
+            write_request(&request_path, request)?;
+            format!(
+                "requested park_current_session via {}",
+                request_path.display()
+            )
+        }
+        Command::DoneCurrentSession => {
+            let request = TalonRequest {
+                commands: vec![TalonCommand::DoneCurrentSession],
+            };
+            write_request(&request_path, request)?;
+            format!(
+                "requested done_current_session via {}",
+                request_path.display()
+            )
+        }
+        Command::ActivateCurrentSession => {
+            let request = TalonRequest {
+                commands: vec![TalonCommand::ActivateCurrentSession],
+            };
+            write_request(&request_path, request)?;
+            format!(
+                "requested activate_current_session via {}",
                 request_path.display()
             )
         }

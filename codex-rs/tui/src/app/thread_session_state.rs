@@ -338,6 +338,7 @@ mod tests {
             git_info: None,
             name: Some("read thread".to_string()),
             user_message_count: 0,
+            user_state: codex_app_server_protocol::ThreadUserState::Active,
             turns: Vec::new(),
         };
 

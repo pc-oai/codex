@@ -81,12 +81,17 @@ pub(super) async fn list_threads(
         .collect::<HashSet<_>>();
     let mut names = HashMap::<ThreadId, String>::with_capacity(thread_ids.len());
     let mut user_message_counts = HashMap::<ThreadId, i64>::with_capacity(thread_ids.len());
+    let mut user_states =
+        HashMap::<ThreadId, codex_protocol::protocol::ThreadUserState>::with_capacity(
+            thread_ids.len(),
+        );
     if let Some(state_db_ctx) = store.state_db().await {
         for &thread_id in &thread_ids {
             let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await else {
                 continue;
             };
             user_message_counts.insert(thread_id, metadata.user_message_count);
+            user_states.insert(thread_id, metadata.user_state);
             if let Some(title) = distinct_thread_metadata_title(&metadata) {
                 names.insert(thread_id, title);
             }
@@ -103,6 +108,9 @@ pub(super) async fn list_threads(
     for thread in &mut items {
         if let Some(user_message_count) = user_message_counts.get(&thread.thread_id) {
             thread.user_message_count = *user_message_count;
+        }
+        if let Some(user_state) = user_states.get(&thread.thread_id) {
+            thread.user_state = *user_state;
         }
         if let Some(title) = names.get(&thread.thread_id).cloned() {
             set_thread_name_from_title(thread, title);
@@ -134,6 +142,7 @@ async fn list_rollout_threads(
             params.cwd_filters.as_deref(),
             default_model_provider_id,
             params.search_term.as_deref(),
+            params.user_states.as_deref(),
         )
         .await
     } else if params.use_state_db_only {
@@ -149,6 +158,7 @@ async fn list_rollout_threads(
             params.cwd_filters.as_deref(),
             default_model_provider_id,
             params.search_term.as_deref(),
+            params.user_states.as_deref(),
         )
         .await
     } else if params.archived {
@@ -164,6 +174,7 @@ async fn list_rollout_threads(
             params.cwd_filters.as_deref(),
             default_model_provider_id,
             params.search_term.as_deref(),
+            params.user_states.as_deref(),
         )
         .await
     } else {
@@ -179,6 +190,7 @@ async fn list_rollout_threads(
             params.cwd_filters.as_deref(),
             default_model_provider_id,
             params.search_term.as_deref(),
+            params.user_states.as_deref(),
         )
         .await
     };
@@ -229,6 +241,7 @@ mod tests {
                 model_providers: None,
                 cwd_filters: None,
                 archived: false,
+                user_states: None,
                 search_term: None,
                 use_state_db_only: false,
             })
@@ -287,6 +300,7 @@ mod tests {
                 model_providers: None,
                 cwd_filters: None,
                 archived: false,
+                user_states: None,
                 search_term: Some("needle".to_string()),
                 use_state_db_only: true,
             })
@@ -326,6 +340,7 @@ mod tests {
                 model_providers: None,
                 cwd_filters: None,
                 archived: false,
+                user_states: None,
                 search_term: None,
                 use_state_db_only: false,
             })
@@ -341,6 +356,7 @@ mod tests {
                 model_providers: None,
                 cwd_filters: None,
                 archived: true,
+                user_states: None,
                 search_term: None,
                 use_state_db_only: false,
             })
@@ -392,6 +408,7 @@ mod tests {
                 model_providers: Some(vec!["test-provider".to_string()]),
                 cwd_filters: None,
                 archived: false,
+                user_states: None,
                 search_term: None,
                 use_state_db_only: false,
             })
@@ -458,6 +475,7 @@ mod tests {
                 model_providers: Some(vec!["test-provider".to_string()]),
                 cwd_filters: None,
                 archived: false,
+                user_states: None,
                 search_term: None,
                 use_state_db_only: false,
             })
@@ -482,6 +500,7 @@ mod tests {
                 model_providers: None,
                 cwd_filters: None,
                 archived: false,
+                user_states: None,
                 search_term: None,
                 use_state_db_only: false,
             })

@@ -42,6 +42,14 @@
         "unknown"
       ],
       "type": "string"
+    },
+    "ThreadUserState": {
+      "enum": [
+        "active",
+        "done",
+        "parked"
+      ],
+      "type": "string"
     }
   },
   "properties": {
@@ -131,6 +139,16 @@
     "useStateDbOnly": {
       "description": "If true, return from the state DB without scanning JSONL rollouts to repair thread metadata. Omitted or false preserves scan-and-repair behavior.",
       "type": "boolean"
+    },
+    "userStates": {
+      "description": "Optional filter for the user-controlled lifecycle state.",
+      "items": {
+        "$ref": "#/definitions/ThreadUserState"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
     }
   },
   "title": "ThreadListParams",

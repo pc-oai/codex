@@ -562,6 +562,7 @@ async fn lookup_session_target_by_name_with_app_server(
                 cwd: None,
                 use_state_db_only: false,
                 search_term: Some(name.to_string()),
+                user_states: None,
             })
             .await?;
         if let Some(thread) = response
@@ -677,6 +678,7 @@ async fn lookup_session_threads_by_id_fragment_with_app_server(
                 cwd: None,
                 use_state_db_only: false,
                 search_term: None,
+                user_states: None,
             })
             .await?;
         matches.extend(response.data.into_iter().filter(|thread| {
@@ -758,6 +760,10 @@ fn latest_session_lookup_params(
         cwd: cwd_filter.map(|cwd| ThreadListCwdFilter::One(cwd.to_string_lossy().to_string())),
         use_state_db_only: false,
         search_term: None,
+        user_states: Some(vec![
+            codex_app_server_protocol::ThreadUserState::Active,
+            codex_app_server_protocol::ThreadUserState::Parked,
+        ]),
     }
 }
 

@@ -21,6 +21,7 @@ use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::ThreadUserState;
 use codex_protocol::ThreadId;
 use codex_utils_path as path_utils;
 use color_eyre::eyre::Result;
@@ -559,6 +560,7 @@ struct Row {
     preview: String,
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
+    user_state: ThreadUserState,
     user_message_count: i64,
     created_at: Option<DateTime<Utc>>,
     updated_at: Option<DateTime<Utc>>,
@@ -1219,6 +1221,7 @@ fn row_from_app_server_thread(thread: Thread, open_state: SessionOpenState) -> O
         },
         thread_id: Some(thread_id),
         thread_name: thread.name,
+        user_state: thread.user_state,
         user_message_count: thread.user_message_count,
         created_at: chrono::DateTime::from_timestamp(thread.created_at, 0)
             .map(|dt| dt.with_timezone(&Utc)),
@@ -1252,6 +1255,7 @@ fn thread_list_params(
         cwd: cwd_filter.map(|cwd| ThreadListCwdFilter::One(cwd.to_string_lossy().into_owned())),
         use_state_db_only: false,
         search_term: None,
+        user_states: Some(vec![ThreadUserState::Active, ThreadUserState::Parked]),
     }
 }
 
@@ -1505,11 +1509,18 @@ fn render_list(
         if add_leading_gap {
             preview_width = preview_width.saturating_sub(2);
         }
-        let (preview_prefix, preview_width) = if row.has_custom_title() && preview_width >= 2 {
-            (Some("★ "), preview_width.saturating_sub(2))
-        } else {
-            (None, preview_width)
+        let state_prefix = match row.user_state {
+            ThreadUserState::Active => None,
+            ThreadUserState::Done => Some("[done] "),
+            ThreadUserState::Parked => Some("[parked] "),
         };
+        let custom_title_prefix = row.has_custom_title().then_some("★ ");
+        if let Some(prefix) = state_prefix {
+            preview_width = preview_width.saturating_sub(UnicodeWidthStr::width(prefix));
+        }
+        if let Some(prefix) = custom_title_prefix {
+            preview_width = preview_width.saturating_sub(UnicodeWidthStr::width(prefix));
+        }
         let preview = truncate_text(row.display_preview(), preview_width);
         let mut spans: Vec<Span> = vec![marker];
         if let Some(created) = created_span {
@@ -1541,7 +1552,10 @@ fn render_list(
         if add_leading_gap {
             spans.push("  ".into());
         }
-        if let Some(prefix) = preview_prefix {
+        if let Some(prefix) = state_prefix {
+            spans.push(prefix.magenta());
+        }
+        if let Some(prefix) = custom_title_prefix {
             spans.push(prefix.magenta());
         }
         spans.push(preview.into());
@@ -1980,6 +1994,7 @@ mod tests {
             preview: preview.to_string(),
             thread_id: None,
             thread_name: None,
+            user_state: ThreadUserState::Active,
             user_message_count: 0,
             created_at: Some(timestamp),
             updated_at: Some(timestamp),
@@ -2008,6 +2023,7 @@ mod tests {
             git_info: None,
             name: Some(String::from("Named thread")),
             user_message_count: 0,
+            user_state: ThreadUserState::Active,
             turns: Vec::new(),
         }
     }
@@ -2041,6 +2057,7 @@ mod tests {
             preview: String::from("first message"),
             thread_id: None,
             thread_name: Some(String::from("My session")),
+            user_state: ThreadUserState::Active,
             user_message_count: 0,
             created_at: None,
             updated_at: None,
@@ -2059,6 +2076,7 @@ mod tests {
             preview: String::from("first message"),
             thread_id: None,
             thread_name: Some(String::from("🧪 🧭 🔎 My session")),
+            user_state: ThreadUserState::Active,
             user_message_count: 0,
             created_at: None,
             updated_at: None,
@@ -2077,6 +2095,7 @@ mod tests {
             preview: String::from("first message"),
             thread_id: None,
             thread_name: Some(String::from("My session")),
+            user_state: ThreadUserState::Active,
             user_message_count: 0,
             created_at: None,
             updated_at: None,
@@ -2098,6 +2117,7 @@ mod tests {
                     .expect("valid thread id"),
             ),
             thread_name: None,
+            user_state: ThreadUserState::Active,
             user_message_count: 0,
             created_at: None,
             updated_at: None,
@@ -2119,6 +2139,7 @@ mod tests {
                     .expect("valid thread id"),
             ),
             thread_name: None,
+            user_state: ThreadUserState::Active,
             user_message_count: 0,
             created_at: None,
             updated_at: None,
@@ -2207,6 +2228,7 @@ mod tests {
             preview: String::from("remote session"),
             thread_id: Some(ThreadId::new()),
             thread_name: None,
+            user_state: ThreadUserState::Active,
             user_message_count: 0,
             created_at: None,
             updated_at: None,
@@ -2226,6 +2248,7 @@ mod tests {
                 preview: String::new(),
                 thread_id: None,
                 thread_name: None,
+                user_state: ThreadUserState::Active,
                 user_message_count: 0,
                 created_at: None,
                 updated_at: None,
@@ -2238,6 +2261,7 @@ mod tests {
                 preview: String::new(),
                 thread_id: None,
                 thread_name: None,
+                user_state: ThreadUserState::Active,
                 user_message_count: 0,
                 created_at: None,
                 updated_at: None,
@@ -2261,6 +2285,7 @@ mod tests {
                 preview: String::new(),
                 thread_id: None,
                 thread_name: None,
+                user_state: ThreadUserState::Active,
                 user_message_count: 0,
                 created_at: None,
                 updated_at: None,
@@ -2273,6 +2298,7 @@ mod tests {
                 preview: String::new(),
                 thread_id: None,
                 thread_name: None,
+                user_state: ThreadUserState::Active,
                 user_message_count: 0,
                 created_at: None,
                 updated_at: None,
@@ -2297,6 +2323,7 @@ mod tests {
                 preview: String::new(),
                 thread_id: None,
                 thread_name: None,
+                user_state: ThreadUserState::Active,
                 user_message_count: 0,
                 created_at: None,
                 updated_at: None,
@@ -2309,6 +2336,7 @@ mod tests {
                 preview: String::new(),
                 thread_id: None,
                 thread_name: None,
+                user_state: ThreadUserState::Active,
                 user_message_count: 0,
                 created_at: None,
                 updated_at: None,
@@ -2351,6 +2379,7 @@ mod tests {
                         .expect("valid thread id"),
                 ),
                 thread_name: None,
+                user_state: ThreadUserState::Active,
                 user_message_count: 0,
                 created_at: Some(now - Duration::minutes(16)),
                 updated_at: Some(now - Duration::seconds(42)),
@@ -2366,6 +2395,7 @@ mod tests {
                         .expect("valid thread id"),
                 ),
                 thread_name: Some(String::from("Resume picker cleanup")),
+                user_state: ThreadUserState::Parked,
                 user_message_count: 12,
                 created_at: Some(now - Duration::hours(1)),
                 updated_at: Some(now - Duration::minutes(35)),
@@ -2378,6 +2408,7 @@ mod tests {
                 preview: String::from("Explain the codebase"),
                 thread_id: None,
                 thread_name: None,
+                user_state: ThreadUserState::Active,
                 user_message_count: 0,
                 created_at: Some(now - Duration::hours(2)),
                 updated_at: Some(now - Duration::hours(2)),
@@ -2685,6 +2716,7 @@ mod tests {
             preview: String::from("missing metadata"),
             thread_id: None,
             thread_name: None,
+            user_state: ThreadUserState::Active,
             user_message_count: 0,
             created_at: None,
             updated_at: None,
@@ -2726,6 +2758,7 @@ mod tests {
             preview: String::from("pathless thread"),
             thread_id: Some(thread_id),
             thread_name: None,
+            user_state: ThreadUserState::Active,
             user_message_count: 0,
             created_at: None,
             updated_at: None,

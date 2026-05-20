@@ -1045,6 +1045,33 @@ async fn direct_rename_dispatches_set_thread_name() {
 }
 
 #[tokio::test]
+async fn slash_thread_state_commands_dispatch_user_state_updates() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    for (command, user_state) in [
+        (
+            SlashCommand::Park,
+            codex_app_server_protocol::ThreadUserState::Parked,
+        ),
+        (
+            SlashCommand::Done,
+            codex_app_server_protocol::ThreadUserState::Done,
+        ),
+        (
+            SlashCommand::Active,
+            codex_app_server_protocol::ThreadUserState::Active,
+        ),
+    ] {
+        chat.dispatch_command(command);
+        assert_matches!(
+            rx.try_recv(),
+            Ok(AppEvent::CodexOp(Op::SetThreadUserState { user_state: actual }))
+                if actual == user_state
+        );
+    }
+}
+
+#[tokio::test]
 async fn slash_retitle_requests_out_of_band_suggestion() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();

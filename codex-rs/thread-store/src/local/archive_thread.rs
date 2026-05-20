@@ -109,6 +109,7 @@ mod tests {
                 model_providers: None,
                 cwd_filters: None,
                 archived: true,
+                user_states: None,
                 search_term: None,
                 use_state_db_only: false,
             })

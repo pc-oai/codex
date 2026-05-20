@@ -625,6 +625,12 @@ impl App {
                     .await?;
                 Ok(true)
             }
+            AppCommand::SetThreadUserState { user_state } => {
+                app_server
+                    .thread_user_state_set(thread_id, *user_state)
+                    .await?;
+                Ok(true)
+            }
             AppCommand::ThreadRollback { num_turns } => {
                 let response = match app_server.thread_rollback(thread_id, *num_turns).await {
                     Ok(response) => response,

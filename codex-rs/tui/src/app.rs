@@ -706,6 +706,21 @@ impl App {
                     self.chat_widget.request_emoji_suggestion();
                     applied.push("emoji_current_session".to_string());
                 }
+                ParkCurrentSession => {
+                    self.app_event_tx
+                        .set_thread_user_state(codex_app_server_protocol::ThreadUserState::Parked);
+                    applied.push("park_current_session".to_string());
+                }
+                DoneCurrentSession => {
+                    self.app_event_tx
+                        .set_thread_user_state(codex_app_server_protocol::ThreadUserState::Done);
+                    applied.push("done_current_session".to_string());
+                }
+                ActivateCurrentSession => {
+                    self.app_event_tx
+                        .set_thread_user_state(codex_app_server_protocol::ThreadUserState::Active);
+                    applied.push("activate_current_session".to_string());
+                }
                 InterruptCurrentTurn => {
                     if self.chat_widget.is_task_running() {
                         self.app_event_tx

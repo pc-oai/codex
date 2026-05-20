@@ -6,6 +6,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadUserState;
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 use std::path::PathBuf;
@@ -98,6 +99,8 @@ pub struct ThreadMetadata {
     pub user_message_count: i64,
     /// Whether `user_message_count` reflects the full thread history.
     pub user_message_count_known: bool,
+    /// User-controlled lifecycle state for resume-oriented workflows.
+    pub user_state: ThreadUserState,
     /// The archive timestamp, if the thread is archived.
     pub archived_at: Option<DateTime<Utc>>,
     /// The git commit SHA, if known.
@@ -213,6 +216,7 @@ impl ThreadMetadataBuilder {
             first_user_message: None,
             user_message_count: 0,
             user_message_count_known: true,
+            user_state: ThreadUserState::Active,
             archived_at: self.archived_at.map(canonicalize_datetime),
             git_sha: self.git_sha.clone(),
             git_branch: self.git_branch.clone(),
@@ -298,6 +302,9 @@ impl ThreadMetadata {
         if self.user_message_count_known != other.user_message_count_known {
             diffs.push("user_message_count_known");
         }
+        if self.user_state != other.user_state {
+            diffs.push("user_state");
+        }
         if self.archived_at != other.archived_at {
             diffs.push("archived_at");
         }
@@ -340,6 +347,7 @@ pub(crate) struct ThreadRow {
     first_user_message: String,
     user_message_count: i64,
     user_message_count_known: bool,
+    user_state: String,
     archived_at: Option<i64>,
     git_sha: Option<String>,
     git_branch: Option<String>,
@@ -369,6 +377,7 @@ impl ThreadRow {
             first_user_message: row.try_get("first_user_message")?,
             user_message_count: row.try_get("user_message_count")?,
             user_message_count_known: row.try_get("user_message_count_known")?,
+            user_state: row.try_get("user_state")?,
             archived_at: row.try_get("archived_at")?,
             git_sha: row.try_get("git_sha")?,
             git_branch: row.try_get("git_branch")?,
@@ -402,6 +411,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             first_user_message,
             user_message_count,
             user_message_count_known,
+            user_state,
             archived_at,
             git_sha,
             git_branch,
@@ -429,6 +439,8 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             first_user_message: (!first_user_message.is_empty()).then_some(first_user_message),
             user_message_count,
             user_message_count_known,
+            user_state: ThreadUserState::try_from(user_state.as_str())
+                .map_err(anyhow::Error::msg)?,
             archived_at: archived_at.map(epoch_seconds_to_datetime).transpose()?,
             git_sha,
             git_branch,
@@ -490,6 +502,7 @@ mod tests {
     use chrono::Utc;
     use codex_protocol::ThreadId;
     use codex_protocol::openai_models::ReasoningEffort;
+    use codex_protocol::protocol::ThreadUserState;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 
@@ -515,6 +528,7 @@ mod tests {
             first_user_message: String::new(),
             user_message_count: 0,
             user_message_count_known: true,
+            user_state: "active".to_string(),
             archived_at: None,
             git_sha: None,
             git_branch: None,
@@ -545,6 +559,7 @@ mod tests {
             first_user_message: None,
             user_message_count: 0,
             user_message_count_known: true,
+            user_state: ThreadUserState::Active,
             archived_at: None,
             git_sha: None,
             git_branch: None,

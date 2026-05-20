@@ -93,6 +93,7 @@ async fn list_threads_with_sort(
             cwd: None,
             use_state_db_only: false,
             search_term: None,
+            user_states: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -533,6 +534,7 @@ async fn thread_list_respects_cwd_filters() -> Result<()> {
             ])),
             use_state_db_only: false,
             search_term: None,
+            user_states: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -625,6 +627,7 @@ sqlite = true
         /*cwd_filters*/ None,
         "mock_provider",
         /*search_term*/ None,
+        /*user_states*/ None,
     )
     .await?;
     assert_eq!(repaired_page.items.len(), 3);
@@ -642,6 +645,7 @@ sqlite = true
             cwd: None,
             use_state_db_only: false,
             search_term: Some("needle".to_string()),
+            user_states: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -703,6 +707,7 @@ sqlite = true
             cwd: None,
             use_state_db_only: false,
             search_term: None,
+            user_states: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -741,6 +746,7 @@ sqlite = true
             )),
             use_state_db_only: true,
             search_term: None,
+            user_states: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -770,6 +776,7 @@ sqlite = true
             )),
             use_state_db_only: false,
             search_term: None,
+            user_states: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -1464,6 +1471,7 @@ async fn thread_list_backwards_cursor_can_seed_forward_delta_sync() -> Result<()
                 cwd: None,
                 use_state_db_only: false,
                 search_term: None,
+                user_states: None,
             })
             .await?;
         let resp: JSONRPCResponse = timeout(
@@ -1506,6 +1514,7 @@ async fn thread_list_backwards_cursor_can_seed_forward_delta_sync() -> Result<()
                 cwd: None,
                 use_state_db_only: false,
                 search_term: None,
+                user_states: None,
             })
             .await?;
         let resp: JSONRPCResponse = timeout(
@@ -1744,6 +1753,7 @@ async fn thread_list_invalid_cursor_returns_error() -> Result<()> {
             cwd: None,
             use_state_db_only: false,
             search_term: None,
+            user_states: None,
         })
         .await?;
     let error: JSONRPCError = timeout(

@@ -4,6 +4,7 @@
 import type { SortDirection } from "./SortDirection";
 import type { ThreadSortKey } from "./ThreadSortKey";
 import type { ThreadSourceKind } from "./ThreadSourceKind";
+import type { ThreadUserState } from "./ThreadUserState";
 
 export type ThreadListParams = {
 /**
@@ -51,4 +52,8 @@ useStateDbOnly?: boolean,
 /**
  * Optional substring filter for the extracted thread title.
  */
-searchTerm?: string | null, };
+searchTerm?: string | null,
+/**
+ * Optional filter for the user-controlled lifecycle state.
+ */
+userStates?: Array<ThreadUserState> | null, };

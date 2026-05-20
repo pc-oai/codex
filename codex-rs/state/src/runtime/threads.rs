@@ -1,6 +1,7 @@
 use super::*;
 use crate::SortDirection;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadUserState;
 use std::sync::atomic::Ordering;
 
 impl StateRuntime {
@@ -28,6 +29,7 @@ SELECT
     threads.first_user_message,
     threads.user_message_count,
     threads.user_message_count_known,
+    threads.user_state,
     threads.archived_at,
     threads.git_sha,
     threads.git_branch,
@@ -371,6 +373,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
                 allowed_sources,
                 model_providers,
                 cwd_filters: None,
+                user_states: None,
                 anchor: None,
                 sort_key: crate::SortKey::UpdatedAt,
                 sort_direction: SortDirection::Desc,
@@ -450,6 +453,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
                 allowed_sources,
                 model_providers,
                 cwd_filters: None,
+                user_states: None,
                 anchor,
                 sort_key,
                 sort_direction: SortDirection::Desc,
@@ -503,13 +507,14 @@ INSERT INTO threads (
     first_user_message,
     user_message_count,
     user_message_count_known,
+    user_state,
     archived,
     archived_at,
     git_sha,
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
             "#,
         )
@@ -540,6 +545,7 @@ ON CONFLICT(id) DO NOTHING
         .bind(metadata.first_user_message.as_deref().unwrap_or_default())
         .bind(metadata.user_message_count)
         .bind(metadata.user_message_count_known)
+        .bind(metadata.user_state.as_str())
         .bind(metadata.archived_at.is_some())
         .bind(metadata.archived_at.map(datetime_to_epoch_seconds))
         .bind(metadata.git_sha.as_deref())
@@ -704,13 +710,14 @@ INSERT INTO threads (
     first_user_message,
     user_message_count,
     user_message_count_known,
+    user_state,
     archived,
     archived_at,
     git_sha,
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -733,6 +740,7 @@ ON CONFLICT(id) DO UPDATE SET
     first_user_message = excluded.first_user_message,
     user_message_count = excluded.user_message_count,
     user_message_count_known = excluded.user_message_count_known,
+    user_state = excluded.user_state,
     archived = excluded.archived,
     archived_at = excluded.archived_at,
     git_sha = COALESCE(threads.git_sha, excluded.git_sha),
@@ -767,6 +775,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.first_user_message.as_deref().unwrap_or_default())
         .bind(metadata.user_message_count)
         .bind(metadata.user_message_count_known)
+        .bind(metadata.user_state.as_str())
         .bind(metadata.archived_at.is_some())
         .bind(metadata.archived_at.map(datetime_to_epoch_seconds))
         .bind(metadata.git_sha.as_deref())
@@ -931,6 +940,20 @@ ON CONFLICT(thread_id, position) DO NOTHING
         self.upsert_thread(&metadata).await
     }
 
+    /// Update the user-controlled lifecycle state for a persisted thread.
+    pub async fn update_thread_user_state(
+        &self,
+        thread_id: ThreadId,
+        user_state: ThreadUserState,
+    ) -> anyhow::Result<bool> {
+        let result = sqlx::query("UPDATE threads SET user_state = ? WHERE id = ?")
+            .bind(user_state.as_str())
+            .bind(thread_id.to_string())
+            .execute(self.pool.as_ref())
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     /// Delete a thread metadata row by id.
     pub async fn delete_thread(&self, thread_id: ThreadId) -> anyhow::Result<u64> {
         let result = sqlx::query("DELETE FROM threads WHERE id = ?")
@@ -1009,6 +1032,7 @@ SELECT
     threads.first_user_message,
     threads.user_message_count,
     threads.user_message_count_known,
+    threads.user_state,
     threads.archived_at,
     threads.git_sha,
     threads.git_branch,
@@ -1055,6 +1079,7 @@ pub struct ThreadFilterOptions<'a> {
     pub allowed_sources: &'a [String],
     pub model_providers: Option<&'a [String]>,
     pub cwd_filters: Option<&'a [PathBuf]>,
+    pub user_states: Option<&'a [ThreadUserState]>,
     pub anchor: Option<&'a crate::Anchor>,
     pub sort_key: SortKey,
     pub sort_direction: SortDirection,
@@ -1070,6 +1095,7 @@ pub(super) fn push_thread_filters<'a>(
         allowed_sources,
         model_providers,
         cwd_filters,
+        user_states,
         anchor,
         sort_key,
         sort_direction,
@@ -1097,6 +1123,16 @@ pub(super) fn push_thread_filters<'a>(
         let mut separated = builder.separated(", ");
         for provider in model_providers {
             separated.push_bind(provider);
+        }
+        separated.push_unseparated(")");
+    }
+    if let Some(user_states) = user_states
+        && !user_states.is_empty()
+    {
+        builder.push(" AND threads.user_state IN (");
+        let mut separated = builder.separated(", ");
+        for user_state in user_states {
+            separated.push_bind(user_state.as_str());
         }
         separated.push_unseparated(")");
     }
@@ -1257,6 +1293,7 @@ mod tests {
                     allowed_sources: &[],
                     model_providers: Some(&model_providers),
                     cwd_filters: None,
+                    user_states: None,
                     anchor: Some(&anchor),
                     sort_key: SortKey::UpdatedAt,
                     sort_direction: SortDirection::Asc,
@@ -1284,6 +1321,7 @@ mod tests {
                     allowed_sources: &[],
                     model_providers: Some(&model_providers),
                     cwd_filters: None,
+                    user_states: None,
                     anchor: page.next_anchor.as_ref(),
                     sort_key: SortKey::UpdatedAt,
                     sort_direction: SortDirection::Asc,
@@ -1337,6 +1375,7 @@ mod tests {
                     allowed_sources: &[],
                     model_providers: None,
                     cwd_filters: Some(cwd_filters.as_slice()),
+                    user_states: None,
                     anchor: None,
                     sort_key: SortKey::UpdatedAt,
                     sort_direction: SortDirection::Desc,
@@ -1357,6 +1396,7 @@ mod tests {
                     allowed_sources: &[],
                     model_providers: None,
                     cwd_filters: Some(&[]),
+                    user_states: None,
                     anchor: None,
                     sort_key: SortKey::UpdatedAt,
                     sort_direction: SortDirection::Desc,
