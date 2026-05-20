@@ -121,6 +121,9 @@ impl App {
 
         match server_notification_thread_target(&notification) {
             ServerNotificationThreadTarget::Thread(thread_id) => {
+                if self.consume_thread_name_suggestion_notification(thread_id, &notification) {
+                    return;
+                }
                 let result = if self.primary_thread_id == Some(thread_id)
                     || self.primary_thread_id.is_none()
                 {
@@ -154,6 +157,11 @@ impl App {
         app_server_client: &AppServerSession,
         request: ServerRequest,
     ) {
+        if let Some(thread_id) = server_request_thread_id(&request)
+            && self.consume_thread_name_suggestion_request(thread_id)
+        {
+            return;
+        }
         if let Some(unsupported) = self
             .pending_app_server_requests
             .note_server_request(&request)

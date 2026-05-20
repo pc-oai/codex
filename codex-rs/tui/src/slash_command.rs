@@ -12,7 +12,10 @@ use strum_macros::IntoStaticStr;
 pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
+    #[strum(to_string = "model", serialize = "m")]
     Model,
+    #[strum(to_string = "effort", serialize = "e")]
+    Effort,
     Ide,
     Permissions,
     Keymap,
@@ -29,6 +32,14 @@ pub enum SlashCommand {
     Hooks,
     Review,
     Rename,
+    Park,
+    Done,
+    #[strum(to_string = "active", serialize = "reopen")]
+    Active,
+    #[strum(to_string = "retitle", serialize = "rt")]
+    Retitle,
+    #[strum(to_string = "emoji", serialize = "em")]
+    Emoji,
     New,
     Resume,
     #[strum(to_string = "reload", serialize = "r")]
@@ -40,7 +51,10 @@ pub enum SlashCommand {
     Goal,
     Agent,
     Side,
+    #[strum(to_string = "id", serialize = "i")]
+    Id,
     Copy,
+    CopyLastRequest,
     Raw,
     Diff,
     Mention,
@@ -57,6 +71,7 @@ pub enum SlashCommand {
     Logout,
     Quit,
     Exit,
+    Delete,
     Feedback,
     Rollout,
     Ps,
@@ -86,12 +101,20 @@ impl SlashCommand {
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Rename => "rename the current thread",
+            SlashCommand::Park => "mark the current thread as parked",
+            SlashCommand::Done => "mark the current thread as done",
+            SlashCommand::Active => "mark the current thread as active",
+            SlashCommand::Retitle => "generate a concise title from this conversation",
+            SlashCommand::Emoji => "prepend a representative emoji to the thread title",
             SlashCommand::Resume => "resume a saved chat",
             SlashCommand::Reload => "restart Codex and resume this chat",
             SlashCommand::Clear => "clear the terminal and start a new chat",
             SlashCommand::Fork => "fork the current chat",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
+            SlashCommand::Delete => "delete this chat and exit Codex",
+            SlashCommand::Id => "copy the current thread ID",
             SlashCommand::Copy => "copy last response as markdown",
+            SlashCommand::CopyLastRequest => "copy last user request",
             SlashCommand::Raw => "toggle raw scrollback mode for copy-friendly terminal selection",
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Mention => "mention a file",
@@ -108,6 +131,7 @@ impl SlashCommand {
             SlashCommand::MemoryDrop => "DO NOT USE",
             SlashCommand::MemoryUpdate => "DO NOT USE",
             SlashCommand::Model => "choose what model and reasoning effort to use",
+            SlashCommand::Effort => "choose reasoning effort for the current model",
             SlashCommand::Ide => {
                 "include current selection, open files, and other context from your IDE"
             }
@@ -149,6 +173,9 @@ impl SlashCommand {
             self,
             SlashCommand::Review
                 | SlashCommand::Rename
+                | SlashCommand::Park
+                | SlashCommand::Done
+                | SlashCommand::Active
                 | SlashCommand::Plan
                 | SlashCommand::Goal
                 | SlashCommand::Ide
@@ -166,7 +193,9 @@ impl SlashCommand {
     pub fn available_in_side_conversation(self) -> bool {
         matches!(
             self,
-            SlashCommand::Copy
+            SlashCommand::Id
+                | SlashCommand::Copy
+                | SlashCommand::CopyLastRequest
                 | SlashCommand::Raw
                 | SlashCommand::Diff
                 | SlashCommand::Mention
@@ -185,6 +214,7 @@ impl SlashCommand {
             | SlashCommand::Init
             | SlashCommand::Compact
             | SlashCommand::Model
+            | SlashCommand::Effort
             | SlashCommand::Personality
             | SlashCommand::Permissions
             | SlashCommand::Keymap
@@ -194,15 +224,22 @@ impl SlashCommand {
             | SlashCommand::Experimental
             | SlashCommand::Memories
             | SlashCommand::Review
+            | SlashCommand::Retitle
+            | SlashCommand::Emoji
             | SlashCommand::Plan
             | SlashCommand::Clear
             | SlashCommand::Logout
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate => false,
             SlashCommand::Diff
+            | SlashCommand::Id
             | SlashCommand::Copy
+            | SlashCommand::CopyLastRequest
             | SlashCommand::Raw
             | SlashCommand::Rename
+            | SlashCommand::Park
+            | SlashCommand::Done
+            | SlashCommand::Active
             | SlashCommand::Mention
             | SlashCommand::Skills
             | SlashCommand::Hooks
@@ -221,6 +258,7 @@ impl SlashCommand {
             | SlashCommand::Ide
             | SlashCommand::Quit
             | SlashCommand::Exit
+            | SlashCommand::Delete
             | SlashCommand::Side => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,

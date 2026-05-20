@@ -8,6 +8,7 @@ use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::ThreadRealtimeAudioChunk;
 use codex_app_server_protocol::ThreadRealtimeStartTransport;
+use codex_app_server_protocol::ThreadUserState;
 use codex_app_server_protocol::ToolRequestUserInputResponse;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::ApprovalsReviewer;
@@ -95,6 +96,9 @@ pub(crate) enum AppCommand {
     Compact,
     SetThreadName {
         name: String,
+    },
+    SetThreadUserState {
+        user_state: ThreadUserState,
     },
     Shutdown,
     ThreadRollback {
@@ -253,6 +257,10 @@ impl AppCommand {
 
     pub(crate) fn set_thread_name(name: String) -> Self {
         Self::SetThreadName { name }
+    }
+
+    pub(crate) fn set_thread_user_state(user_state: ThreadUserState) -> Self {
+        Self::SetThreadUserState { user_state }
     }
 
     #[allow(dead_code)]

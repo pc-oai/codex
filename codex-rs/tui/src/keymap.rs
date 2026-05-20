@@ -83,6 +83,10 @@ pub(crate) struct ChatKeymap {
     pub(crate) decrease_reasoning_effort: Vec<KeyBinding>,
     /// Increase the active reasoning effort.
     pub(crate) increase_reasoning_effort: Vec<KeyBinding>,
+    /// Open the manual rename prompt for the current session.
+    pub(crate) rename_current_session: Vec<KeyBinding>,
+    /// Generate a fresh title suggestion for the current session.
+    pub(crate) retitle_current_session: Vec<KeyBinding>,
     /// Edit the most recently queued message.
     pub(crate) edit_queued_message: Vec<KeyBinding>,
 }
@@ -418,6 +422,16 @@ impl RuntimeKeymap {
                 &defaults.chat.increase_reasoning_effort,
                 "tui.keymap.chat.increase_reasoning_effort",
             )?,
+            rename_current_session: resolve_bindings(
+                keymap.chat.rename_current_session.as_ref(),
+                &defaults.chat.rename_current_session,
+                "tui.keymap.chat.rename_current_session",
+            )?,
+            retitle_current_session: resolve_bindings(
+                keymap.chat.retitle_current_session.as_ref(),
+                &defaults.chat.retitle_current_session,
+                "tui.keymap.chat.retitle_current_session",
+            )?,
             edit_queued_message: resolve_bindings(
                 keymap.chat.edit_queued_message.as_ref(),
                 &defaults.chat.edit_queued_message,
@@ -692,6 +706,11 @@ impl RuntimeKeymap {
             chat: ChatKeymap {
                 decrease_reasoning_effort: default_bindings![alt(KeyCode::Char(','))],
                 increase_reasoning_effort: default_bindings![alt(KeyCode::Char('.'))],
+                rename_current_session: default_bindings![],
+                retitle_current_session: default_bindings![raw(KeyBinding::new(
+                    KeyCode::Char('r'),
+                    KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+                ))],
                 edit_queued_message: default_bindings![
                     alt(KeyCode::Up),
                     alt(KeyCode::Char('e')),
@@ -926,6 +945,14 @@ impl RuntimeKeymap {
                     self.chat.increase_reasoning_effort.as_slice(),
                 ),
                 (
+                    "chat.rename_current_session",
+                    self.chat.rename_current_session.as_slice(),
+                ),
+                (
+                    "chat.retitle_current_session",
+                    self.chat.retitle_current_session.as_slice(),
+                ),
+                (
                     "chat.edit_queued_message",
                     self.chat.edit_queued_message.as_slice(),
                 ),
@@ -970,6 +997,14 @@ impl RuntimeKeymap {
                 (
                     "chat.increase_reasoning_effort",
                     self.chat.increase_reasoning_effort.as_slice(),
+                ),
+                (
+                    "chat.rename_current_session",
+                    self.chat.rename_current_session.as_slice(),
+                ),
+                (
+                    "chat.retitle_current_session",
+                    self.chat.retitle_current_session.as_slice(),
                 ),
                 (
                     "chat.edit_queued_message",
@@ -1070,6 +1105,14 @@ impl RuntimeKeymap {
                 (
                     "chat.increase_reasoning_effort",
                     self.chat.increase_reasoning_effort.as_slice(),
+                ),
+                (
+                    "chat.rename_current_session",
+                    self.chat.rename_current_session.as_slice(),
+                ),
+                (
+                    "chat.retitle_current_session",
+                    self.chat.retitle_current_session.as_slice(),
                 ),
                 ("composer.submit", self.composer.submit.as_slice()),
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),

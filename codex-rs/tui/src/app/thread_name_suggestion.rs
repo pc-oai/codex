@@ -5,8 +5,10 @@
 //! running one constrained turn there, then applying only the resulting title to the parent.
 
 use super::*;
+use crate::app_server_session::TurnPermissionsOverride;
 use crate::thread_name_suggestion::ThreadNameSuggestionKind;
 use crate::thread_name_suggestion::compose_thread_name;
+use codex_app_server_protocol::UserInput;
 use codex_protocol::models::MessagePhase;
 
 const THREAD_NAME_SUGGESTION_DEVELOPER_INSTRUCTIONS: &str = r#"You are generating metadata for an existing thread, not continuing the user's conversation.
@@ -56,11 +58,10 @@ impl App {
         prompt: String,
         current_name: Option<String>,
     ) {
-        // Title suggestions are metadata-only hidden forks. Reuse the live in-memory config
-        // instead of rebuilding config from disk here; that keeps retitling decoupled from
-        // unrelated config reload failures.
-        let fork_config = self.thread_name_suggestion_fork_config();
-        let forked = match app_server.fork_thread(fork_config, parent_thread_id).await {
+        let forked = match app_server
+            .fork_thread(self.thread_name_suggestion_fork_config(), parent_thread_id)
+            .await
+        {
             Ok(forked) => forked,
             Err(err) => {
                 self.chat_widget
@@ -89,19 +90,18 @@ impl App {
                     text: prompt,
                     text_elements: Vec::new(),
                 }],
-                /*rollback_num_turns*/ None,
                 child_session.cwd.to_path_buf(),
                 child_session.approval_policy,
                 child_session.approvals_reviewer,
-                child_session.permission_profile,
-                child_session.active_permission_profile,
+                TurnPermissionsOverride::Preserve,
+                child_session.runtime_workspace_roots.as_slice(),
                 child_session.model,
                 child_session.reasoning_effort,
                 /*summary*/ None,
                 /*service_tier*/ None,
                 /*collaboration_mode*/ None,
                 /*personality*/ None,
-                /*final_output_json_schema*/ None,
+                /*output_schema*/ None,
             )
             .await;
         if let Err(err) = result {
@@ -272,30 +272,35 @@ mod tests {
     use codex_app_server_protocol::ItemCompletedNotification;
     use pretty_assertions::assert_eq;
 
-    #[test]
-    fn suggestion_from_turn_prefers_final_agent_message() {
-        let turn = Turn {
+    fn turn(items: Vec<ThreadItem>) -> Turn {
+        Turn {
             id: "turn-1".to_string(),
-            items: vec![
-                ThreadItem::AgentMessage {
-                    id: "commentary".to_string(),
-                    text: "working".to_string(),
-                    phase: Some(MessagePhase::Commentary),
-                    memory_citation: None,
-                },
-                ThreadItem::AgentMessage {
-                    id: "final".to_string(),
-                    text: "🧭 Session title".to_string(),
-                    phase: Some(MessagePhase::FinalAnswer),
-                    memory_citation: None,
-                },
-            ],
+            items_view: codex_app_server_protocol::TurnItemsView::Full,
+            items,
             status: TurnStatus::Completed,
             error: None,
             started_at: None,
             completed_at: None,
             duration_ms: None,
-        };
+        }
+    }
+
+    #[test]
+    fn suggestion_from_turn_prefers_final_agent_message() {
+        let turn = turn(vec![
+            ThreadItem::AgentMessage {
+                id: "commentary".to_string(),
+                text: "working".to_string(),
+                phase: Some(MessagePhase::Commentary),
+                memory_citation: None,
+            },
+            ThreadItem::AgentMessage {
+                id: "final".to_string(),
+                text: "🧭 Session title".to_string(),
+                phase: Some(MessagePhase::FinalAnswer),
+                memory_citation: None,
+            },
+        ]);
 
         assert_eq!(suggestion_from_turn(&turn), Some("🧭 Session title"));
     }
@@ -322,18 +327,8 @@ mod tests {
 
     #[test]
     fn completed_suggestion_uses_streamed_final_answer_when_completion_has_no_items() {
-        let turn = Turn {
-            id: "turn-1".to_string(),
-            items: Vec::new(),
-            status: TurnStatus::Completed,
-            error: None,
-            started_at: None,
-            completed_at: None,
-            duration_ms: None,
-        };
-
         assert_eq!(
-            completed_suggestion(Some("🧭 Session title"), &turn),
+            completed_suggestion(Some("🧭 Session title"), &turn(Vec::new())),
             Some("🧭 Session title")
         );
     }
