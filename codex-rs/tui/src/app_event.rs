@@ -33,6 +33,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
 
 use crate::app_command::AppCommand;
+use crate::app_server_session::AppServerStartedThread;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
@@ -140,6 +141,12 @@ pub(crate) enum AppEvent {
     OpenAgentPicker,
     /// Switch the active thread to the selected agent.
     SelectAgentThread(ThreadId),
+    /// Cache a resume snapshot fetched off the UI path for a nearby loaded subagent.
+    LoadedSubagentSwitchPrewarmed {
+        primary_thread_id: ThreadId,
+        thread_id: ThreadId,
+        result: Box<Result<AppServerStartedThread, String>>,
+    },
 
     /// Fork the current thread into a transient side conversation.
     StartSide {

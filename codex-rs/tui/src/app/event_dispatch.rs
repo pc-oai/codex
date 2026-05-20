@@ -1704,6 +1704,14 @@ impl App {
                 self.select_agent_thread_and_discard_side(tui, app_server, thread_id)
                     .await?;
             }
+            AppEvent::LoadedSubagentSwitchPrewarmed {
+                primary_thread_id,
+                thread_id,
+                result,
+            } => {
+                self.cache_loaded_subagent_switch_prewarm(primary_thread_id, thread_id, *result)
+                    .await;
+            }
             AppEvent::StartSide {
                 parent_thread_id,
                 user_message,

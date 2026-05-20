@@ -1746,6 +1746,10 @@ impl BottomPane {
         }
     }
 
+    pub(crate) fn active_agent_label(&self) -> Option<&str> {
+        self.composer.active_agent_label()
+    }
+
     pub(crate) fn set_side_conversation_context_label(&mut self, label: Option<String>) {
         if self.composer.set_side_conversation_context_label(label) {
             self.request_redraw();

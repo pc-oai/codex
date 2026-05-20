@@ -207,6 +207,54 @@ impl AgentNavigationState {
         current_displayed_thread_id: Option<ThreadId>,
         primary_thread_id: Option<ThreadId>,
     ) -> Option<String> {
+        self.active_agent_name(current_displayed_thread_id, primary_thread_id)
+    }
+
+    pub(crate) fn active_agent_activity_label(
+        &self,
+        current_displayed_thread_id: Option<ThreadId>,
+        primary_thread_id: Option<ThreadId>,
+        working_subagents: usize,
+    ) -> Option<String> {
+        let ordered_threads = self.ordered_threads();
+        if ordered_threads.len() <= 1 {
+            return None;
+        }
+
+        let thread_id = current_displayed_thread_id?;
+        let is_primary = primary_thread_id == Some(thread_id);
+        let position = ordered_threads
+            .iter()
+            .position(|(candidate, _)| *candidate == thread_id)
+            .map(|idx| idx + 1)?;
+        let name = self
+            .threads
+            .get(&thread_id)
+            .map(|entry| {
+                format_agent_picker_item_name(
+                    entry.agent_nickname.as_deref(),
+                    entry.agent_role.as_deref(),
+                    is_primary,
+                )
+            })
+            .unwrap_or_else(|| {
+                format_agent_picker_item_name(
+                    /*agent_nickname*/ None, /*agent_role*/ None, is_primary,
+                )
+            });
+        let working_suffix = (working_subagents > 0).then(|| format!(" · ⚙{working_subagents}"));
+        Some(format!(
+            "{name} · {position}/{}{}",
+            ordered_threads.len(),
+            working_suffix.unwrap_or_default()
+        ))
+    }
+
+    pub(crate) fn active_agent_name(
+        &self,
+        current_displayed_thread_id: Option<ThreadId>,
+        primary_thread_id: Option<ThreadId>,
+    ) -> Option<String> {
         if self.threads.len() <= 1 {
             return None;
         }

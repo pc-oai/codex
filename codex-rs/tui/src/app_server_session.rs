@@ -122,6 +122,8 @@ use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
 
 fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
     color_eyre::eyre::eyre!("{context}: {err}")
@@ -170,10 +172,13 @@ impl ThreadParamsMode {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct AppServerStartedThread {
     pub(crate) session: ThreadSessionState,
     pub(crate) turns: Vec<Turn>,
 }
+
+static BACKGROUND_REQUEST_ID: AtomicI64 = AtomicI64::new(-1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TurnPermissionsOverride {
@@ -1034,6 +1039,28 @@ impl AppServerSession {
         self.client.request_handle()
     }
 
+    pub(crate) async fn resume_thread_with_request_handle(
+        request_handle: AppServerRequestHandle,
+        config: Config,
+        thread_id: ThreadId,
+        thread_params_mode: ThreadParamsMode,
+        remote_cwd_override: Option<PathBuf>,
+    ) -> Result<AppServerStartedThread> {
+        let response: ThreadResumeResponse = request_handle
+            .request_typed(ClientRequest::ThreadResume {
+                request_id: next_background_request_id(),
+                params: thread_resume_params_from_config(
+                    config.clone(),
+                    thread_id,
+                    thread_params_mode,
+                    remote_cwd_override.as_deref(),
+                ),
+            })
+            .await
+            .wrap_err("thread/resume failed during TUI subagent prewarm")?;
+        started_thread_from_resume_response(response, &config, thread_params_mode).await
+    }
+
     fn next_request_id(&mut self) -> RequestId {
         let request_id = self.next_request_id;
         self.next_request_id += 1;
@@ -1137,6 +1164,10 @@ fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
         supported_in_api: true,
         input_modalities: model.input_modalities,
     }
+}
+
+fn next_background_request_id() -> RequestId {
+    RequestId::Integer(BACKGROUND_REQUEST_ID.fetch_sub(1, Ordering::Relaxed))
 }
 
 fn approvals_reviewer_override_from_config(

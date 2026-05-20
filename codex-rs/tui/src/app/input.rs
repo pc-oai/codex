@@ -104,7 +104,10 @@ impl App {
             && previous_agent_shortcut_matches(key_event)
         {
             if let Some(thread_id) = self
-                .adjacent_thread_id_with_backfill(app_server, AgentNavigationDirection::Previous)
+                .adjacent_thread_id_for_switch_shortcut(
+                    app_server,
+                    AgentNavigationDirection::Previous,
+                )
                 .await
             {
                 let _ = self
@@ -118,7 +121,7 @@ impl App {
             && next_agent_shortcut_matches(key_event)
         {
             if let Some(thread_id) = self
-                .adjacent_thread_id_with_backfill(app_server, AgentNavigationDirection::Next)
+                .adjacent_thread_id_for_switch_shortcut(app_server, AgentNavigationDirection::Next)
                 .await
             {
                 let _ = self
