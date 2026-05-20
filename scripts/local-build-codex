@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Build the local Codex binary with an automatically bumped footer label."""
+"""Build and archive local Codex with an automatically bumped footer label."""
 
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -12,6 +13,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CODEX_RS = REPO_ROOT / "codex-rs"
 VERSION_RS = CODEX_RS / "tui" / "src" / "version.rs"
+TARGET_DIR = CODEX_RS / "target"
+LOCAL_BUILDS_DIR = TARGET_DIR / "local-builds"
 BUILD_NUMBER_RE = re.compile(r"(pub const LOCAL_BUILD_NUMBER: u32 = )(\d+)(;)")
 
 
@@ -27,6 +30,34 @@ def bumped_version_source(source: str) -> tuple[str, int]:
         count=1,
     )
     return updated_source, next_build_number
+
+
+def executable_name(name: str) -> str:
+    return f"{name}.exe" if sys.platform == "win32" else name
+
+
+def built_codex_binary() -> Path:
+    return TARGET_DIR / "debug" / executable_name("codex")
+
+
+def archived_codex_binary(build_number: int) -> Path:
+    return LOCAL_BUILDS_DIR / f"v{build_number}" / executable_name("codex")
+
+
+def archive_local_build(build_number: int) -> Path:
+    built_binary = built_codex_binary()
+    if not built_binary.exists():
+        raise SystemExit(f"Built Codex binary not found at {built_binary}")
+
+    archived_binary = archived_codex_binary(build_number)
+    if archived_binary.exists():
+        raise SystemExit(
+            f"Refusing to replace archived local Codex v{build_number} at {archived_binary}"
+        )
+
+    archived_binary.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(built_binary, archived_binary)
+    return archived_binary
 
 
 def main() -> int:
@@ -48,7 +79,14 @@ def main() -> int:
         VERSION_RS.write_text(original_source)
         return completed.returncode
 
+    try:
+        archived_binary = archive_local_build(next_build_number)
+    except BaseException:
+        VERSION_RS.write_text(original_source)
+        raise
+
     print(f"Built local Codex v{next_build_number}")
+    print(f"Saved local Codex v{next_build_number} at {archived_binary}")
     return 0
 
 
