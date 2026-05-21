@@ -525,7 +525,7 @@ recovery evidence.
 | `7c89664f2092` | Restore split footer status, compact agent picker, and direct edit shortcuts after merge | Footer, agents, editing |
 | `b227bf5118cf` | Suppress the durable boxed startup history header | Transcript/chrome |
 | `fd38c1e6b348`, `8aaf14488562`, `73c685cf724f` | Restore reload and agent rotation shortcuts, local title/session helpers, and condensed transcript mode | Keyboard workflow, titles, transcript |
-| `14a6b2800039`, `b2da512dcf40`, `3dd21ecbc80`, `21e726dcd153` | Restore agent prewarm activity updates, progress/status surfaces, edit/queue workflow, and slash aliases | Agents, runtime signals, editing |
+| `14a6b2800039`, `b2da512dcf40`, `3dd21ecbc80`, `21e726dcd153`, `422f82ea323f`, `d5160d052209` | Restore agent prewarm activity updates and switch feedback, progress/status surfaces, edit/queue workflow, and slash alias selection | Agents, runtime signals, editing |
 | `3a0cd90f4079`, `4ef824df2aa0`, `89a39f8b55f8` | Add direct and idle user-spawned subagents | Agents |
 | `b11052807110` | Persist runtime metrics without bringing verbose timing rows back into the transcript | Runtime signals |
 | `3b96a817ff6b`, `82be3373b6e1`, `99e7f29d0d22`, `b655d9f39145`, `ad05bd3795a1` | Restore recovery wiring around reload drafts, picker retrieval cues, edit preview accent, and selected subagent-tree reload | Session restore, editing |
