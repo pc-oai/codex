@@ -761,7 +761,10 @@ impl RuntimeKeymap {
                     KeyCode::Char('r'),
                     KeyModifiers::ALT | KeyModifiers::SHIFT,
                 ))],
-                history_search_next: default_bindings![ctrl(KeyCode::Char('s'))],
+                history_search_next: default_bindings![raw(KeyBinding::new(
+                    KeyCode::Char('s'),
+                    KeyModifiers::ALT | KeyModifiers::SHIFT,
+                ))],
             },
             editor: EditorKeymap {
                 insert_newline: default_bindings![
@@ -1973,7 +1976,10 @@ mod tests {
         );
         assert_eq!(
             runtime.composer.history_search_next,
-            vec![key_hint::ctrl(KeyCode::Char('s'))]
+            vec![KeyBinding::new(
+                KeyCode::Char('s'),
+                KeyModifiers::ALT | KeyModifiers::SHIFT,
+            )]
         );
         assert_eq!(runtime.editor.kill_whole_line, Vec::new());
     }
