@@ -8,6 +8,12 @@ In the codex-rs folder where the rust code lives:
   `just local-build`) instead of calling `cargo build -p codex-cli` directly.
   That path bumps `LOCAL_BUILD_NUMBER` in `codex-rs/tui/src/version.rs`
   automatically so the footer marker advances whenever a new local binary is built.
+- For heavy Rust build/test/check commands during Codex work, prefer
+  `codex-mac -- <command>` when the AWS M4 build Mac is available. Read
+  `BUILDING.md` before using this experimental path, and append concrete
+  session learnings there as you discover them. Keep `scripts/local-build-codex`
+  local unless you specifically need a remote runnable-binary flow, because it
+  mutates `codex-rs/tui/src/version.rs`.
 - Install any commands the repo relies on (for example `just`, `rg`, or `cargo-insta`) if they aren't already available before running instructions here.
 - Never add or modify any code related to `CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR` or `CODEX_SANDBOX_ENV_VAR`.
   - You operate in a sandbox where `CODEX_SANDBOX_NETWORK_DISABLED=1` will be set whenever you use the `shell` tool. Any existing code that uses `CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR` was authored with this fact in mind. It is often used to early exit out of tests that the author knew you would not be able to run given your sandbox limitations.
