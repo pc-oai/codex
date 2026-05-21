@@ -86,25 +86,31 @@ That absence is expected only because the post-merge state repair remapped the
 fork's conflicting migration numbers. Keep checking the state behavior and the
 remap path; do not restore those filenames blindly.
 
-These old touched paths are not in the current fork delta path set and need
-either an upstream/refactor explanation or a behavior check:
+These old touched paths did not appear in the first current fork-delta path
+set. Keep the distinction between expected refactors and remaining checks:
 
-- `app-server-protocol` item start/completion schema and old `v2.rs`
-- `thread-store/src/remote/{helpers,list_threads,mod}.rs`
-- `tui/src/app/side.rs`
-- `tui/src/history_cell.rs`
-- two older TUI snapshots for history tooltip and resume-picker table
-- `tui/src/status_indicator_widget.rs`
-- `tui/src/tui.rs`
+| Old path | First-pass disposition |
+| --- | --- |
+| `app-server-protocol/schema/json/v2/Item{Started,Completed}Notification.json` | Old delta only changed trailing newline state. |
+| `app-server-protocol/src/protocol/v2.rs` | Upstream split v2 into modules; local thread config/delete/user-state/subagent fields now live under `protocol/v2/{config,thread,thread_data}.rs`. |
+| `thread-store/src/remote/{helpers,list_threads,mod}.rs` | Old remote-store edits only filled new thread fields and rejected remote delete; current thread-store no longer has that remote module. Check current thread delete/user-state behavior through app-server and active store paths instead. |
+| `tui/src/history_cell.rs` | Upstream split history cells into `history_cell/`; condensed mode, session header, timing, and tests live in the split modules now. |
+| old history tooltip and resume-picker table snapshots | Snapshot layout moved with the split history cells and picker reshaping. Review current snapshots when picker/chrome behavior changes. |
+| `tui/src/status_indicator_widget.rs` | Real missing Talon path found in this audit pass: the app bridge and live task summary setter had fallen out even though `talon.rs` and helper binaries still existed. |
+| `tui/src/tui.rs` | Old thread-switch viewport clearing moved: current `app/session_lifecycle.rs::clear_terminal_for_thread_switch` clears scrollback directly during switch reset instead of deferring a scheduled clear through `Tui`. |
+| `tui/src/app/side.rs` | Real missing line found in this audit pass: side-thread discard must refresh full agent activity label, not only the active label. |
 
-Some are expected split-file churn after upstream changes. Keep the list as a
-review queue until each behavior is accounted for.
+`resume_picker.rs` was present on both sides of the merge and still needed a
+behavior audit. This pass found and restored the old retrieval cues and fast
+paths inside the reshaped picker: custom-title filtering and emphasis, message
+counts, compact cwd labels, the short ID suffix, local open-session detection
+through Talon sockets, and the warmed all-directories page used by `Ctrl-A`.
 
 ### Current `HEAD` static anchors
 
 | Fork behavior | Current `HEAD` evidence found |
 | --- | --- |
-| Talon session sockets | `TalonSocketRequest`, `start_socket_acceptor` |
+| Talon session sockets | `TalonSocketRequest`, `start_socket_acceptor`, `talon_ambient_state`, `handle_talon_request` |
 | Short session selectors | `thread_id_contains_normalized_fragment` |
 | Condensed transcript | `ToggleCondensedTranscriptView` |
 | Ghostty turn progress | `sync_managed_terminal_progress` |

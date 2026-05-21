@@ -20,10 +20,72 @@ and easy to scan.
 - `Alt-E`: open queued-message edit.
 - `Ctrl-A`: open the compact agent menu when line-start movement has no more
   work to do.
+- Session pickers use `Ctrl-A` to switch between current-directory sessions
+  and all directories when a cwd filter exists.
+- Session pickers use `Ctrl-T` to filter to custom-titled sessions, and
+  `Ctrl-Q` / `Ctrl-X` exit the picker like `Ctrl-C`.
+- Session pickers keep `Ctrl-P` for opening the selected session transcript
+  after `Ctrl-T` is reserved for title filtering.
 - `Alt-C`: toggle condensed transcript mode.
 - `Alt-[`: switch to the previous agent thread.
 - `Alt-]`: switch to the next agent thread.
-- `Alt-\`: open the subagent command draft from an empty composer.
+- `Alt-\`: spawn an idle child agent from an empty composer and switch to it.
+
+
+## Feature areas
+
+Dev:
+- fast reload (Ctrl-R, Say, preserves model)
+- Better restoration of state (tool outputs, turn, runtimes, and so forth)
+
+Composer:
+- clear composer / discard queued draft (`Ctrl-X`)
+- edit-last (`Ctrl-E`; stash current draft; repeat to walk backwards)
+- queued follow-up edit (revise the next waiting message)
+- queued follow-up steer / discard (send the latest one as an immediate steer, or drop it)
+- configurable inline paste threshold (inline text vs placeholder)
+- local slash helpers (for example `/id` and `/reload`)
+
+Session restore:
+- resume / fork by UUID, ID fragment, or name
+- picker retrieval cues (title, cwd, ID suffix, open state)
+- saved cwd restore (resume, reload, and fork)
+- replayed saved command output (after resume)
+- active / parked / done state (separate from archive/delete)
+
+Titles:
+- retitle helper (`/retitle`)
+- emoji helper (`/emoji`)
+- thread-aware terminal title (session ID item uses the ID suffix)
+
+Agents:
+- compact agent menu
+- prev / next switching (`Alt-[` / `Alt-]`)
+- direct subagent spawn (`/subagent`, idle `Alt-\`)
+- active-agent footer state (count and working marker)
+- preserve main draft while switching
+
+Transcript/chrome:
+- condensed transcript toggle
+- compact startup history
+- split status / footer
+- compact turn timing
+- transcript browser experiments
+- optional Ghostty progress
+
+Reload/handoff:
+- reload into fresh process
+- preserve working cwd
+- preserve drafts / subagent tree
+- fork from stable completed turn
+
+Automation/builds:
+- per-session Talon control
+- session command socket
+- invocation-local runtime overrides
+- visible local build labels
+- archived numbered binaries
+- fast model bootstrap
 
 ## Feature summary
 
@@ -32,9 +94,10 @@ and easy to scan.
   output.
 - Titles: local naming, retitle, and emoji flows keep threads and terminal tabs
   recognizable without polluting the transcript.
-- Editing: reversible edit-last-message, draft restoration, queue controls,
-  configurable key bindings, paste visibility, and local slash helpers keep
-  repeated prompt work fast without making it lossy.
+- Editing: reversible edit-last-message, composer-draft preservation across
+  edit-last, agent switching, reload, and resume, queue controls, configurable
+  key bindings, paste visibility, and local slash helpers keep repeated prompt
+  work fast without making it lossy.
 - Agents: compact picker/switching/prewarm behavior, visible active-agent
   state, direct user-spawned subagents, and side conversations support many
   active threads in one TUI.
@@ -125,13 +188,15 @@ properties, treat that as a fork regression even if the merged tree compiles.
   hexadecimal UUID fragments. Ambiguous short fragments open a picker instead
   of choosing silently.
 - The resume picker makes hand-named sessions easy to recover. Custom titles
-  stand out, leading emoji in titles survive display, and the picker can filter
-  to titled sessions.
+  render starred and bold, leading emoji in titles survive display, and picker
+  `Ctrl-T` filters to custom-titled sessions.
 - Picker rows carry fast retrieval cues: a user-message count, compact cwd
   labels with disambiguation when basenames collide, a short session-id suffix,
   and an open/closed signal when that state is known.
-- All-directory lookup stays one keypress away and is warmed so common picker
-  toggles do not feel like a cold fetch.
+- All-directory lookup stays one keypress away with picker `Ctrl-A`, which
+  toggles between the current cwd and all directories without first focusing the
+  toolbar. That query stays warmed so common picker toggles do not feel like a
+  cold fetch.
 - Thread metadata persists retrieval state instead of reparsing old rollouts
   on every read. The local fork adds durable `user_message_count` data and
   durable user lifecycle state that travels through state storage, thread
@@ -163,9 +228,10 @@ properties, treat that as a fork regression even if the merged tree compiles.
 - Resumed limited-history threads rebuild persisted `exec_command` output into
   command history cells. Reloading a thread must not drop command output that
   still exists in saved response items.
-- Composer drafts survive edit and resume handoffs. Edit-last-message can
-  temporarily replace a non-empty composer draft, and cancel restores the
-  displaced draft. Reload handoff preserves enough state that a rebuild test
+- Composer drafts are preserved across edit-last, agent switching, reload, and
+  resume. Edit-last-message can temporarily replace a non-empty composer draft,
+  cancel restores the displaced draft, agent navigation keeps the main-thread
+  draft intact, and reload handoff preserves enough state that a rebuild test
   does not throw away active draft work.
 - Edit-last-message remains reversible before commit. The idle shortcut opens
   a preview, `Esc` cancels it, and submission performs rollback and resubmit.
@@ -222,10 +288,10 @@ properties, treat that as a fork regression even if the merged tree compiles.
 - Active-agent footer labels refresh when a new subagent thread starts so the
   visible count and working-state marker do not lag behind the picker.
 - Loaded parent threads can spawn a child agent directly through app-server
-  `thread/spawn`. The TUI exposes that as `/subagent <task>` and an `Alt-\`
-  empty-composer shortcut that opens the command draft without switching focus;
-  spawned children inherit the parent runtime context, stay in its agent tree,
-  and become visible in the agent picker.
+  `thread/spawn`. `/subagent <task>` starts a child without switching focus.
+  Empty-composer `Alt-\` spawns an idle child and switches into it so the next
+  draft belongs to that child. Spawned children inherit the parent runtime
+  context, stay in its agent tree, and become visible in the agent picker.
 
 ### Local automation and runtime signals
 
@@ -244,13 +310,14 @@ properties, treat that as a fork regression even if the merged tree compiles.
   `OpenAI Codex` session header into terminal history. The prompt and compact
   footer/status surfaces are enough; the large model/directory/permissions
   banner is startup noise in the local loop.
-- The Talon integration is per session. Keep the local file-RPC bridge and the
-  session-owned command sockets working together: they expose editor/session
-  state and narrow control actions through `talon_send`/`talon_sim`, ambient
-  state, and the live session socket. The control surface includes model
-  selection, rename/retitle/emoji operations, edit/reload actions, copying
-  recent requests or responses, interruption, and local build number
-  visibility.
+- The Talon integration is per session. The live TUI control seam is the
+  session-owned command socket; the state file remains ambient output for the
+  same session. Together they expose editor/session state and narrow control
+  actions. The socket control surface includes model selection,
+  rename/retitle/emoji operations, edit/reload actions, copying recent requests
+  or responses, interruption, and local build number visibility.
+- The Talon state response carries the live task summary from the rendered
+  status row while a turn is running, not only a busy flag.
 - Talon setup must retry once a newly created chat widget finally has a thread
   ID. Starting the widget before the thread ID exists must not leave the
   per-session socket and state files missing for the rest of that session.
@@ -418,3 +485,23 @@ current fork contract.
 | `e6dda1d1ee04` | Advance the local build marker after the archived build | Local runtime |
 | `7c89664f2092` | Restore split footer status, compact agent picker, and direct edit shortcuts after merge | Footer, agents, editing |
 | `fafeb52f2fc3` | Advance the local build marker after `v60` verification | Local runtime |
+
+## Short session-ID suffix contract
+
+The fork treats the tail of a session ID as a practical retrieval handle. Do
+not regress this to prefix-only IDs: the suffix is the compact ID Phil expects
+to spot and type.
+
+- `resume` and `fork` selectors accept an exact UUID, a thread name, or a
+  hexadecimal ID fragment.
+- Fragment matching is not prefix-only. It ignores UUID hyphens, normalizes
+  case, and matches anywhere inside the session ID, so a pasted suffix works.
+- Exact UUID or name lookup wins first. A unique ID fragment opens that thread;
+  an ambiguous fragment opens a narrowed picker instead of choosing silently.
+- Resume-picker filtering understands ID fragments. Picker rows and expanded
+  details use `…` plus the final eight session-ID characters instead of the
+  full UUID.
+- Terminal-title session-ID output uses that same compact suffix shape:
+  `…xxxxxxxx`, not the leading UUID characters.
+- The suffix form is intentional. It is the more useful quick discriminator in
+  local session lists and terminal chrome than repeated-looking prefixes.

@@ -45,7 +45,7 @@ This is a running note of intentional local divergences from upstream Codex. Kee
   - Why: it should be obvious when a terminal is running the forked debug binary rather than an installed release binary.
 - CLI runtime toggles include `--no-mcp-servers`, `--no-project-docs`, `--config-file`, and `--private` / `-P`.
   - Why: wrappers and aliases should be able to shape one process invocation without mutating durable user config, and quick test chats should not have to pollute session history.
-- The Talon file-RPC bridge exposes session/editor state and supports small control actions such as edit-last-message, reload, model selection, and copying the last request.
+- The Talon per-session command socket exposes session/editor state and supports small control actions such as edit-last-message, reload, model selection, and copying the last request.
   - Why: voice tooling and launch wrappers need a narrow automation seam, but the Codex TUI should remain the source of truth.
 
 ## Startup and observability
