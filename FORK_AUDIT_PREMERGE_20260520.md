@@ -113,7 +113,7 @@ multiple behaviors and should be checked by behavior, not by commit subject.
 ## Current comparison
 
 The current fork delta from the upstream side of the merge to current `HEAD`
-touches 315 files with 18,984 insertions and 1,576 deletions. Of the 265 old
+touches 315 files with 18,989 insertions and 1,576 deletions. Of the 265 old
 fork paths checked in the accounting pass, 253 also appear in that current fork
 delta.
 
