@@ -177,3 +177,11 @@ codex-mac --lane tui-repair -- cargo check -p codex-tui -p codex-cli
 - 2026-05-21: Installed `htop 3.5.1` on the M4. Use
   `ssh -t -i ~/.ssh/id_ed25519 ec2-user@3.147.77.99 htop`; Homebrew notes that
   `sudo htop` is needed there to see every process.
+- 2026-05-21: `codex-mac --lane fork-audit-clean --no-sync -- env -u
+  CARGO_BUILD_BUILD_DIR cargo test -p codex-exec --no-fail-fast` passed after
+  the default remote command failed only in integration cases that launch
+  `codex-exec`. With `CARGO_BUILD_BUILD_DIR` set, the runtime binary lookup
+  searched `cargo-build/debug/codex-exec` while Cargo left that built binary in
+  `cargo-target/debug/codex-exec`; unset the build-dir override for remote
+  integration tests that rely on `codex_utils_cargo_bin` until those paths are
+  aligned.
