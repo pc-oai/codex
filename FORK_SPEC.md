@@ -17,7 +17,7 @@ and easy to scan.
 - `Ctrl-X`: clear the composer or discard the relevant queued draft.
 - `Ctrl-E`: open edit-last-message when the composer cursor is already at line
   end.
-- `Alt-E`: open queued-message edit.
+- `Alt-Up` / `Alt-E`: open queued-message edit.
 - `Alt-Down` / `Alt-Enter`: steer the newest queued follow-up immediately.
 - `Alt-R`: open manual rename for the current session.
 - `Ctrl-Shift-R`: request a fresh title suggestion for the current session.
@@ -110,9 +110,9 @@ Automation/builds:
   state, direct user-spawned subagents, and side conversations support many
   active threads in one TUI.
 - Transcript and chrome: condensed scrollback, local transcript experiments,
-  compact startup history, split status/footer surfaces, compact timing output,
-  and optional Ghostty progress keep runtime state visible without transcript
-  noise.
+  compact configuring chrome without a durable startup history banner, split
+  status/footer surfaces, compact timing output, and optional Ghostty progress
+  keep runtime state visible without transcript noise.
 - Automation and builds: per-session Talon control, invocation-local runtime
   overrides, visible local build numbers, and archived numbered binaries keep
   local dogfooding reproducible.
@@ -286,8 +286,9 @@ properties, treat that as a fork regression even if the merged tree compiles.
 - Slash autocomplete keeps short command aliases visible alongside their long
   spellings, including aliases such as `/m`, `/e`, `/r`, `/c`, `/i`, `/rev`,
   `/t`, `/rt`, and `/em`.
-- The local default queued-message edit bindings keep both `Ctrl-E` and
-  `Alt-E`, not only the upstream arrow-key paths.
+- The local default queued-message edit bindings keep `Alt-Up`, `Alt-E`, and
+  `Ctrl-E`; the direct letter shortcuts must not be lost when inherited
+  arrow-key paths move.
 - Pasted text stays intact for submission while the inline display threshold is
   configurable with `paste_text_inline_char_limit`.
 - Local model experiments can opt in to a context window above the catalog max

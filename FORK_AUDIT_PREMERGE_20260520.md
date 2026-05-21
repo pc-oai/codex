@@ -37,6 +37,13 @@ keymap was restored. A later data/default audit found the same shape in startup
 chrome: `compact_session_header` still parsed, but no committed startup path
 used it until the compact configuring placeholder was restored.
 
+The old-range test and snapshot inventory was checked against committed `HEAD`
+after those repairs. Every test function name added in the old range still has
+a committed source hit, every old-range added test file still has a matching
+committed path or basename, and every old-range added snapshot still has a
+matching committed snapshot basename. Treat that as coverage inventory, not a
+replacement for the behavior checks below.
+
 ## Older backup-ref boundary
 
 The May pre-merge tag is the merge contract for this audit. The older local ref
