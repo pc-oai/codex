@@ -228,6 +228,9 @@ properties, treat that as a fork regression even if the merged tree compiles.
   replacement to avoid flicker.
 - Runtime metrics stay available locally when runtime metrics are enabled even
   if no remote exporter is configured.
+- Runtime-metrics transcript output stays compact. Do not regress to verbose
+  per-turn timing lines or separators that expand websocket/local-tool totals
+  into long transcript rows when a concise timing summary is enough.
 
 ### State compatibility
 
