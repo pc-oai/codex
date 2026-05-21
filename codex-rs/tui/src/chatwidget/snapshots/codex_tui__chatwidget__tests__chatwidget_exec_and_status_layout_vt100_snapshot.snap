@@ -41,4 +41,4 @@ expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 
 › Summarize recent commits
 
-  tab to queue message                                                     v63
+  tab to queue message                                                     v65
