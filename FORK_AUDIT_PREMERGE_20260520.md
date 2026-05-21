@@ -135,6 +135,20 @@ must not take it as a default binding.
 Static anchors are necessary, not sufficient. They do not prove constructor
 wiring, key routing, snapshot shape, or the binary Phil is running.
 
+### Compound commit decomposition
+
+Commits `615a82f60acc` and `820635042674` are too broad to audit by subject
+line. The first feature-level pass split them this way:
+
+| Old commit | Behavior groups checked | Current evidence |
+| --- | --- | --- |
+| `615a82f60acc` session workflows | TUI runtime toggles (`--private`, `--config-file`, no MCP, no project docs), thread delete and persisted message-count retrieval metadata, saved-cwd resume/reload/fork flow, `/delete` `/reload` `/id` copy/title helpers, compact status/history chrome, and title suggestion workers | CLI runtime toggle tests, app-server thread-delete tests, thread metadata/store tests, `session_resume` cwd tests, slash/title suggestion tests, status/footer snapshots, and the current session/picker rows below |
+| `820635042674` context and composer controls | Unsafe context-window override, compact context-used status variants, rename/retitle and queue edit/discard/steer keymap actions, queued hint binding refresh, edit-last composer accent, and the reverse-history remap away from reload/agent chords | model override tests, status surface tests, keymap action/default/conflict tests, queued-message tests and snapshots, edit-last accent snapshot/tests, and the `Ctrl-R`/`Ctrl-S` reservation now stated in `FORK_SPEC.md` |
+
+This decomposition is still a regression checklist, not a proof by ancestry.
+When any one of these areas changes later, rerun its focused tests and its live
+TUI check if the behavior is terminal-visible.
+
 ### Requirement evidence
 
 This table accounts for the behavior contract against the clean current `HEAD`.
@@ -181,9 +195,9 @@ patch shape.
 
 Use this order for the missing-functionality hunt:
 
-1. Check large compound commits `615a82f60acc` and `820635042674` by feature:
-   session lookup/delete/state, title flows, startup/footer chrome, keymap and
-   composer controls.
+1. Reuse the compound-commit decomposition above when session
+   lookup/delete/state, title flows, startup/footer chrome, keymap, context, or
+   composer controls change again.
 2. Keep rerunning live TUI checks when later repairs touch the behavior:
    current checks cover the Talon socket round trip, short selector
    unique/ambiguous lookup, reload with a non-empty root draft,
