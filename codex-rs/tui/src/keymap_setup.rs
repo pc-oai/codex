@@ -1128,7 +1128,7 @@ mod tests {
         assert_eq!(unbound_tab.items[0].name, "Toggle Vim Mode");
         assert_eq!(unbound_tab.items[0].description.as_deref(), Some("unbound"));
         assert!(!unbound_tab.items[0].is_disabled);
-        assert_eq!(unbound_tab.items[1].name, "Rename Current Session");
+        assert_eq!(unbound_tab.items[1].name, "Toggle Raw Output");
         assert_eq!(unbound_tab.items[1].description.as_deref(), Some("unbound"));
         assert!(!unbound_tab.items[1].is_disabled);
         assert_eq!(unbound_tab.items[2].name, "Kill Whole Line");

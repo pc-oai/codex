@@ -20,8 +20,8 @@ Clear Terminal | ctrl-l | Global clear_terminal Clear Terminal Clear the termina
 Reload Current Session | ctrl-r | Global reload_current_session Reload Current Session Reload the current session in a fresh process. ctrl-r Default
 Toggle Condensed Transcript | alt-c | Global toggle_condensed_transcript Toggle Condensed Transcript Toggle message-only main transcript view. alt-c Default
 Toggle Vim Mode | unbound | Global toggle_vim_mode Toggle Vim Mode Turn Vim composer mode on or off. unbound Default
-Toggle Raw Output | alt-r | Global toggle_raw_output Toggle Raw Output Toggle raw scrollback mode. alt-r Default
+Toggle Raw Output | unbound | Global toggle_raw_output Toggle Raw Output Toggle raw scrollback mode. unbound Default
 Decrease Reasoning Effort | alt-, | Chat decrease_reasoning_effort Decrease Reasoning Effort Decrease reasoning effort. alt-, Default
 Increase Reasoning Effort | alt-. | Chat increase_reasoning_effort Increase Reasoning Effort Increase reasoning effort. alt-. Default
-Rename Current Session | unbound | Chat rename_current_session Rename Current Session Open the manual rename prompt for the current session. unbound Default
+Rename Current Session | alt-r | Chat rename_current_session Rename Current Session Open the manual rename prompt for the current session. alt-r Default
 Retitle Current Session | ctrl-shift-r | Chat retitle_current_session Retitle Current Session Generate a fresh title suggestion for the current session. ctrl-shift-r Default
