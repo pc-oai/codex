@@ -38,11 +38,14 @@ chrome: `compact_session_header` still parsed, but no committed startup path
 used it until the compact configuring placeholder was restored.
 
 The old-range test and snapshot inventory was checked against committed `HEAD`
-after those repairs. Every test function name added in the old range still has
-a committed source hit, every old-range added test file still has a matching
+after those repairs. Every old-range added test file still has a matching
 committed path or basename, and every old-range added snapshot still has a
-matching committed snapshot basename. Treat that as coverage inventory, not a
-replacement for the behavior checks below.
+matching committed snapshot basename. Individual test functions still need
+review: the old local slash-alias tests had been dropped by a later upstream
+test rewrite; the audit restored compact alias/completion coverage and the
+popup exact-alias ordering that keeps `/i` from dispatching the longer `/ide`
+prefix match. Treat this inventory as a loss detector, not a replacement for
+the behavior checks below.
 
 ## Older backup-ref boundary
 

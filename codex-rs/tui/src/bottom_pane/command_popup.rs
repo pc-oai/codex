@@ -181,7 +181,7 @@ impl CommandPopup {
                 let display_exact = display_lower == filter_lower;
                 let name_exact = name_lower.as_deref() == Some(filter_lower.as_str());
                 let alias_item = matches!(&item, CommandItem::BuiltinAlias { .. });
-                if (display_exact || name_exact) && !alias_item {
+                if display_exact || (name_exact && !alias_item) {
                     let offset = if display_exact { 0 } else { name_offset };
                     exact.push((item, indices_for(offset)));
                     return;
@@ -357,6 +357,20 @@ mod tests {
                 panic!("expected model command, got service tier {command:?}")
             }
             None => panic!("expected at least one match for '/mo'"),
+        }
+    }
+
+    #[test]
+    fn short_alias_is_selected_before_longer_prefixes() {
+        let mut popup = CommandPopup::new(CommandPopupFlags::default(), Vec::new());
+        popup.on_composer_text_change("/i".to_string());
+
+        match popup.selected_item() {
+            Some(CommandItem::BuiltinAlias { name, command }) => {
+                assert_eq!(name, "i");
+                assert_eq!(command, SlashCommand::Id);
+            }
+            other => panic!("expected /i alias to be selected, got {other:?}"),
         }
     }
 

@@ -338,6 +338,28 @@ mod tests {
     }
 
     #[test]
+    fn local_short_aliases_parse_and_stay_in_completion() {
+        for (alias, command) in [
+            ("m", SlashCommand::Model),
+            ("e", SlashCommand::Effort),
+            ("r", SlashCommand::Reload),
+            ("c", SlashCommand::Compact),
+            ("i", SlashCommand::Id),
+            ("rev", SlashCommand::Review),
+            ("t", SlashCommand::Title),
+            ("rt", SlashCommand::Retitle),
+            ("em", SlashCommand::Emoji),
+        ] {
+            assert_eq!(SlashCommand::from_str(alias), Ok(command));
+            assert!(
+                command.completion_aliases().contains(&alias),
+                "{alias} should stay visible in slash completion for /{}",
+                command.command()
+            );
+        }
+    }
+
+    #[test]
     fn certain_commands_are_available_during_task() {
         assert!(SlashCommand::Goal.available_during_task());
         assert!(SlashCommand::Ide.available_during_task());

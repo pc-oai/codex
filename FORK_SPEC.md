@@ -285,7 +285,8 @@ properties, treat that as a fork regression even if the merged tree compiles.
   lifecycle markers `/active`, `/park`, and `/done`.
 - Slash autocomplete keeps short command aliases visible alongside their long
   spellings, including aliases such as `/m`, `/e`, `/r`, `/c`, `/i`, `/rev`,
-  `/t`, `/rt`, and `/em`.
+  `/t`, `/rt`, and `/em`. A typed exact alias wins over longer prefix matches,
+  so `/i` selects `/id` rather than `/ide`.
 - The local default queued-message edit bindings keep `Alt-Up`, `Alt-E`, and
   `Ctrl-E`; the direct letter shortcuts must not be lost when inherited
   arrow-key paths move.
