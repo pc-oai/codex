@@ -192,6 +192,21 @@ This decomposition is still a regression checklist, not a proof by ancestry.
 When any one of these areas changes later, rerun its focused tests and its live
 TUI check if the behavior is terminal-visible.
 
+### Late narrow-commit pass
+
+The smaller late pre-merge commits were checked separately after the compound
+commit pass so one-line behavior and coverage commits did not get hidden by the
+large requirement table:
+
+| Old commit group | Current disposition |
+| --- | --- |
+| `7ef47d4bc448`, `1f08362c8cb7` | Resumed exec output replay remains implemented and keeps focused durable-history coverage. |
+| `21d96564576e`, `752642e1dd56`, `73d4cc00e9f6` | Local build helper/archive workflow, configurable paste display threshold, and Ghostty terminal progress remain current runtime surfaces. |
+| `a80b5d32bd54`, `f1dcbb148741`, `8f767d057982`, `752ad85ac4db` | Rollback edit turn starts, open subagent-tree resume, reload tree handoff, and condensed transcript mode still have active protocol/TUI paths. |
+| `7db88571b926`, `c629b89bb219`, `0c2d8d29f01a`, `5065e5894b1b` | Shortcut/keymap, Talon socket, short session selector, and agent-menu/prewarm work remain active. This pass restored two dropped interaction details inside that group: exact slash-alias popup ordering and the keyboard agent-switch footer strip. |
+| `553fb35368c6`, `107bdc559b10`, `0e80674bb199`, `a35ce79899a4` | Terminal-title compaction, queued-hint refresh after keymap edits, side rename/copy-remap edge coverage, and live-config title suggestions all still have committed tests or direct callsites. |
+| `94210679c239`, `ad5a44589885`, `11c5eb2ae3d4`, `6714c9456384`, `d9aaee7ac411` | Generated schema/snapshot/fixture refreshes, transcript prototype binaries, and standalone exec loader override propagation are accounted for by current artifacts or focused proof rows below. |
+
 ### Requirement evidence
 
 This table accounts for the behavior contract against the clean current `HEAD`.
