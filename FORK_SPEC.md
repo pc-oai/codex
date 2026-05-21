@@ -20,6 +20,7 @@ and easy to scan.
 - `Alt-E`: open queued-message edit.
 - `Ctrl-A`: open the compact agent menu when line-start movement has no more
   work to do.
+- `Alt-C`: toggle condensed transcript mode.
 - `Alt-[`: switch to the previous agent thread.
 - `Alt-]`: switch to the next agent thread.
 - `Alt-\`: open the subagent command draft from an empty composer.
@@ -180,7 +181,8 @@ properties, treat that as a fork regression even if the merged tree compiles.
 - `Ctrl-X` clears the composer input or discards the relevant queued draft
   without borrowing `Ctrl-C`.
 - Main-surface key bindings include `Ctrl-R` to reload the current session and
-  resume it in a fresh process, plus condensed transcript toggling. Keymap
+  resume it in a fresh process, plus `Alt-C` to toggle condensed transcript
+  mode so tool-call rows and outputs can be hidden from scrollback. Keymap
   config is forward-compatible at load time so an older local binary ignores
   unknown future action names while generated schema stays strict for
   validation.
@@ -205,7 +207,8 @@ properties, treat that as a fork regression even if the merged tree compiles.
 ### Transcript views and agents
 
 - The local TUI has a condensed message-only transcript mode for terminal
-  scrollback.
+  scrollback. `Alt-C` switches between the full transcript and that compact
+  view without dropping hidden tool-call history.
 - The fork includes transcript browser prototypes for outline and tree-style
   exploration of saved conversations. Treat these binaries as local
   experiments unless they are intentionally promoted.

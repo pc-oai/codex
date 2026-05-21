@@ -2405,6 +2405,15 @@ mod tests {
     }
 
     #[test]
+    fn condensed_transcript_toggle_defaults_to_alt_c() {
+        let runtime = RuntimeKeymap::defaults();
+        assert_eq!(
+            runtime.app.toggle_condensed_transcript,
+            vec![key_hint::alt(KeyCode::Char('c'))]
+        );
+    }
+
+    #[test]
     fn raw_output_toggle_can_be_remapped() {
         let mut keymap = TuiKeymap::default();
         keymap.global.toggle_raw_output = Some(one("f12"));
