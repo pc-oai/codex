@@ -51,6 +51,8 @@ use reqwest::Error;
 use reqwest::Response;
 use std::borrow::Cow;
 use std::future::Future;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::time::error::Elapsed;
@@ -105,6 +107,7 @@ pub struct SessionTelemetry {
     pub(crate) metadata: SessionTelemetryMetadata,
     pub(crate) metrics: Option<MetricsClient>,
     pub(crate) metrics_use_metadata_tags: bool,
+    turn_runtime_metrics: Arc<Mutex<RuntimeMetricsSummary>>,
 }
 
 impl SessionTelemetry {
@@ -149,6 +152,7 @@ impl SessionTelemetry {
     }
 
     pub fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) {
+        self.record_runtime_counter(name, inc);
         let res: MetricsResult<()> = (|| {
             let Some(metrics) = &self.metrics else {
                 return Ok(());
@@ -179,6 +183,7 @@ impl SessionTelemetry {
     }
 
     pub fn record_duration(&self, name: &str, duration: Duration, tags: &[(&str, &str)]) {
+        self.record_runtime_duration(name, duration);
         let res: MetricsResult<()> = (|| {
             let Some(metrics) = &self.metrics else {
                 return Ok(());
@@ -325,6 +330,17 @@ impl SessionTelemetry {
         }
     }
 
+    /// Resets the per-turn runtime totals kept separately from live metrics snapshots.
+    pub fn reset_turn_runtime_metrics(&self) {
+        *self.turn_runtime_metrics() = RuntimeMetricsSummary::default();
+    }
+
+    /// Returns and clears the per-turn runtime totals collected since the last reset.
+    pub fn take_turn_runtime_metrics(&self) -> Option<RuntimeMetricsSummary> {
+        let summary = std::mem::take(&mut *self.turn_runtime_metrics());
+        (!summary.is_empty()).then_some(summary)
+    }
+
     /// Collect a runtime metrics summary if debug snapshots are available.
     pub fn runtime_metrics_summary(&self) -> Option<RuntimeMetricsSummary> {
         let snapshot = match self.snapshot_metrics() {
@@ -396,7 +412,62 @@ impl SessionTelemetry {
             },
             metrics: crate::metrics::global(),
             metrics_use_metadata_tags: true,
+            turn_runtime_metrics: Arc::default(),
         }
+    }
+
+    fn turn_runtime_metrics(&self) -> std::sync::MutexGuard<'_, RuntimeMetricsSummary> {
+        self.turn_runtime_metrics
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn record_runtime_counter(&self, name: &str, inc: i64) {
+        let Ok(inc) = u64::try_from(inc) else {
+            return;
+        };
+        let mut summary = self.turn_runtime_metrics();
+        let total = match name {
+            TOOL_CALL_COUNT_METRIC => &mut summary.tool_calls.count,
+            API_CALL_COUNT_METRIC => &mut summary.api_calls.count,
+            SSE_EVENT_COUNT_METRIC => &mut summary.streaming_events.count,
+            WEBSOCKET_REQUEST_COUNT_METRIC => &mut summary.websocket_calls.count,
+            WEBSOCKET_EVENT_COUNT_METRIC => &mut summary.websocket_events.count,
+            _ => return,
+        };
+        *total = total.saturating_add(inc);
+    }
+
+    fn record_runtime_duration(&self, name: &str, duration: Duration) {
+        let duration_ms = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+        let mut summary = self.turn_runtime_metrics();
+        let total = match name {
+            TOOL_CALL_DURATION_METRIC => &mut summary.tool_calls.duration_ms,
+            API_CALL_DURATION_METRIC => &mut summary.api_calls.duration_ms,
+            SSE_EVENT_DURATION_METRIC => &mut summary.streaming_events.duration_ms,
+            WEBSOCKET_REQUEST_DURATION_METRIC => &mut summary.websocket_calls.duration_ms,
+            WEBSOCKET_EVENT_DURATION_METRIC => &mut summary.websocket_events.duration_ms,
+            RESPONSES_API_OVERHEAD_DURATION_METRIC => &mut summary.responses_api_overhead_ms,
+            RESPONSES_API_INFERENCE_TIME_DURATION_METRIC => {
+                &mut summary.responses_api_inference_time_ms
+            }
+            RESPONSES_API_ENGINE_IAPI_TTFT_DURATION_METRIC => {
+                &mut summary.responses_api_engine_iapi_ttft_ms
+            }
+            RESPONSES_API_ENGINE_SERVICE_TTFT_DURATION_METRIC => {
+                &mut summary.responses_api_engine_service_ttft_ms
+            }
+            RESPONSES_API_ENGINE_IAPI_TBT_DURATION_METRIC => {
+                &mut summary.responses_api_engine_iapi_tbt_ms
+            }
+            RESPONSES_API_ENGINE_SERVICE_TBT_DURATION_METRIC => {
+                &mut summary.responses_api_engine_service_tbt_ms
+            }
+            TURN_TTFT_DURATION_METRIC => &mut summary.turn_ttft_ms,
+            crate::metrics::TURN_TTFM_DURATION_METRIC => &mut summary.turn_ttfm_ms,
+            _ => return,
+        };
+        *total = total.saturating_add(duration_ms);
     }
 
     pub fn record_responses(&self, handle_responses_span: &Span, event: &ResponseEvent) {

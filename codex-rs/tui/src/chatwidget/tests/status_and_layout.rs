@@ -2793,7 +2793,7 @@ fn test_thread_goal(
 }
 
 #[tokio::test]
-async fn runtime_metrics_websocket_timing_logs_and_final_separator_sums_totals() {
+async fn runtime_metrics_websocket_timing_stays_out_of_history_logs_and_final_separator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::RuntimeMetrics, /*enabled*/ true);
 
@@ -2807,10 +2807,8 @@ async fn runtime_metrics_websocket_timing_logs_and_final_separator_sums_totals()
     let first_log = drain_insert_history(&mut rx)
         .iter()
         .map(|lines| lines_to_single_string(lines))
-        .find(|line| line.contains("Timing:"))
-        .expect("expected websocket timing log");
-    assert!(first_log.contains("TTFT: 120ms (iapi)"));
-    assert!(first_log.contains("TBT: 50ms (service)"));
+        .find(|line| line.contains("Timing:"));
+    assert!(first_log.is_none());
 
     chat.apply_runtime_metrics_delta(RuntimeMetricsSummary {
         responses_api_engine_iapi_ttft_ms: 80,
@@ -2820,9 +2818,8 @@ async fn runtime_metrics_websocket_timing_logs_and_final_separator_sums_totals()
     let second_log = drain_insert_history(&mut rx)
         .iter()
         .map(|lines| lines_to_single_string(lines))
-        .find(|line| line.contains("Timing:"))
-        .expect("expected websocket timing log");
-    assert!(second_log.contains("TTFT: 80ms (iapi)"));
+        .find(|line| line.contains("Timing:"));
+    assert!(second_log.is_none());
 
     chat.on_task_complete(
         /*last_agent_message*/ None, /*duration_ms*/ None, /*from_replay*/ false,
@@ -2833,9 +2830,7 @@ async fn runtime_metrics_websocket_timing_logs_and_final_separator_sums_totals()
             final_separator = Some(lines_to_single_string(&cell.display_lines(/*width*/ 300)));
         }
     }
-    let final_separator = final_separator.expect("expected final separator with runtime metrics");
-    assert!(final_separator.contains("TTFT: 80ms (iapi)"));
-    assert!(final_separator.contains("TBT: 50ms (service)"));
+    assert!(final_separator.is_none());
 }
 
 #[tokio::test]

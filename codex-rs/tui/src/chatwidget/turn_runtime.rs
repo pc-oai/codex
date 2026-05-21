@@ -72,27 +72,8 @@ impl ChatWidget {
     }
 
     pub(super) fn apply_runtime_metrics_delta(&mut self, delta: RuntimeMetricsSummary) {
-        let should_log_timing = has_websocket_timing_metrics(delta);
         self.turn_runtime_metrics.merge(delta);
         self.refresh_status_line();
-        if should_log_timing {
-            self.log_websocket_timing_totals(delta);
-        }
-    }
-
-    pub(super) fn log_websocket_timing_totals(&mut self, delta: RuntimeMetricsSummary) {
-        if self
-            .configured_status_line_items()
-            .iter()
-            .any(|item| item == "timing")
-        {
-            return;
-        }
-        if let Some(label) = history_cell::runtime_metrics_label(delta) {
-            self.add_plain_history_lines(vec![
-                vec!["• ".dim(), format!("Timing: {label}").dark_gray()].into(),
-            ]);
-        }
     }
 
     pub(super) fn refresh_runtime_metrics(&mut self) {
@@ -182,38 +163,28 @@ impl ChatWidget {
             }
         }
         self.flush_unified_exec_wait_streak();
-        let runtime_metrics = if !from_replay {
+        if !from_replay {
             self.collect_runtime_metrics_delta();
             if !self.turn_runtime_metrics.is_empty() {
                 self.last_turn_runtime_metrics = Some(self.turn_runtime_metrics);
             }
-            (!self.turn_runtime_metrics.is_empty()).then_some(self.turn_runtime_metrics)
-        } else {
-            None
-        };
+        }
         let show_work_separator = self.transcript.had_work_activity
-            && (self.transcript.needs_final_message_separator || runtime_metrics.is_some());
-        if show_work_separator || runtime_metrics.is_some() {
-            let elapsed_seconds = if show_work_separator {
-                duration_ms
-                    .and_then(|duration_ms| u64::try_from(duration_ms).ok())
-                    .map(|duration_ms| duration_ms / 1_000)
-                    .or_else(|| {
-                        if from_replay {
-                            None
-                        } else {
-                            self.bottom_pane.status_widget().map(
-                                crate::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds,
-                            )
-                        }
-                    })
-            } else {
-                None
-            };
-            self.add_to_history(history_cell::FinalMessageSeparator::new(
-                elapsed_seconds,
-                runtime_metrics,
-            ));
+            && (self.transcript.needs_final_message_separator || !from_replay);
+        if show_work_separator {
+            let elapsed_seconds = duration_ms
+                .and_then(|duration_ms| u64::try_from(duration_ms).ok())
+                .map(|duration_ms| duration_ms / 1_000)
+                .or_else(|| {
+                    if from_replay {
+                        None
+                    } else {
+                        self.bottom_pane.status_widget().map(
+                            crate::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds,
+                        )
+                    }
+                });
+            self.add_to_history(history_cell::FinalMessageSeparator::new(elapsed_seconds));
         }
         if !from_replay {
             self.transcript.needs_final_message_separator = false;

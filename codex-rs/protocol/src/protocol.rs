@@ -2691,7 +2691,32 @@ pub enum RolloutItem {
     ResponseItem(ResponseItem),
     Compacted(CompactedItem),
     TurnContext(TurnContextItem),
+    TurnRuntimeMetrics(TurnRuntimeMetrics),
     EventMsg(EventMsg),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, JsonSchema, TS)]
+pub struct TurnRuntimeMetrics {
+    pub turn_id: String,
+    pub tool_calls: RuntimeMetricTotals,
+    pub api_calls: RuntimeMetricTotals,
+    pub streaming_events: RuntimeMetricTotals,
+    pub websocket_calls: RuntimeMetricTotals,
+    pub websocket_events: RuntimeMetricTotals,
+    pub responses_api_overhead_ms: u64,
+    pub responses_api_inference_time_ms: u64,
+    pub responses_api_engine_iapi_ttft_ms: u64,
+    pub responses_api_engine_service_ttft_ms: u64,
+    pub responses_api_engine_iapi_tbt_ms: u64,
+    pub responses_api_engine_service_tbt_ms: u64,
+    pub turn_ttft_ms: u64,
+    pub turn_ttfm_ms: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, JsonSchema, TS)]
+pub struct RuntimeMetricTotals {
+    pub count: u64,
+    pub duration_ms: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]

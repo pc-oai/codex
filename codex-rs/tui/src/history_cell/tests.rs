@@ -12,8 +12,6 @@ use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::McpAuthStatus;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerDisabledReason;
-use codex_otel::RuntimeMetricTotals;
-use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::parse_command::ParsedCommand;
@@ -479,60 +477,22 @@ fn unified_exec_interaction_cell_renders_wait() {
 }
 
 #[test]
-fn final_message_separator_hides_short_worked_label_and_includes_runtime_metrics() {
-    let summary = RuntimeMetricsSummary {
-        tool_calls: RuntimeMetricTotals {
-            count: 3,
-            duration_ms: 2_450,
-        },
-        api_calls: RuntimeMetricTotals {
-            count: 2,
-            duration_ms: 1_200,
-        },
-        streaming_events: RuntimeMetricTotals {
-            count: 6,
-            duration_ms: 900,
-        },
-        websocket_calls: RuntimeMetricTotals {
-            count: 1,
-            duration_ms: 700,
-        },
-        websocket_events: RuntimeMetricTotals {
-            count: 4,
-            duration_ms: 1_200,
-        },
-        responses_api_overhead_ms: 650,
-        responses_api_inference_time_ms: 1_940,
-        responses_api_engine_iapi_ttft_ms: 410,
-        responses_api_engine_service_ttft_ms: 460,
-        responses_api_engine_iapi_tbt_ms: 1_180,
-        responses_api_engine_service_tbt_ms: 1_240,
-        turn_ttft_ms: 0,
-        turn_ttfm_ms: 0,
-    };
-    let cell = FinalMessageSeparator::new(Some(12), Some(summary));
+fn final_message_separator_hides_short_worked_label() {
+    let cell = FinalMessageSeparator::new(Some(12));
     let rendered = render_lines(&cell.display_lines(/*width*/ 600));
 
     assert_eq!(rendered.len(), 1);
     assert!(!rendered[0].contains("Worked for"));
-    assert!(rendered[0].contains("Local tools: 3 calls (2.5s)"));
-    assert!(rendered[0].contains("Inference: 2 calls (1.2s)"));
-    assert!(rendered[0].contains("WebSocket: 1 events send (700ms)"));
-    assert!(rendered[0].contains("Streams: 6 events (900ms)"));
-    assert!(rendered[0].contains("4 events received (1.2s)"));
-    assert!(rendered[0].contains("Responses API overhead: 650ms"));
-    assert!(rendered[0].contains("Responses API inference: 1.9s"));
-    assert!(rendered[0].contains("TTFT: 410ms (iapi) 460ms (service)"));
-    assert!(rendered[0].contains("TBT: 1.2s (iapi) 1.2s (service)"));
 }
 
 #[test]
 fn final_message_separator_includes_worked_label_after_one_minute() {
-    let cell = FinalMessageSeparator::new(Some(61), /*runtime_metrics*/ None);
-    let rendered = render_lines(&cell.display_lines(/*width*/ 200));
+    let cell = FinalMessageSeparator::new(Some(61));
+    let rendered = render_lines(&cell.display_lines(/*width*/ 40));
 
     assert_eq!(rendered.len(), 1);
     assert!(rendered[0].contains("Worked for"));
+    insta::assert_snapshot!(rendered.join("\n"));
 }
 
 #[test]

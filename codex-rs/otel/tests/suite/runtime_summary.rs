@@ -140,6 +140,8 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
         turn_ttfm_ms: 180,
     };
     assert_eq!(summary, expected);
+    assert_eq!(manager.take_turn_runtime_metrics(), Some(expected));
+    assert_eq!(manager.take_turn_runtime_metrics(), None);
 
     Ok(())
 }
@@ -155,6 +157,8 @@ fn runtime_metrics_summary_works_without_metrics_exporter() -> Result<()> {
         trace_exporter: OtelExporter::None,
         metrics_exporter: OtelExporter::None,
         runtime_metrics: true,
+        span_attributes: Default::default(),
+        tracestate: Default::default(),
     })
     .expect("provider construction should succeed")
     .expect("runtime metrics should create a local provider");

@@ -19,9 +19,10 @@ pub fn is_persisted_rollout_item(item: &RolloutItem, mode: EventPersistenceMode)
         RolloutItem::ResponseItem(item) => should_persist_response_item(item),
         RolloutItem::EventMsg(ev) => should_persist_event_msg(ev, mode),
         // Persist Codex executive markers so we can analyze flows (e.g., compaction, API turns).
-        RolloutItem::Compacted(_) | RolloutItem::TurnContext(_) | RolloutItem::SessionMeta(_) => {
-            true
-        }
+        RolloutItem::Compacted(_)
+        | RolloutItem::TurnContext(_)
+        | RolloutItem::TurnRuntimeMetrics(_)
+        | RolloutItem::SessionMeta(_) => true,
     }
 }
 
@@ -217,5 +218,24 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::CollabWaitingBegin(_)
         | EventMsg::CollabCloseBegin(_)
         | EventMsg::CollabResumeBegin(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::protocol::TurnRuntimeMetrics;
+
+    #[test]
+    fn turn_runtime_metrics_are_persisted_in_limited_rollouts() {
+        let item = RolloutItem::TurnRuntimeMetrics(TurnRuntimeMetrics {
+            turn_id: "turn-1".to_string(),
+            ..Default::default()
+        });
+
+        assert!(is_persisted_rollout_item(
+            &item,
+            EventPersistenceMode::Limited
+        ));
     }
 }

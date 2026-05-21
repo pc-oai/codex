@@ -45,10 +45,12 @@ use codex_otel::TURN_TOOL_CALL_METRIC;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RuntimeMetricTotals;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnRuntimeMetrics;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 
@@ -319,6 +321,7 @@ impl Session {
         let task_kind = task.kind();
         let span_name = task.span_name();
         let started_at = Instant::now();
+        turn_context.session_telemetry.reset_turn_runtime_metrics();
         let turn_started_at_unix_ms = turn_context
             .turn_timing_state
             .mark_turn_started(started_at)
@@ -784,6 +787,15 @@ impl Session {
         {
             warn!("failed to apply goal runtime turn-finished event: {err}");
         }
+        if turn_context.features.enabled(Feature::RuntimeMetrics)
+            && let Some(metrics) = turn_context.session_telemetry.take_turn_runtime_metrics()
+        {
+            self.persist_rollout_items(&[RolloutItem::TurnRuntimeMetrics(turn_runtime_metrics(
+                &turn_context.sub_id,
+                metrics,
+            ))])
+            .await;
+        }
         let event = EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: turn_context.sub_id.clone(),
             last_agent_message,
@@ -889,6 +901,18 @@ impl Session {
             .turn_timing_state
             .completed_at_and_duration_ms()
             .await;
+        if task.turn_context.features.enabled(Feature::RuntimeMetrics)
+            && let Some(metrics) = task
+                .turn_context
+                .session_telemetry
+                .take_turn_runtime_metrics()
+        {
+            self.persist_rollout_items(&[RolloutItem::TurnRuntimeMetrics(turn_runtime_metrics(
+                &task.turn_context.sub_id,
+                metrics,
+            ))])
+            .await;
+        }
         let event = EventMsg::TurnAborted(TurnAbortedEvent {
             turn_id: Some(task.turn_context.sub_id.clone()),
             reason,
@@ -901,6 +925,35 @@ impl Session {
             .lock()
             .await
             .clear_turn(&task.turn_context.sub_id);
+    }
+}
+
+fn turn_runtime_metrics(
+    turn_id: &str,
+    metrics: codex_otel::RuntimeMetricsSummary,
+) -> TurnRuntimeMetrics {
+    TurnRuntimeMetrics {
+        turn_id: turn_id.to_string(),
+        tool_calls: runtime_metric_totals(metrics.tool_calls),
+        api_calls: runtime_metric_totals(metrics.api_calls),
+        streaming_events: runtime_metric_totals(metrics.streaming_events),
+        websocket_calls: runtime_metric_totals(metrics.websocket_calls),
+        websocket_events: runtime_metric_totals(metrics.websocket_events),
+        responses_api_overhead_ms: metrics.responses_api_overhead_ms,
+        responses_api_inference_time_ms: metrics.responses_api_inference_time_ms,
+        responses_api_engine_iapi_ttft_ms: metrics.responses_api_engine_iapi_ttft_ms,
+        responses_api_engine_service_ttft_ms: metrics.responses_api_engine_service_ttft_ms,
+        responses_api_engine_iapi_tbt_ms: metrics.responses_api_engine_iapi_tbt_ms,
+        responses_api_engine_service_tbt_ms: metrics.responses_api_engine_service_tbt_ms,
+        turn_ttft_ms: metrics.turn_ttft_ms,
+        turn_ttfm_ms: metrics.turn_ttfm_ms,
+    }
+}
+
+fn runtime_metric_totals(metrics: codex_otel::RuntimeMetricTotals) -> RuntimeMetricTotals {
+    RuntimeMetricTotals {
+        count: metrics.count,
+        duration_ms: metrics.duration_ms,
     }
 }
 
