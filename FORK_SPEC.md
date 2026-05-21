@@ -400,7 +400,7 @@ High-signal static anchors include:
 | Resume/edit handoff | `reload_handoff.rs`, rollback turn start protocol, draft preservation app tests |
 | Thread retrieval state | `ThreadUserState`, `user_message_count`, state migrations and thread-store fields |
 | Local title helpers | `thread_name_suggestion.rs`, `/retitle`, `/emoji`, live config use |
-| Fast model bootstrap | `local_bootstrap_models`, `models_list_with_request_handle`, `ModelsLoaded` |
+| Fast model bootstrap | `local_bootstrap_models`, `startup_models_list_with_request_handle`, `ModelsLoaded` |
 | Startup header suppression | `clear_ui_header_lines_with_version`, `SessionHeaderHistoryCell` |
 | Footer status split | `set_status_line_right`, `mcp_startup_progress_label`, `local_build_label` |
 | Compact agent switching | `show_agent_menu`, `AgentMenu`, active-agent footer label refresh |
