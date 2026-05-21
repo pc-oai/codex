@@ -26,18 +26,27 @@ an ancestor of current `main` through the merge, but merge resolution and later
 refactors can still drop wiring or leave an old binary running. The paste inline
 limit and the `Alt-C` transcript toggle already demonstrated both failure modes.
 
-A follow-up source scan checked function names introduced by the old fork
-range against current `codex-rs`: every old-range function name still has a
-current source hit. That is a useful loss detector after the moved-file pass,
-but it still does not prove event routing, constructors, key bindings, or live
-terminal behavior. This pass found exactly that kind of drift: the manual
-rename action and its tests survived, but the old fork's default `Alt-R`
-binding had been displaced by the newer raw-output toggle until the default
-keymap was restored. A later data/default audit found the same shape in startup
-chrome: `compact_session_header` still parsed, but no committed startup path
-used it until the compact configuring placeholder was restored. The completion
-pass also refreshed keymap-picker coverage after it still showed the displaced
-`Alt-R` raw-output default instead of the restored manual-rename default.
+A follow-up source scan checked names introduced by the old fork range against
+current `codex-rs`. Old added types are still present or have obvious reshaped
+successors; the only old type names without current hits are the resume picker's
+old `LoadPurpose` and `WarmAllDirectoriesCache`, whose current page loader still
+keeps `PageLoadPurpose::WarmAllDirectories` and the warmed page path. Old
+function names are noisier because refactors split files and renamed helpers:
+high-signal mappings checked here include `select_model_from_command` to the
+Talon command path, `skills_list_with_request_handle` to startup background
+skills refresh, `thread_user_state_set` to thread metadata update, old thread
+switch clear helpers to `clear_terminal_for_thread_switch`, and compact timing
+helpers to `compact_runtime_metrics_label`. Treat that scan as a loss detector
+after the moved-file pass, not proof of event routing, constructors, key
+bindings, or live terminal behavior. This pass found exactly that kind of drift:
+the manual rename action and its tests survived, but the old fork's default
+`Alt-R` binding had been displaced by the newer raw-output toggle until the
+default keymap was restored. A later data/default audit found the same shape in
+startup chrome: `compact_session_header` still parsed, but no committed startup
+path used it until the compact configuring placeholder was restored. The
+completion pass also refreshed keymap-picker coverage after it still showed the
+displaced `Alt-R` raw-output default instead of the restored manual-rename
+default.
 
 The old-range test and snapshot inventory was checked against committed `HEAD`
 after those repairs. Every old-range added test file still has a matching
@@ -113,7 +122,7 @@ multiple behaviors and should be checked by behavior, not by commit subject.
 ## Current comparison
 
 The current fork delta from the upstream side of the merge to current `HEAD`
-touches 315 files with 18,989 insertions and 1,576 deletions. Of the 265 old
+touches 315 files with 18,998 insertions and 1,576 deletions. Of the 265 old
 fork paths checked in the accounting pass, 253 also appear in that current fork
 delta.
 
