@@ -929,6 +929,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_previous_message_edit_mode(&mut self, enabled: bool) {
+        self.composer.set_previous_message_edit_mode(enabled);
+        self.request_redraw();
+    }
+
     #[cfg(test)]
     pub(crate) fn footer_hint_override_items(&self) -> Option<Vec<(String, String)>> {
         self.composer.footer_hint_override_items()

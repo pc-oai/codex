@@ -211,6 +211,7 @@ use crate::render::Insets;
 use crate::render::RectExt;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
+use crate::style::edited_user_message_style;
 use crate::style::user_message_style;
 use codex_protocol::ThreadId;
 use codex_protocol::user_input::ByteRange;
@@ -359,6 +360,7 @@ pub(crate) struct ChatComposer {
     /// Pasted text longer than this is shown as a compact placeholder while the
     /// full text remains available for submission.
     paste_text_inline_char_limit: usize,
+    previous_message_edit_mode: bool,
     /// Slash-command draft staged for local recall after application-level dispatch.
     ///
     /// This slot is intentionally separate from `ChatComposerHistory` so inline slash commands can
@@ -530,6 +532,7 @@ impl ChatComposer {
             placeholder_text,
             is_task_running: false,
             paste_text_inline_char_limit: LARGE_PASTE_CHAR_THRESHOLD,
+            previous_message_edit_mode: false,
             pending_slash_command_history: None,
             #[cfg(not(target_os = "linux"))]
             next_element_id: 0,
@@ -1190,6 +1193,10 @@ impl ChatComposer {
     /// `None` restores the default shortcut footer.
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
         self.footer.hint_override = items;
+    }
+
+    pub(crate) fn set_previous_message_edit_mode(&mut self, enabled: bool) {
+        self.previous_message_edit_mode = enabled;
     }
 
     #[cfg(test)]
@@ -4682,7 +4689,11 @@ impl ChatComposer {
                 }
             }
         }
-        let style = user_message_style();
+        let style = if self.previous_message_edit_mode {
+            edited_user_message_style()
+        } else {
+            user_message_style()
+        };
         Block::default().style(style).render_ref(composer_rect, buf);
         if !remote_images_rect.is_empty() {
             Paragraph::new(self.attachments.remote_image_lines())
@@ -4693,6 +4704,13 @@ impl ChatComposer {
             let prompt = if self.draft.input_enabled {
                 if self.draft.is_bash_mode {
                     Span::from("!").light_red().bold()
+                } else if self.previous_message_edit_mode {
+                    Span::styled(
+                        "✎",
+                        Style::default()
+                            .fg(ratatui::style::Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    )
                 } else {
                     "›".bold()
                 }
@@ -5108,6 +5126,23 @@ mod tests {
     }
 
     #[test]
+    fn footer_mode_edit_last_message_snapshot() {
+        snapshot_composer_state(
+            "footer_mode_edit_last_message",
+            /*enhanced_keys_supported*/ true,
+            |composer| {
+                composer.set_previous_message_edit_mode(/*enabled*/ true);
+                composer.set_text_content("original".to_string(), Vec::new(), Vec::new());
+                composer.set_footer_hint_override(Some(vec![
+                    ("Editing".to_string(), "previous message".to_string()),
+                    ("Enter".to_string(), "submit".to_string()),
+                    ("Esc".to_string(), "cancel".to_string()),
+                ]));
+            },
+        );
+    }
+
+    #[test]
     fn shell_command_cursor_uses_absorbed_prefix() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
@@ -5165,6 +5200,29 @@ mod tests {
             buf[(shell_label_x as u16, footer_y)].style().fg,
             Some(Color::LightRed)
         );
+    }
+
+    #[test]
+    fn previous_message_edit_mode_uses_distinct_composer_accent() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_previous_message_edit_mode(/*enabled*/ true);
+        composer.set_text_content("revise this".to_string(), Vec::new(), Vec::new());
+
+        let area = Rect::new(0, 0, 100, 9);
+        let mut buf = Buffer::empty(area);
+        composer.render(area, &mut buf);
+
+        let prompt_cell = &buf[(0, 1)];
+        assert_eq!(prompt_cell.symbol(), "✎");
+        assert_eq!(prompt_cell.style().fg, Some(Color::Yellow));
     }
 
     #[test]
