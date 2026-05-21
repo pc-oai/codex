@@ -8,6 +8,22 @@ to see that the tree compiles.
 file is the fuller motivation, pre-merge inventory, and post-merge validation
 guide.
 
+## Keyboard shortcuts quick list
+
+Update this list first when the fork's local key bindings change. Keep it short
+and easy to scan.
+
+- `Ctrl-R`: reload the current session in a fresh process.
+- `Ctrl-X`: clear the composer or discard the relevant queued draft.
+- `Ctrl-E`: open edit-last-message when the composer cursor is already at line
+  end.
+- `Alt-E`: open queued-message edit.
+- `Ctrl-A`: open the compact agent menu when line-start movement has no more
+  work to do.
+- `Alt-[`: switch to the previous agent thread.
+- `Alt-]`: switch to the next agent thread.
+- `Alt-\`: open the subagent command draft from an empty composer.
+
 ## Feature summary
 
 - Sessions: richer resume/fork lookup, retrieval cues in pickers, saved cwd and
