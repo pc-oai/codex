@@ -40,7 +40,8 @@ Dev:
 
 Composer:
 - clear composer / discard queued draft (`Ctrl-X`)
-- edit-last (`Ctrl-E`; stash current draft; repeat to walk backwards)
+- edit-last (`Ctrl-E`; stash current draft; repeat to walk backwards; make the
+  input box visibly yellow with a pencil icon while editing)
 - queued follow-up edit (revise the next waiting message)
 - queued follow-up steer / discard (send the latest one as an immediate steer, or drop it)
 - configurable inline paste threshold (inline text vs placeholder)
@@ -192,7 +193,10 @@ properties, treat that as a fork regression even if the merged tree compiles.
   `Ctrl-T` filters to custom-titled sessions.
 - Picker rows carry fast retrieval cues: a user-message count, compact cwd
   labels with disambiguation when basenames collide, a short session-id suffix,
-  and an open/closed signal when that state is known.
+  an open/closed signal when that state is known, and readable relative times
+  with words such as `35 minutes ago` instead of compact unit suffixes. Dense
+  picker rows keep their retrieval cues in separate columns and call out open
+  sessions with a live indicator instead of repeating the normal closed state.
 - All-directory lookup stays one keypress away with picker `Ctrl-A`, which
   toggles between the current cwd and all directories without first focusing the
   toolbar. That query stays warmed so common picker toggles do not feel like a
