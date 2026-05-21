@@ -3526,6 +3526,20 @@ mod tests {
     }
 
     #[test]
+    fn runtime_toggles_generate_loader_overrides_for_config_files() {
+        let config_file = PathBuf::from("/tmp/local-codex-config.toml");
+        let toggles = RuntimeToggles {
+            config_files: vec![config_file.clone()],
+            ..RuntimeToggles::default()
+        };
+
+        assert_eq!(
+            toggles.to_loader_overrides().session_config_files,
+            vec![config_file]
+        );
+    }
+
+    #[test]
     fn strict_config_with_unknown_enable_errors() {
         let err = strict_config_feature_toggle_error(["--enable", "does_not_exist"].as_ref());
         assert_eq!(err.to_string(), "Unknown feature flag: does_not_exist");
