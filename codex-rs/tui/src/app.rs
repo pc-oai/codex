@@ -1048,6 +1048,17 @@ See the Codex keymap documentation for supported actions and examples."
         if let Some(entry) = startup_hooks_browser {
             app.chat_widget.open_hooks_browser(entry);
         }
+        if app_server.uses_embedded_app_server() {
+            let request_handle = app_server.request_handle();
+            let app_event_tx = app.app_event_tx.clone();
+            tokio::spawn(async move {
+                let result =
+                    AppServerSession::startup_models_list_with_request_handle(request_handle)
+                        .await
+                        .map_err(|err| err.to_string());
+                app_event_tx.send(AppEvent::ModelsLoaded { result });
+            });
+        }
         if spawn_initial_thread {
             let request_handle = app_server.request_handle();
             let config = app.config.clone();

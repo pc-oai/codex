@@ -593,6 +593,11 @@ pub(crate) enum AppEvent {
         result: Result<AppServerStartedThread, String>,
     },
 
+    /// Result of the deferred full model catalog refresh during local startup.
+    ModelsLoaded {
+        result: Result<Vec<ModelPreset>, String>,
+    },
+
     /// Result of the startup skills refresh that runs after the first frame is scheduled.
     ///
     /// This event is startup-only. Interactive skills refreshes are handled synchronously through the app

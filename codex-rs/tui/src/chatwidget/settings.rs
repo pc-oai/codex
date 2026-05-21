@@ -188,6 +188,11 @@ impl ChatWidget {
         self.model_catalog.clone()
     }
 
+    pub(crate) fn replace_model_catalog(&mut self, models: Vec<ModelPreset>) {
+        self.model_catalog.replace_models(models);
+        self.refresh_model_dependent_surfaces();
+    }
+
     pub(crate) fn current_plan_type(&self) -> Option<PlanType> {
         self.plan_type
     }

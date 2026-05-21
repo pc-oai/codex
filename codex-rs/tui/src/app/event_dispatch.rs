@@ -742,6 +742,14 @@ impl App {
                     ));
                 }
             },
+            AppEvent::ModelsLoaded { result } => match result {
+                Ok(models) => {
+                    self.chat_widget.replace_model_catalog(models);
+                }
+                Err(err) => {
+                    tracing::warn!("failed to refresh model catalog after startup: {err}");
+                }
+            },
             AppEvent::SkillsListLoaded { result } => {
                 self.handle_skills_list_result(
                     result.map_err(|err| color_eyre::eyre::eyre!(err)),

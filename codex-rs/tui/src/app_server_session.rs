@@ -107,6 +107,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInput;
+use codex_models_manager::bundled_models_response;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentEvent;
@@ -221,40 +222,12 @@ impl AppServerSession {
         matches!(self.thread_params_mode, ThreadParamsMode::Remote)
     }
 
+    pub(crate) fn uses_embedded_app_server(&self) -> bool {
+        matches!(self.client, AppServerClient::InProcess(_))
+    }
+
     pub(crate) async fn bootstrap(&mut self, config: &Config) -> Result<AppServerBootstrap> {
         let account = self.read_account().await?;
-        let model_request_id = self.next_request_id();
-        let models: ModelListResponse = self
-            .client
-            .request_typed(ClientRequest::ModelList {
-                request_id: model_request_id,
-                params: ModelListParams {
-                    cursor: None,
-                    limit: None,
-                    include_hidden: Some(true),
-                },
-            })
-            .await
-            .map_err(|err| {
-                bootstrap_request_error("model/list failed during TUI bootstrap", err)
-            })?;
-        let available_models = models
-            .data
-            .into_iter()
-            .map(model_preset_from_api_model)
-            .collect::<Vec<_>>();
-        let default_model = config
-            .model
-            .clone()
-            .or_else(|| {
-                available_models
-                    .iter()
-                    .find(|model| model.is_default)
-                    .map(|model| model.model.clone())
-            })
-            .or_else(|| available_models.first().map(|model| model.model.clone()))
-            .wrap_err("model/list returned no models for TUI bootstrap")?;
-
         let (
             account_email,
             auth_mode,
@@ -294,6 +267,43 @@ impl AppServerSession {
             }
             None => (None, None, None, None, FeedbackAudience::External, false),
         };
+        let available_models = if self.uses_embedded_app_server() {
+            local_bootstrap_models(config, has_chatgpt_account)
+                .wrap_err("failed to load local bundled models during TUI bootstrap")?
+        } else {
+            let model_request_id = self.next_request_id();
+            let models: ModelListResponse = self
+                .client
+                .request_typed(ClientRequest::ModelList {
+                    request_id: model_request_id,
+                    params: ModelListParams {
+                        cursor: None,
+                        limit: None,
+                        include_hidden: Some(true),
+                        ..Default::default()
+                    },
+                })
+                .await
+                .map_err(|err| {
+                    bootstrap_request_error("model/list failed during TUI bootstrap", err)
+                })?;
+            models
+                .data
+                .into_iter()
+                .map(model_preset_from_api_model)
+                .collect::<Vec<_>>()
+        };
+        let default_model = config
+            .model
+            .clone()
+            .or_else(|| {
+                available_models
+                    .iter()
+                    .find(|model| model.is_default)
+                    .map(|model| model.model.clone())
+            })
+            .or_else(|| available_models.first().map(|model| model.model.clone()))
+            .wrap_err("model/list returned no models for TUI bootstrap")?;
         Ok(AppServerBootstrap {
             account_email,
             auth_mode,
@@ -1118,6 +1128,28 @@ impl AppServerSession {
         started_thread_from_start_response(response, &config, thread_params_mode).await
     }
 
+    pub(crate) async fn startup_models_list_with_request_handle(
+        request_handle: AppServerRequestHandle,
+    ) -> Result<Vec<ModelPreset>> {
+        let response: ModelListResponse = request_handle
+            .request_typed(ClientRequest::ModelList {
+                request_id: next_background_request_id(),
+                params: ModelListParams {
+                    cursor: None,
+                    limit: None,
+                    include_hidden: Some(true),
+                    ..Default::default()
+                },
+            })
+            .await
+            .wrap_err("model/list failed during TUI startup refresh")?;
+        Ok(response
+            .data
+            .into_iter()
+            .map(model_preset_from_api_model)
+            .collect())
+    }
+
     pub(crate) async fn resume_thread_with_request_handle(
         request_handle: AppServerRequestHandle,
         config: Config,
@@ -1244,6 +1276,18 @@ fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
         supported_in_api: true,
         input_modalities: model.input_modalities,
     }
+}
+
+fn local_bootstrap_models(config: &Config, has_chatgpt_account: bool) -> Result<Vec<ModelPreset>> {
+    let response = config
+        .model_catalog
+        .clone()
+        .or_else(|| bundled_models_response().ok())
+        .wrap_err("no bundled model catalog available")?;
+    let mut presets: Vec<ModelPreset> = response.models.into_iter().map(Into::into).collect();
+    presets = ModelPreset::filter_by_auth(presets, has_chatgpt_account);
+    ModelPreset::mark_default_by_picker_visibility(&mut presets);
+    Ok(presets)
 }
 
 fn next_background_request_id() -> RequestId {
@@ -1836,6 +1880,18 @@ mod tests {
             .build()
             .await
             .expect("config should build")
+    }
+
+    #[tokio::test]
+    async fn local_bootstrap_models_loads_bundled_catalog_with_default() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let config = build_config(&temp_dir).await;
+
+        let models = local_bootstrap_models(&config, /*has_chatgpt_account*/ true)
+            .expect("bundled models should load");
+
+        assert!(!models.is_empty());
+        assert!(models.iter().any(|model| model.is_default));
     }
 
     fn rate_limit_snapshot(limit_id: &str) -> RateLimitSnapshot {
