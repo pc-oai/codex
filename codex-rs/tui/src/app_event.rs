@@ -588,6 +588,11 @@ pub(crate) enum AppEvent {
         detail: McpServerStatusDetail,
     },
 
+    /// Result of the initial background thread start during fresh TUI startup.
+    InitialThreadStarted {
+        result: Result<AppServerStartedThread, String>,
+    },
+
     /// Result of the startup skills refresh that runs after the first frame is scheduled.
     ///
     /// This event is startup-only. Interactive skills refreshes are handled synchronously through the app

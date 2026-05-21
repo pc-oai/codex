@@ -353,6 +353,7 @@ impl AppServerSession {
         self.client.next_event().await
     }
 
+    #[cfg(test)]
     pub(crate) async fn start_thread(&mut self, config: &Config) -> Result<AppServerStartedThread> {
         self.start_thread_with_session_start_source(config, /*session_start_source*/ None)
             .await
@@ -1093,6 +1094,28 @@ impl AppServerSession {
 
     pub(crate) fn request_handle(&self) -> AppServerRequestHandle {
         self.client.request_handle()
+    }
+
+    pub(crate) async fn start_thread_with_request_handle(
+        request_handle: AppServerRequestHandle,
+        config: Config,
+        thread_params_mode: ThreadParamsMode,
+        remote_cwd_override: Option<PathBuf>,
+        session_start_source: Option<ThreadStartSource>,
+    ) -> Result<AppServerStartedThread> {
+        let response: ThreadStartResponse = request_handle
+            .request_typed(ClientRequest::ThreadStart {
+                request_id: next_background_request_id(),
+                params: thread_start_params_from_config(
+                    &config,
+                    thread_params_mode,
+                    remote_cwd_override.as_deref(),
+                    session_start_source,
+                ),
+            })
+            .await
+            .wrap_err("thread/start failed during TUI bootstrap")?;
+        started_thread_from_start_response(response, &config, thread_params_mode).await
     }
 
     pub(crate) async fn resume_thread_with_request_handle(

@@ -818,6 +818,9 @@ impl App {
                 &initial_images,
             );
         let reload_model_override = take_reload_model_override(&session_selection);
+        let startup_tooltip_override =
+            prepare_startup_tooltip_override(&mut config, &available_models, is_first_run).await;
+        let mut spawn_initial_thread = false;
         let resumed_reload_tree = match &session_selection {
             SessionSelection::Resume(target_session) => {
                 match crate::reload_handoff::take_tree(
@@ -861,11 +864,7 @@ impl App {
         let thread_and_widget_started_at = Instant::now();
         let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
-                let started = app_server.start_thread(&config).await?;
-                // Only count a startup tooltip once the fresh thread can actually render it.
-                let startup_tooltip_override =
-                    prepare_startup_tooltip_override(&mut config, &available_models, is_first_run)
-                        .await;
+                spawn_initial_thread = true;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -886,13 +885,13 @@ impl App {
                     runtime_model_provider_base_url: runtime_model_provider_base_url.clone(),
                     initial_plan_type,
                     model: Some(model.clone()),
-                    startup_tooltip_override,
+                    startup_tooltip_override: startup_tooltip_override.clone(),
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     terminal_title_invalid_items_warned: terminal_title_invalid_items_warned
                         .clone(),
                     session_telemetry: session_telemetry.clone(),
                 };
-                (ChatWidget::new_with_app_event(init), Some(started))
+                (ChatWidget::new_with_app_event(init), None)
             }
             SessionSelection::Resume(target_session) => {
                 let resumed = app_server
@@ -1048,6 +1047,31 @@ See the Codex keymap documentation for supported actions and examples."
         };
         if let Some(entry) = startup_hooks_browser {
             app.chat_widget.open_hooks_browser(entry);
+        }
+        if spawn_initial_thread {
+            let request_handle = app_server.request_handle();
+            let config = app.config.clone();
+            let thread_params_mode = if app_server.uses_remote_workspace() {
+                crate::app_server_session::ThreadParamsMode::Remote
+            } else {
+                crate::app_server_session::ThreadParamsMode::Embedded
+            };
+            let remote_cwd_override = app_server
+                .remote_cwd_override()
+                .map(std::path::Path::to_path_buf);
+            let app_event_tx = app.app_event_tx.clone();
+            tokio::spawn(async move {
+                let result = AppServerSession::start_thread_with_request_handle(
+                    request_handle,
+                    config,
+                    thread_params_mode,
+                    remote_cwd_override,
+                    /*session_start_source*/ None,
+                )
+                .await
+                .map_err(|err| err.to_string());
+                app_event_tx.send(AppEvent::InitialThreadStarted { result });
+            });
         }
         let initial_session_started_at = Instant::now();
         if let Some(started) = initial_started_thread {

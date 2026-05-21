@@ -156,11 +156,14 @@ wiring, key routing, snapshot shape, or the binary Phil is running.
 
 ### Compound commit decomposition
 
-Commits `615a82f60acc` and `820635042674` are too broad to audit by subject
-line. The first feature-level pass split them this way:
+Commits `74038d1d3688`, `b37de3f14760`, `615a82f60acc`, and
+`820635042674` are too broad to audit by subject line. The first feature-level
+pass split them this way:
 
 | Old commit | Behavior groups checked | Current evidence |
 | --- | --- | --- |
+| `74038d1d3688` saved WIP before rebase | Compact timing config/output and first-paint startup work that creates a fresh widget before the initial `thread/start` RPC and startup skills refresh finish | `TuiTiming` separators/status coverage, background startup skills wiring, async `InitialThreadStarted` handoff, and the startup waiting-gate tests |
+| `b37de3f14760` rebase fallout/startup repair | Kept the async initial thread start while moving the oversized app event dispatcher back into split modules; removed the temporary broad Talon poller that later returned through dedicated Talon commits | `app/event_dispatch.rs` event routing, `start_thread_with_request_handle`, and the later May/current Talon socket contract below |
 | `615a82f60acc` session workflows | TUI runtime toggles (`--private`, `--config-file`, no MCP, no project docs), thread delete and persisted message-count retrieval metadata, saved-cwd resume/reload/fork flow, `/delete` `/reload` `/id` copy/title helpers, compact status/history chrome, and title suggestion workers | CLI runtime toggle tests, app-server thread-delete tests, thread metadata/store tests, `session_resume` cwd tests, slash/title suggestion tests, status/footer snapshots, and the current session/picker rows below |
 | `820635042674` context and composer controls | Unsafe context-window override, compact context-used status variants, rename/retitle and queue edit/discard/steer keymap actions, queued hint binding refresh, edit-last composer accent, and the reverse-history remap away from reload/agent chords | model override tests, status surface tests, keymap action/default/conflict tests, queued-message tests and snapshots, edit-last accent snapshot/tests, and the `Ctrl-R`/`Ctrl-S` reservation now stated in `FORK_SPEC.md` |
 
@@ -184,7 +187,7 @@ merge.
 | Saved cwd, fork boundary, resume replay | saved-session cwd resolution, fork truncation, saved exec replay, reload handoff | thread fork tests for last-completed-turn behavior, `replayed_completed_exec_turn_rehydrates_tool_output`, reload handoff tests, app draft replay tests, and a source-build `Ctrl-R` smoke that restored a non-empty draft after re-exec |
 | Rollback edit flow | rollback turn start payloads and `ThreadRolledBackNotification` routing | core rollback reconstruction tests plus app edit-last rollback tests |
 | Config and local CLI controls | `model_context_window_allow_unsafe_override`, `paste_text_inline_char_limit`, CLI `--private`, no-MCP/no-project-docs/config-file loader overrides | config/model tests, paste constructor coverage, CLI private flag coverage, and `constructor_applies_paste_text_inline_char_limit` |
-| Transcript and startup chrome | `ToggleCondensedTranscriptView`, suppressed startup header history, right-side footer/MCP status | condensed reflow and restored scrollback tests, clear-header snapshots, status/footer snapshots, and the `Alt-C` terminal smoke already done for archived local build `v64` |
+| Transcript and startup chrome | `ToggleCondensedTranscriptView`, async fresh `InitialThreadStarted` startup handoff, startup skills refresh, suppressed startup header history, right-side footer/MCP status | startup waiting-gate tests, `enqueue_primary_thread_session_replays_turns_before_initial_prompt_submit`, source TUI `v79` first-paint smoke showing `codex | Ready` before the fresh thread title gained suffix `…8fbcf5c9`, condensed reflow and restored scrollback tests, clear-header snapshots, status/footer snapshots, and the `Alt-C` terminal smoke already done for archived local build `v64` |
 | Agent navigation and tree restore | agent menu/prewarm, `Ctrl-S`, `Alt-[`, and `Alt-]` routing, resume subagent tree, reload tree handoff | agent prewarm tests, active-agent footer tests, `agent_shortcut_matches_explicit_rotation_bindings`, keymap fixed-shortcut conflict tests, `thread_resume_params_forward_tree_restore_flag`, `reload_exit_thread_id_prefers_primary_thread_for_tree_handoff`, subagent tree resume coverage, source TUI `v78` `Alt-\` plus `Ctrl-S` smoke that switched an idle spawned child back to main, and local build `v74` selected-child reload smoke with the restored child draft confirmed through its Talon socket |
 | Talon per-session control | `start_socket_acceptor`, delayed startup retry in `App::run`, `talon_ambient_state`, status-row summary bridge | Talon socket unit tests and a live source-build `command.sock` smoke on `v65`: `get_state`, `set_buffer`, and socket-triggered exit all returned responses |
 | Runtime/build visibility | `scripts/local-build-codex`, local build footer label, Ghostty OSC progress path, runtime metrics surfaces | local build snapshots, terminal progress unit tests, runtime metrics tests, full TUI snapshots, live source-build progress start/clear OSC bytes, and local build `v74` Ghostty captures showing the native top-surface progress bar during a real `sleep 60` turn and no bar after completion |
@@ -214,8 +217,8 @@ patch shape.
 
 Use this order for the missing-functionality hunt:
 
-1. Reuse the compound-commit decomposition above when session
-   lookup/delete/state, title flows, startup/footer chrome, keymap, context, or
+1. Reuse the compound-commit decomposition above when startup first paint,
+   session lookup/delete/state, title flows, footer chrome, keymap, context, or
    composer controls change again.
 2. Keep rerunning live TUI checks when later repairs touch the behavior:
    current checks cover the Talon socket round trip, short selector

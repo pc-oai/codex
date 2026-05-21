@@ -318,6 +318,10 @@ properties, treat that as a fork regression even if the merged tree compiles.
 - Local CLI/runtime overrides remain available for dogfooding wrappers,
   including config-file selection, no-MCP, no-project-docs, private mode, and
   loader override propagation into the standalone exec binary.
+- Fresh local TUI startup can paint the composer before the first
+  app-server `thread/start` result and startup skills refresh arrive. Initial
+  thread events stay gated until that thread is configured so early input is
+  accepted without racing replay or turn state.
 - Fresh local TUI startup uses bundled model data for the first in-process
   render instead of waiting on `model/list`. It refreshes models from the app
   server in the background and updates model-dependent UI after that result
