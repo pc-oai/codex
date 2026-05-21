@@ -805,6 +805,46 @@ impl App {
                 &initial_images,
             );
         let reload_model_override = take_reload_model_override(&session_selection);
+        let resumed_reload_tree = match &session_selection {
+            SessionSelection::Resume(target_session) => {
+                match crate::reload_handoff::take_tree(
+                    config.codex_home.as_path(),
+                    target_session.thread_id,
+                ) {
+                    Ok(handoff) => handoff,
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            thread_id = %target_session.thread_id,
+                            "failed to restore reload tree handoff for resumed session"
+                        );
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+        let has_reload_tree_handoff = resumed_reload_tree.is_some();
+        let should_resume_subagent_tree = matches!(&session_selection, SessionSelection::Resume(_));
+        let resumed_draft = match &session_selection {
+            SessionSelection::Resume(target_session) if !has_reload_tree_handoff => {
+                match crate::reload_handoff::take_for_resume(
+                    config.codex_home.as_path(),
+                    target_session.thread_id,
+                ) {
+                    Ok(draft) => draft,
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            thread_id = %target_session.thread_id,
+                            "failed to restore composer draft for resumed session"
+                        );
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
         let thread_and_widget_started_at = Instant::now();
         let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
@@ -843,7 +883,11 @@ impl App {
             }
             SessionSelection::Resume(target_session) => {
                 let resumed = app_server
-                    .resume_thread(config.clone(), target_session.thread_id)
+                    .resume_thread_with_tree_restore(
+                        config.clone(),
+                        target_session.thread_id,
+                        should_resume_subagent_tree,
+                    )
                     .await
                     .wrap_err_with(|| {
                         let target_label = target_session.display_label();
@@ -997,6 +1041,9 @@ See the Codex keymap documentation for supported actions and examples."
             let thread_id = started.session.thread_id;
             app.enqueue_primary_thread_session(started.session, started.turns)
                 .await?;
+            if should_resume_subagent_tree {
+                app.backfill_loaded_subagent_threads(&mut app_server).await;
+            }
             if let Some(reload_model_override) = reload_model_override
                 .as_deref()
                 .filter(|model| app.chat_widget.current_model() != *model)
@@ -1007,6 +1054,24 @@ See the Codex keymap documentation for supported actions and examples."
                 app.maybe_prompt_resume_paused_goal_after_resume(&mut app_server, thread_id)
                     .await;
             }
+        }
+        if let Some(handoff) = resumed_reload_tree {
+            if handoff.selected_thread_id != handoff.root_thread_id {
+                let _ = app
+                    .select_agent_thread_and_discard_side(
+                        tui,
+                        &mut app_server,
+                        handoff.selected_thread_id,
+                    )
+                    .await;
+            }
+            if app.chat_widget.thread_id() == Some(handoff.selected_thread_id)
+                && let Some(draft) = handoff.selected_draft
+            {
+                app.chat_widget.restore_reload_draft(draft);
+            }
+        } else if let Some(draft) = resumed_draft {
+            app.chat_widget.restore_reload_draft(draft);
         }
         let initial_session_ms = initial_session_started_at.elapsed().as_millis();
 

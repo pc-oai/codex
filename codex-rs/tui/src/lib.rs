@@ -1882,7 +1882,7 @@ async fn run_ratatui_app(
             StartupHooksReviewOutcome::OpenHooksBrowser(data) => Some(data),
         };
 
-    let app_result = App::run(
+    let app_result = Box::pin(App::run(
         &mut tui,
         app_server,
         config,
@@ -1901,7 +1901,7 @@ async fn run_ratatui_app(
         state_db,
         environment_manager,
         startup_hooks_browser,
-    )
+    ))
     .await;
 
     terminal_restore_guard.restore_silently();
