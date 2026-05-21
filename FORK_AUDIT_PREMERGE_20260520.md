@@ -192,7 +192,7 @@ merge.
 | Talon per-session control | `start_socket_acceptor`, delayed startup retry in `App::run`, `talon_ambient_state`, status-row summary bridge | Talon socket unit tests and a live source-build `command.sock` smoke on `v65`: `get_state`, `set_buffer`, and socket-triggered exit all returned responses |
 | Runtime/build visibility | `scripts/local-build-codex`, local build footer label, Ghostty OSC progress path, runtime metrics surfaces | local build snapshots, terminal progress unit tests, runtime metrics tests, full TUI snapshots, live source-build progress start/clear OSC bytes, and local build `v74` Ghostty captures showing the native top-surface progress bar during a real `sleep 60` turn and no bar after completion |
 | State compatibility | remapped old local applied migrations before current state migrator | `remaps_conflicting_local_migrations_before_current_state_migrations` and state runtime migration coverage |
-| Local experiments/runtime propagation | transcript outline/tree binaries and standalone exec loader override propagation | transcript binary code anchors, `runtime_toggles_generate_loader_overrides_for_config_files`, `cargo test -p codex-exec`, and current CLI/exec loader override callsites |
+| Local experiments/runtime propagation | transcript outline/tree binaries and standalone exec loader override propagation | transcript binary code anchors plus `transcript-outline --help` and `transcript-tree --help` terminal checks, `runtime_toggles_generate_loader_overrides_for_config_files`, `cargo test -p codex-exec`, and current CLI/exec loader override callsites |
 
 ### Current checkout
 
