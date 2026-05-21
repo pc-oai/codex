@@ -35,7 +35,9 @@ rename action and its tests survived, but the old fork's default `Alt-R`
 binding had been displaced by the newer raw-output toggle until the default
 keymap was restored. A later data/default audit found the same shape in startup
 chrome: `compact_session_header` still parsed, but no committed startup path
-used it until the compact configuring placeholder was restored.
+used it until the compact configuring placeholder was restored. The completion
+pass also refreshed keymap-picker coverage after it still showed the displaced
+`Alt-R` raw-output default instead of the restored manual-rename default.
 
 The old-range test and snapshot inventory was checked against committed `HEAD`
 after those repairs. Every old-range added test file still has a matching
@@ -111,7 +113,7 @@ multiple behaviors and should be checked by behavior, not by commit subject.
 ## Current comparison
 
 The current fork delta from the upstream side of the merge to current `HEAD`
-touches 312 files with 17,863 insertions and 1,497 deletions. Of the 265 old
+touches 315 files with 18,984 insertions and 1,576 deletions. Of the 265 old
 fork paths checked in the accounting pass, 253 also appear in that current fork
 delta.
 
