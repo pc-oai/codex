@@ -2,5 +2,5 @@
 source: tui/src/resume_picker.rs
 expression: terminal.backend().to_string()
 ---
-  15m ago     First dense row
-❯ 15m ago     Second dense row
+  15m ago     …7f51f62c 0 msgs closed First dense row
+❯ 15m ago     …7f51f62c 0 msgs closed Second dense row

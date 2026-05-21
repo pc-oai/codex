@@ -94,6 +94,7 @@ use crossterm::event::KeyModifiers;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use ratatui::prelude::Line;
+use serial_test::serial;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -3834,10 +3835,38 @@ async fn discard_side_thread_removes_agent_navigation_entry() -> Result<()> {
         let mut app = make_test_app().await;
         let mut app_server =
             crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+        let main_thread_id = ThreadId::new();
+        let working_agent_id = ThreadId::new();
         let mut side_config = app.chat_widget.config_ref().clone();
         side_config.ephemeral = true;
         let started = app_server.start_thread(&side_config).await?;
         let side_thread_id = started.session.thread_id;
+        app.primary_thread_id = Some(main_thread_id);
+        app.active_thread_id = Some(main_thread_id);
+        app.agent_navigation.upsert(
+            main_thread_id,
+            /*agent_nickname*/ None,
+            /*agent_role*/ None,
+            /*is_closed*/ false,
+        );
+        app.agent_navigation.upsert(
+            working_agent_id,
+            Some("Scout".to_string()),
+            Some("worker".to_string()),
+            /*is_closed*/ false,
+        );
+        app.thread_event_channels.insert(
+            working_agent_id,
+            ThreadEventChannel::new_with_session(
+                THREAD_EVENT_CHANNEL_CAPACITY,
+                test_thread_session(working_agent_id, test_path_buf("/tmp/working-agent")),
+                vec![test_turn(
+                    "turn-working",
+                    TurnStatus::InProgress,
+                    Vec::new(),
+                )],
+            ),
+        );
         app.side_threads
             .insert(side_thread_id, SideThreadState::new(ThreadId::new()));
         app.agent_navigation.upsert(
@@ -3854,6 +3883,10 @@ async fn discard_side_thread_removes_agent_navigation_entry() -> Result<()> {
 
         assert_eq!(app.agent_navigation.get(&side_thread_id), None);
         assert!(!app.side_threads.contains_key(&side_thread_id));
+        assert_eq!(
+            app.chat_widget.active_agent_label(),
+            Some("Main [default] · 1/2 · ⚙1")
+        );
         Ok(())
     })
     .await
@@ -5219,6 +5252,44 @@ async fn latest_user_request_text_returns_last_visible_user_message() {
 }
 
 #[tokio::test]
+async fn talon_ambient_state_tracks_visible_session_and_recent_requests() {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    app.chat_widget.handle_thread_session(test_thread_session(
+        thread_id,
+        test_path_buf("/tmp/project"),
+    ));
+    app.transcript_cells = vec![
+        Arc::new(UserHistoryCell {
+            message: "first request".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>,
+        Arc::new(UserHistoryCell {
+            message: "latest request".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>,
+    ];
+
+    let state = app.talon_ambient_state();
+    let expected_session_id = thread_id.to_string();
+
+    assert_eq!(state.version, 1);
+    assert_eq!(
+        state.session_id.as_deref(),
+        Some(expected_session_id.as_str())
+    );
+    assert_eq!(state.last_user_request.as_deref(), Some("latest request"));
+    assert_eq!(
+        state.recent_user_requests,
+        vec!["latest request".to_string(), "first request".to_string()]
+    );
+}
+
+#[tokio::test]
 async fn recent_user_request_texts_returns_newest_visible_messages_first() {
     let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
     app.transcript_cells = vec![
@@ -6353,5 +6424,66 @@ async fn side_backtrack_rejection_reports_unavailable_message_snapshot() {
     assert_app_snapshot!(
         "side_backtrack_rejection_reports_unavailable_message",
         rendered
+    );
+}
+
+struct ReloadModelEnvGuard {
+    previous: Option<String>,
+}
+
+impl ReloadModelEnvGuard {
+    fn new(value: &str) -> Self {
+        let previous = std::env::var(RELOAD_MODEL_ENV_VAR).ok();
+        unsafe {
+            std::env::set_var(RELOAD_MODEL_ENV_VAR, value);
+        }
+        Self { previous }
+    }
+}
+
+impl Drop for ReloadModelEnvGuard {
+    fn drop(&mut self) {
+        match self.previous.take() {
+            Some(previous) => unsafe {
+                std::env::set_var(RELOAD_MODEL_ENV_VAR, previous);
+            },
+            None => unsafe {
+                std::env::remove_var(RELOAD_MODEL_ENV_VAR);
+            },
+        }
+    }
+}
+
+#[test]
+#[serial]
+fn reload_model_handoff_is_consumed_only_for_resume() {
+    let _guard = ReloadModelEnvGuard::new("gpt-reload-test");
+    let resume = SessionSelection::Resume(crate::resume_picker::SessionTarget {
+        path: Some(PathBuf::from("/tmp/reload")),
+        thread_id: ThreadId::new(),
+    });
+
+    assert_eq!(
+        take_reload_model_override(&resume),
+        Some("gpt-reload-test".to_string())
+    );
+    assert_eq!(
+        std::env::var(RELOAD_MODEL_ENV_VAR),
+        Err(std::env::VarError::NotPresent)
+    );
+}
+
+#[test]
+#[serial]
+fn reload_model_handoff_is_left_alone_for_non_resume_startup() {
+    let _guard = ReloadModelEnvGuard::new("gpt-reload-test");
+
+    assert_eq!(
+        take_reload_model_override(&SessionSelection::StartFresh),
+        None
+    );
+    assert_eq!(
+        std::env::var(RELOAD_MODEL_ENV_VAR),
+        Ok("gpt-reload-test".to_string())
     );
 }

@@ -204,6 +204,7 @@ mod session_lifecycle;
 mod side;
 mod startup_prompts;
 mod subagent;
+mod talon_control;
 mod thread_events;
 mod thread_goal_actions;
 mod thread_name_suggestion;
@@ -368,12 +369,14 @@ fn managed_filesystem_sandbox_is_restricted(permission_profile: &PermissionProfi
 /// Smooth-mode streaming drains one line per tick, so this interval controls
 /// perceived typing speed for non-backlogged output.
 const COMMIT_ANIMATION_TICK: Duration = tui::TARGET_FRAME_INTERVAL;
+const RELOAD_MODEL_ENV_VAR: &str = "CODEX_RELOAD_MODEL";
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub thread_id: Option<ThreadId>,
     pub thread_name: Option<String>,
+    pub model: Option<String>,
     pub update_action: Option<UpdateAction>,
     pub exit_reason: ExitReason,
 }
@@ -384,10 +387,29 @@ impl AppExitInfo {
             token_usage: TokenUsage::default(),
             thread_id: None,
             thread_name: None,
+            model: None,
             update_action: None,
             exit_reason: ExitReason::Fatal(message.into()),
         }
     }
+}
+
+fn take_reload_model_override(session_selection: &SessionSelection) -> Option<String> {
+    if !matches!(session_selection, SessionSelection::Resume(_)) {
+        return None;
+    }
+
+    let model = std::env::var(RELOAD_MODEL_ENV_VAR)
+        .ok()
+        .filter(|model| !model.trim().is_empty());
+    if model.is_some() {
+        // SAFETY: TUI startup reads and clears this one-shot reload handoff before
+        // spawning background work that should inherit the process environment.
+        unsafe {
+            std::env::remove_var(RELOAD_MODEL_ENV_VAR);
+        }
+    }
+    model
 }
 
 #[derive(Debug)]
@@ -703,6 +725,7 @@ impl App {
                     token_usage: TokenUsage::default(),
                     thread_id: None,
                     thread_name: None,
+                    model: None,
                     update_action: None,
                     exit_reason: ExitReason::UserRequested,
                 });
@@ -781,6 +804,7 @@ impl App {
                 &initial_prompt,
                 &initial_images,
             );
+        let reload_model_override = take_reload_model_override(&session_selection);
         let thread_and_widget_started_at = Instant::now();
         let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
@@ -973,12 +997,39 @@ See the Codex keymap documentation for supported actions and examples."
             let thread_id = started.session.thread_id;
             app.enqueue_primary_thread_session(started.session, started.turns)
                 .await?;
+            if let Some(reload_model_override) = reload_model_override
+                .as_deref()
+                .filter(|model| app.chat_widget.current_model() != *model)
+            {
+                app.chat_widget.set_model(reload_model_override);
+            }
             if should_prompt_for_paused_goal_after_startup_resume {
                 app.maybe_prompt_resume_paused_goal_after_resume(&mut app_server, thread_id)
                     .await;
             }
         }
         let initial_session_ms = initial_session_started_at.elapsed().as_millis();
+
+        let mut talon_paths = app
+            .chat_widget
+            .thread_id()
+            .and_then(|thread_id| crate::talon::resolve_session_paths(&thread_id.to_string()).ok());
+        let (mut talon_socket_rx, mut _talon_socket_task) =
+            if let Some(paths) = talon_paths.as_ref() {
+                match crate::talon::start_socket_acceptor(paths).await {
+                    Ok((request_rx, join_handle)) => (Some(request_rx), Some(join_handle)),
+                    Err(err) => {
+                        tracing::warn!("failed to start Talon command socket: {err}");
+                        (None, None)
+                    }
+                }
+            } else {
+                tracing::warn!("Codex thread ID unavailable; Talon command socket not started");
+                (None, None)
+            };
+        if let Some(paths) = talon_paths.as_ref() {
+            app.write_talon_ambient_state(paths);
+        }
 
         // On startup, if a managed filesystem sandbox is active, warn about
         // world-writable dirs on Windows.
@@ -1058,6 +1109,32 @@ See the Codex keymap documentation for supported actions and examples."
             Ok(exit_reason)
         } else {
             loop {
+                if talon_paths.is_none()
+                    && let Some(thread_id) = app.chat_widget.thread_id()
+                {
+                    match crate::talon::resolve_session_paths(&thread_id.to_string()) {
+                        Ok(paths) => {
+                            match crate::talon::start_socket_acceptor(&paths).await {
+                                Ok((request_rx, join_handle)) => {
+                                    talon_socket_rx = Some(request_rx);
+                                    _talon_socket_task = Some(join_handle);
+                                }
+                                Err(err) => {
+                                    tracing::warn!(
+                                        "failed to start delayed Talon command socket: {err}"
+                                    );
+                                }
+                            }
+                            app.write_talon_ambient_state(&paths);
+                            talon_paths = Some(paths);
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                "failed to resolve delayed Talon command socket paths: {err}"
+                            );
+                        }
+                    }
+                }
                 let control = select! {
                     Some(event) = app_event_rx.recv() => {
                         match app.handle_event(tui, &mut app_server, event).await {
@@ -1105,6 +1182,25 @@ See the Codex keymap documentation for supported actions and examples."
                         }
                         AppRunControl::Continue
                     }
+                    talon_request = async {
+                        if let Some(rx) = talon_socket_rx.as_mut() {
+                            rx.recv().await
+                        } else {
+                            std::future::pending::<Option<crate::talon::TalonSocketRequest>>().await
+                        }
+                    } => {
+                        if let Some(talon_request) = talon_request {
+                            let response = app.handle_talon_request(tui, talon_request.request);
+                            let _ = talon_request.response_tx.send(response);
+                            if let Some(paths) = talon_paths.as_ref() {
+                                app.write_talon_ambient_state(paths);
+                            }
+                        } else {
+                            talon_socket_rx = None;
+                            tracing::warn!("Talon command socket request channel closed");
+                        }
+                        AppRunControl::Continue
+                    }
                 };
                 if App::should_stop_waiting_for_initial_session(
                     waiting_for_initial_session_configured,
@@ -1148,6 +1244,7 @@ See the Codex keymap documentation for supported actions and examples."
             token_usage: app.token_usage(),
             thread_id: resumable_thread.as_ref().map(|thread| thread.thread_id),
             thread_name: resumable_thread.and_then(|thread| thread.thread_name),
+            model: Some(app.chat_widget.current_model().to_string()),
             update_action: app.pending_update_action,
             exit_reason,
         })

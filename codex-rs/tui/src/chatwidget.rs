@@ -1657,9 +1657,20 @@ impl ChatWidget {
         self.refresh_plan_mode_nudge();
     }
 
-    #[cfg(test)]
     pub(crate) fn set_composer_cursor(&mut self, cursor: usize) {
         self.bottom_pane.set_composer_cursor(cursor);
+    }
+
+    pub(crate) fn history_previous(&mut self) -> bool {
+        self.bottom_pane.history_previous()
+    }
+
+    pub(crate) fn history_next(&mut self) -> bool {
+        self.bottom_pane.history_next()
+    }
+
+    pub(crate) fn history_edit_previous(&mut self, steps_back: usize) -> bool {
+        self.bottom_pane.history_edit_previous(steps_back)
     }
 
     pub(crate) fn set_remote_image_urls(&mut self, remote_image_urls: Vec<String>) {
@@ -1891,15 +1902,6 @@ impl ChatWidget {
         // Ensure the UI redraws to reflect placeholder removal.
         self.request_redraw();
     }
-}
-
-fn has_websocket_timing_metrics(summary: RuntimeMetricsSummary) -> bool {
-    summary.responses_api_overhead_ms > 0
-        || summary.responses_api_inference_time_ms > 0
-        || summary.responses_api_engine_iapi_ttft_ms > 0
-        || summary.responses_api_engine_service_ttft_ms > 0
-        || summary.responses_api_engine_iapi_tbt_ms > 0
-        || summary.responses_api_engine_service_tbt_ms > 0
 }
 
 impl Drop for ChatWidget {

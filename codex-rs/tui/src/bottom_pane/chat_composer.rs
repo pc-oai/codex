@@ -859,6 +859,34 @@ impl ChatComposer {
         }
     }
 
+    pub(crate) fn history_previous(&mut self) -> bool {
+        if let Some(entry) = self.history.navigate_up(&self.app_event_tx) {
+            self.apply_history_entry(entry);
+            return true;
+        }
+        false
+    }
+
+    pub(crate) fn history_next(&mut self) -> bool {
+        if let Some(entry) = self.history.navigate_down(&self.app_event_tx) {
+            self.apply_history_entry(entry);
+            return true;
+        }
+        false
+    }
+
+    pub(crate) fn history_edit_previous(&mut self, steps_back: usize) -> bool {
+        self.history.reset_navigation();
+        let mut updated = false;
+        for _ in 0..=steps_back {
+            if let Some(entry) = self.history.navigate_up(&self.app_event_tx) {
+                self.apply_history_entry(entry);
+                updated = true;
+            }
+        }
+        updated
+    }
+
     /// Integrate pasted text into the composer.
     ///
     /// Acts as the only place where paste text is integrated, both for:

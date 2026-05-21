@@ -863,6 +863,30 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn history_previous(&mut self) -> bool {
+        let updated = self.composer.history_previous();
+        if updated {
+            self.request_redraw();
+        }
+        updated
+    }
+
+    pub(crate) fn history_next(&mut self) -> bool {
+        let updated = self.composer.history_next();
+        if updated {
+            self.request_redraw();
+        }
+        updated
+    }
+
+    pub(crate) fn history_edit_previous(&mut self, steps_back: usize) -> bool {
+        let updated = self.composer.history_edit_previous(steps_back);
+        if updated {
+            self.request_redraw();
+        }
+        updated
+    }
+
     pub(crate) fn composer_draft_snapshot(&self) -> chat_composer::ComposerDraftSnapshot {
         self.composer.draft_snapshot()
     }

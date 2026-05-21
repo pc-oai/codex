@@ -178,6 +178,7 @@ mod status;
 mod status_indicator_widget;
 mod streaming;
 mod style;
+mod talon;
 mod terminal_palette;
 mod terminal_probe;
 mod terminal_progress;
@@ -713,6 +714,110 @@ async fn lookup_session_target_with_app_server(
     }
 
     lookup_session_target_by_name_with_app_server(app_server, id_or_name).await
+}
+
+enum SessionSelectorLookup {
+    None,
+    One(resume_picker::SessionTarget),
+    Many(Vec<AppServerThread>),
+}
+
+async fn lookup_session_selector_with_app_server(
+    app_server: &mut AppServerSession,
+    selector: &str,
+    include_non_interactive: bool,
+) -> color_eyre::Result<SessionSelectorLookup> {
+    if let Some(target_session) =
+        lookup_session_target_with_app_server(app_server, selector).await?
+    {
+        return Ok(SessionSelectorLookup::One(target_session));
+    }
+
+    let Some(fragment) = normalized_session_id_fragment(selector) else {
+        return Ok(SessionSelectorLookup::None);
+    };
+    let matches = lookup_session_threads_by_id_fragment_with_app_server(
+        app_server,
+        &fragment,
+        include_non_interactive,
+    )
+    .await?;
+
+    Ok(match matches.len() {
+        0 => SessionSelectorLookup::None,
+        1 => {
+            let thread = matches
+                .into_iter()
+                .next()
+                .expect("single fragment match should exist");
+            match session_target_from_app_server_thread(thread) {
+                Some(target_session) => SessionSelectorLookup::One(target_session),
+                None => SessionSelectorLookup::None,
+            }
+        }
+        _ => SessionSelectorLookup::Many(matches),
+    })
+}
+
+async fn lookup_session_threads_by_id_fragment_with_app_server(
+    app_server: &mut AppServerSession,
+    normalized_fragment: &str,
+    include_non_interactive: bool,
+) -> color_eyre::Result<Vec<AppServerThread>> {
+    let mut cursor = None;
+    let mut matches = Vec::new();
+    loop {
+        let response = app_server
+            .thread_list(ThreadListParams {
+                cursor: cursor.clone(),
+                limit: Some(100),
+                sort_key: Some(AppServerThreadSortKey::UpdatedAt),
+                sort_direction: None,
+                model_providers: None,
+                source_kinds: (!include_non_interactive)
+                    .then_some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
+                archived: Some(false),
+                cwd: None,
+                use_state_db_only: false,
+                search_term: None,
+                user_states: None,
+            })
+            .await?;
+        matches.extend(response.data.into_iter().filter(|thread| {
+            thread_id_contains_normalized_fragment(thread.id.as_str(), normalized_fragment)
+        }));
+        let Some(next_cursor) = response.next_cursor else {
+            break;
+        };
+        cursor = Some(next_cursor);
+    }
+    Ok(matches)
+}
+
+fn normalized_session_id_fragment(value: &str) -> Option<String> {
+    let mut normalized = String::new();
+    for ch in value.chars() {
+        if ch == '-' {
+            continue;
+        }
+        if !ch.is_ascii_hexdigit() {
+            return None;
+        }
+        normalized.push(ch.to_ascii_lowercase());
+    }
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn thread_id_contains_normalized_fragment(thread_id: &str, normalized_fragment: &str) -> bool {
+    if normalized_fragment.is_empty() {
+        return false;
+    }
+    let normalized_thread_id: String = thread_id
+        .chars()
+        .filter(|ch| *ch != '-')
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect();
+    normalized_thread_id.contains(normalized_fragment)
 }
 
 async fn lookup_latest_session_target_with_app_server(
@@ -1407,6 +1512,7 @@ async fn run_ratatui_app(
                 token_usage: crate::token_usage::TokenUsage::default(),
                 thread_id: None,
                 thread_name: None,
+                model: None,
                 update_action: None,
                 exit_reason: ExitReason::UserRequested,
             });
@@ -1454,9 +1560,10 @@ async fn run_ratatui_app(
             token_usage: crate::token_usage::TokenUsage::default(),
             thread_id: None,
             thread_name: None,
+            model: None,
             update_action: None,
             exit_reason: ExitReason::Fatal(format!(
-                "No saved session found with ID {id_str}. Run `codex {action}` without an ID to choose from existing sessions."
+                "No saved session found matching {id_str}. Run `codex {action}` without a selector to choose from existing sessions."
             )),
         })
     };
@@ -1467,9 +1574,43 @@ async fn run_ratatui_app(
             let Some(startup_app_server) = app_server.as_mut() else {
                 unreachable!("app server should be initialized for --fork <id>");
             };
-            match lookup_session_target_with_app_server(startup_app_server, id_str).await? {
-                Some(target_session) => resume_picker::SessionSelection::Fork(target_session),
-                None => {
+            match lookup_session_selector_with_app_server(
+                startup_app_server,
+                id_str,
+                /*include_non_interactive*/ false,
+            )
+            .await?
+            {
+                SessionSelectorLookup::One(target_session) => {
+                    resume_picker::SessionSelection::Fork(target_session)
+                }
+                SessionSelectorLookup::Many(matches) => {
+                    match resume_picker::run_session_match_picker(
+                        &mut tui,
+                        &config,
+                        resume_picker::SessionPickerAction::Fork,
+                        id_str,
+                        matches,
+                        startup_app_server.uses_remote_workspace(),
+                    )
+                    .await?
+                    {
+                        resume_picker::SessionSelection::Exit => {
+                            terminal_restore_guard.restore_silently();
+                            session_log::log_session_end();
+                            return Ok(AppExitInfo {
+                                token_usage: crate::token_usage::TokenUsage::default(),
+                                thread_id: None,
+                                thread_name: None,
+                                model: None,
+                                update_action: None,
+                                exit_reason: ExitReason::UserRequested,
+                            });
+                        }
+                        other => other,
+                    }
+                }
+                SessionSelectorLookup::None => {
                     shutdown_app_server_if_present(app_server.take()).await;
                     return missing_session_exit(id_str, "fork");
                 }
@@ -1511,6 +1652,7 @@ async fn run_ratatui_app(
                         token_usage: crate::token_usage::TokenUsage::default(),
                         thread_id: None,
                         thread_name: None,
+                        model: None,
                         update_action: None,
                         exit_reason: ExitReason::UserRequested,
                     });
@@ -1524,9 +1666,43 @@ async fn run_ratatui_app(
         let Some(startup_app_server) = app_server.as_mut() else {
             unreachable!("app server should be initialized for --resume <id>");
         };
-        match lookup_session_target_with_app_server(startup_app_server, id_str).await? {
-            Some(target_session) => resume_picker::SessionSelection::Resume(target_session),
-            None => {
+        match lookup_session_selector_with_app_server(
+            startup_app_server,
+            id_str,
+            cli.resume_include_non_interactive,
+        )
+        .await?
+        {
+            SessionSelectorLookup::One(target_session) => {
+                resume_picker::SessionSelection::Resume(target_session)
+            }
+            SessionSelectorLookup::Many(matches) => {
+                match resume_picker::run_session_match_picker(
+                    &mut tui,
+                    &config,
+                    resume_picker::SessionPickerAction::Resume,
+                    id_str,
+                    matches,
+                    startup_app_server.uses_remote_workspace(),
+                )
+                .await?
+                {
+                    resume_picker::SessionSelection::Exit => {
+                        terminal_restore_guard.restore_silently();
+                        session_log::log_session_end();
+                        return Ok(AppExitInfo {
+                            token_usage: crate::token_usage::TokenUsage::default(),
+                            thread_id: None,
+                            thread_name: None,
+                            model: None,
+                            update_action: None,
+                            exit_reason: ExitReason::UserRequested,
+                        });
+                    }
+                    other => other,
+                }
+            }
+            SessionSelectorLookup::None => {
                 shutdown_app_server_if_present(app_server.take()).await;
                 return missing_session_exit(id_str, "resume");
             }
@@ -1572,6 +1748,7 @@ async fn run_ratatui_app(
                     token_usage: crate::token_usage::TokenUsage::default(),
                     thread_id: None,
                     thread_name: None,
+                    model: None,
                     update_action: None,
                     exit_reason: ExitReason::UserRequested,
                 });
@@ -2173,6 +2350,22 @@ mod tests {
             &target,
         ));
         Ok(())
+    }
+
+    #[test]
+    fn short_session_id_fragments_match_across_uuid_hyphens() {
+        assert_eq!(
+            normalized_session_id_fragment("B81C-0303"),
+            Some("b81c0303".to_string())
+        );
+        assert!(thread_id_contains_normalized_fragment(
+            "019dabc1-0ef5-7431-b81c-03037f51f62c",
+            "b81c0303",
+        ));
+        assert!(!thread_id_contains_normalized_fragment(
+            "019dabc1-0ef5-7431-b81c-03037f51f62c",
+            "deadbeef",
+        ));
     }
 
     #[tokio::test]
