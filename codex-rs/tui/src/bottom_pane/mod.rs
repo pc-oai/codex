@@ -1795,6 +1795,11 @@ impl BottomPane {
         }
     }
 
+    pub(crate) fn show_agent_navigation_strip(&mut self, line: Line<'static>, duration: Duration) {
+        self.composer.show_agent_navigation_strip(line, duration);
+        self.request_redraw();
+    }
+
     pub(crate) fn active_agent_label(&self) -> Option<&str> {
         self.composer.active_agent_label()
     }

@@ -227,6 +227,7 @@ mod popup_state;
 use self::attachment_state::AttachmentState;
 use self::draft_state::ComposerMentionBinding;
 use self::draft_state::DraftState;
+use self::footer_state::FooterFlash;
 use self::footer_state::FooterState;
 use self::history_search::HistorySearchSession;
 use self::popup_state::ActivePopup;
@@ -512,6 +513,7 @@ impl ChatComposer {
                 status_line_enabled: false,
                 side_conversation_context_label: None,
                 active_agent_label: None,
+                agent_navigation_strip: None,
                 external_editor_key: Some(key_hint::ctrl(KeyCode::Char('g'))),
                 show_transcript_key: Some(key_hint::ctrl(KeyCode::Char('t'))),
                 insert_newline_key: footer_insert_newline_key(
@@ -3634,7 +3636,7 @@ impl ChatComposer {
                 reasoning_down: self.footer.reasoning_down_key,
                 reasoning_up: self.footer.reasoning_up_key,
             },
-            active_agent_label: self.footer.active_agent_label.clone().map(Line::from),
+            active_agent_label: self.active_agent_context_line(),
         }
     }
 
@@ -4277,6 +4279,35 @@ impl ChatComposer {
         }
         self.footer.active_agent_label = active_agent_label;
         true
+    }
+
+    pub(crate) fn show_agent_navigation_strip(&mut self, line: Line<'static>, duration: Duration) {
+        let expires_at = Instant::now()
+            .checked_add(duration)
+            .unwrap_or_else(Instant::now);
+        self.footer.agent_navigation_strip = Some(FooterFlash { line, expires_at });
+    }
+
+    fn active_agent_context_line(&self) -> Option<Line<'static>> {
+        let base = self
+            .footer
+            .active_agent_label
+            .as_ref()
+            .map(|label| Line::from(label.clone()).dim());
+        let Some(strip) = self
+            .footer
+            .agent_navigation_strip
+            .as_ref()
+            .filter(|strip| Instant::now() < strip.expires_at)
+        else {
+            return base;
+        };
+        let mut line = base.unwrap_or_default();
+        if !line.spans.is_empty() {
+            line.spans.push(" · ".dim());
+        }
+        line.spans.extend(strip.line.spans.clone());
+        Some(line)
     }
 
     pub(crate) fn active_agent_label(&self) -> Option<&str> {

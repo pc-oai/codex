@@ -23,6 +23,8 @@ use crate::multi_agents::format_agent_picker_item_name;
 use crate::multi_agents::next_agent_shortcut;
 use crate::multi_agents::previous_agent_shortcut;
 use codex_protocol::ThreadId;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
 use ratatui::text::Span;
 use std::collections::HashMap;
 
@@ -279,6 +281,47 @@ impl AgentNavigationState {
         )
     }
 
+    pub(crate) fn agent_neighbor_strip(
+        &self,
+        current_displayed_thread_id: Option<ThreadId>,
+        primary_thread_id: Option<ThreadId>,
+        highlighted_thread_id: Option<ThreadId>,
+    ) -> Option<Line<'static>> {
+        let ordered_threads = self.ordered_threads();
+        if ordered_threads.len() < 2 {
+            return None;
+        }
+        let current_thread_id = current_displayed_thread_id?;
+        let current_idx = ordered_threads
+            .iter()
+            .position(|(thread_id, _)| *thread_id == current_thread_id)?;
+        let previous_idx = if current_idx == 0 {
+            ordered_threads.len() - 1
+        } else {
+            current_idx - 1
+        };
+        let next_idx = (current_idx + 1) % ordered_threads.len();
+        let label_for = |thread_id| {
+            let label = self
+                .active_agent_name(Some(thread_id), primary_thread_id)
+                .unwrap_or_else(|| "Agent".to_string());
+            if highlighted_thread_id == Some(thread_id) {
+                label.cyan().bold()
+            } else {
+                label.dim()
+            }
+        };
+        Some(Line::from(vec![
+            "‹ ".dim(),
+            label_for(ordered_threads[previous_idx].0),
+            " | ".dim(),
+            label_for(current_thread_id),
+            " | ".dim(),
+            label_for(ordered_threads[next_idx].0),
+            " ›".dim(),
+        ]))
+    }
+
     /// Builds the `/agent` picker subtitle from the same canonical bindings used by key handling.
     ///
     /// Keeping this text derived from the actual shortcut helpers prevents the picker copy from
@@ -397,6 +440,22 @@ mod tests {
         assert_eq!(
             state.active_agent_label(Some(main_thread_id), Some(main_thread_id)),
             Some("Main [default]".to_string())
+        );
+    }
+
+    #[test]
+    fn agent_neighbor_strip_tracks_switch_target() {
+        let (state, main_thread_id, first_agent_id, second_agent_id) = populated_state();
+
+        assert_eq!(
+            state
+                .agent_neighbor_strip(
+                    Some(first_agent_id),
+                    Some(main_thread_id),
+                    Some(second_agent_id),
+                )
+                .map(|line| line.to_string()),
+            Some("‹ Main [default] | Robie [explorer] | Bob [worker] ›".to_string())
         );
     }
 }

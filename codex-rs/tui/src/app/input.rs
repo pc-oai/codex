@@ -110,6 +110,7 @@ impl App {
                 )
                 .await
             {
+                self.show_agent_switch_feedback(tui, thread_id);
                 let _ = self
                     .select_agent_thread_and_discard_side(tui, app_server, thread_id)
                     .await;
@@ -124,6 +125,7 @@ impl App {
                 .adjacent_thread_id_for_switch_shortcut(app_server, AgentNavigationDirection::Next)
                 .await
             {
+                self.show_agent_switch_feedback(tui, thread_id);
                 let _ = self
                     .select_agent_thread_and_discard_side(tui, app_server, thread_id)
                     .await;
@@ -330,6 +332,26 @@ impl App {
             && self.chat_widget.is_normal_backtrack_mode()
             && self.chat_widget.composer_is_empty()
             && !self.chat_widget.should_handle_vim_insert_escape(key_event)
+    }
+
+    fn show_agent_switch_feedback(&mut self, tui: &mut tui::Tui, target_thread_id: ThreadId) {
+        if let Some(strip) = self.agent_navigation.agent_neighbor_strip(
+            Some(target_thread_id),
+            self.primary_thread_id,
+            Some(target_thread_id),
+        ) {
+            self.chat_widget
+                .show_agent_navigation_strip(strip, Duration::from_millis(900));
+        }
+        let terminal_resize_reflow_enabled = self.terminal_resize_reflow_enabled();
+        if terminal_resize_reflow_enabled && let Err(err) = self.handle_draw_pre_render(tui) {
+            tracing::debug!(error = %err, "failed to prepare agent switch feedback frame");
+            return;
+        }
+        self.chat_widget.pre_draw_tick();
+        if let Err(err) = self.render_chat_widget_frame(tui, terminal_resize_reflow_enabled) {
+            tracing::debug!(error = %err, "failed to draw agent switch feedback frame");
+        }
     }
 
     /// Reuse the queued-message edit shortcut for the idle main view.

@@ -68,6 +68,7 @@ Titles:
 Agents:
 - compact agent menu
 - prev / next switching (`Alt-[` / `Alt-]`)
+- short footer neighbor strip while switching
 - direct subagent spawn (`/subagent`, idle `Alt-\`)
 - active-agent footer state (count and working marker)
 - preserve main draft while switching
@@ -312,6 +313,9 @@ properties, treat that as a fork regression even if the merged tree compiles.
   replaced by `Alt-Left` / `Alt-Right` word-motion chords.
 - `Ctrl-S` rotates forward through the same agent cycle for the fast one-key
   path.
+- Keyboard agent rotation flashes a short footer neighbor strip before the
+  target thread takes over, so a fast switch still leaves visible context about
+  where the cycle moved.
 - Active-agent footer labels refresh when a new subagent thread starts so the
   visible count and working-state marker do not lag behind the picker.
 - Loaded parent threads can spawn a child agent directly through app-server

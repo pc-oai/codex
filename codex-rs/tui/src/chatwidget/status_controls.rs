@@ -87,6 +87,10 @@ impl ChatWidget {
         self.bottom_pane.set_active_agent_label(active_agent_label);
     }
 
+    pub(crate) fn show_agent_navigation_strip(&mut self, line: Line<'static>, duration: Duration) {
+        self.bottom_pane.show_agent_navigation_strip(line, duration);
+    }
+
     #[cfg(test)]
     pub(crate) fn active_agent_label(&self) -> Option<&str> {
         self.bottom_pane.active_agent_label()
