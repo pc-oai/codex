@@ -110,6 +110,32 @@ macro_rules! assert_app_snapshot {
     };
 }
 
+#[test]
+fn reload_exit_thread_id_prefers_primary_thread_for_tree_handoff() {
+    let primary_thread_id = ThreadId::new();
+    let visible_child_thread = ResumableThread {
+        thread_id: ThreadId::new(),
+        thread_name: Some("child".to_string()),
+    };
+
+    assert_eq!(
+        exit_thread_id(
+            &ExitReason::ReloadRequested,
+            Some(primary_thread_id),
+            Some(&visible_child_thread),
+        ),
+        Some(primary_thread_id)
+    );
+    assert_eq!(
+        exit_thread_id(
+            &ExitReason::UserRequested,
+            Some(primary_thread_id),
+            Some(&visible_child_thread),
+        ),
+        Some(visible_child_thread.thread_id)
+    );
+}
+
 fn test_absolute_path(path: &str) -> AbsolutePathBuf {
     AbsolutePathBuf::try_from(PathBuf::from(path)).expect("absolute test path")
 }

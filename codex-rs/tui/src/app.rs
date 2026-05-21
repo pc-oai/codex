@@ -466,6 +466,18 @@ fn resumable_thread(
     })
 }
 
+fn exit_thread_id(
+    exit_reason: &ExitReason,
+    primary_thread_id: Option<ThreadId>,
+    resumable_thread: Option<&ResumableThread>,
+) -> Option<ThreadId> {
+    if matches!(exit_reason, ExitReason::ReloadRequested) {
+        primary_thread_id.or_else(|| resumable_thread.map(|thread| thread.thread_id))
+    } else {
+        resumable_thread.map(|thread| thread.thread_id)
+    }
+}
+
 fn rollout_path_is_resumable(rollout_path: &Path) -> bool {
     std::fs::metadata(rollout_path).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
 }
@@ -1307,7 +1319,11 @@ See the Codex keymap documentation for supported actions and examples."
         );
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
-            thread_id: resumable_thread.as_ref().map(|thread| thread.thread_id),
+            thread_id: exit_thread_id(
+                &exit_reason,
+                app.primary_thread_id,
+                resumable_thread.as_ref(),
+            ),
             thread_name: resumable_thread.and_then(|thread| thread.thread_name),
             model: Some(app.chat_widget.current_model().to_string()),
             update_action: app.pending_update_action,
