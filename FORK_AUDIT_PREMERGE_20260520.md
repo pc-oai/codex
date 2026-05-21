@@ -26,6 +26,25 @@ an ancestor of current `main` through the merge, but merge resolution and later
 refactors can still drop wiring or leave an old binary running. The paste inline
 limit and the `Alt-C` transcript toggle already demonstrated both failure modes.
 
+## Older backup-ref boundary
+
+The May pre-merge tag is the merge contract for this audit. The older local ref
+`pc/backup-local-main-2026-02-11` is useful history, but it is a separate line:
+it diverges from the May tag at `4f46360aa493`, is not an ancestor of the May
+tag or current `HEAD`, and has 16 local commits that are not in the May tag.
+
+The first backup-ref comparison classified that older surface this way:
+
+| Older backup surface | May/current disposition |
+| --- | --- |
+| `3e4e93333b57` textarea undo/redo and line editing plus `5c9cb7adc1c1` manual ESC-meta Option-key decoding | Backup-only 2025 editor work. It did not enter the May tag. Current TUI has newer configurable line/word movement, kill, yank, modified-delete, keyboard-mode, and Vim editor paths; the old undo stack and manual meta decoder are not the May merge contract. |
+| `bc09d1f4cdb2` through `e2e0652af929` Talon state/RPC, task summary, session metadata, edit-previous, and history navigation | Carried forward by later May-stack Talon work and then reshaped around per-session sockets. Check the May tag and current Talon contract below, not the older file-poller implementation. |
+| Old MCP sync/revert and compatibility commits on that backup ref | Branch maintenance around an old upstream point, not a May fork feature to restore after the May 20 merge. |
+
+This boundary matters when a backup ref is inspected during a future recovery:
+classify backup-only behavior against the May tag before adding it to
+`FORK_SPEC.md` or porting code from it.
+
 ## Pre-merge commit accounting
 
 | # | Commit | Local change | Audit area |

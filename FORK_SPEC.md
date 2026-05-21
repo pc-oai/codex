@@ -135,6 +135,13 @@ then decide which post-merge fixups still apply. Lasting post-merge follow-ups
 are listed separately below so this file still accounts for local behavior
 added after the anchor was taken.
 
+Older local backup refs exist outside that May merge line. In particular,
+`pc/backup-local-main-2026-02-11` diverges before the May tag: its older Talon
+surfaces were reworked into this contract later, while its backup-only 2025
+textarea undo stack and manual Option-key escape decoder are historical unless
+they are deliberately revived. Do not treat every backup-only experiment as a
+May merge regression.
+
 ## Motivation and philosophy
 
 This fork is for local Codex dogfooding in long-running terminal sessions where
