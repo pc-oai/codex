@@ -234,6 +234,7 @@ pub(crate) struct SessionHeaderHistoryCell {
     show_fast_status: bool,
     directory: PathBuf,
     yolo_mode: bool,
+    compact_layout: bool,
 }
 
 impl SessionHeaderHistoryCell {
@@ -270,11 +271,17 @@ impl SessionHeaderHistoryCell {
             show_fast_status,
             directory,
             yolo_mode: false,
+            compact_layout: false,
         }
     }
 
     pub(crate) fn with_yolo_mode(mut self, yolo_mode: bool) -> Self {
         self.yolo_mode = yolo_mode;
+        self
+    }
+
+    pub(crate) fn with_compact_layout(mut self, compact_layout: bool) -> Self {
+        self.compact_layout = compact_layout;
         self
     }
 
@@ -374,6 +381,37 @@ impl HistoryCell for SessionHeaderHistoryCell {
         let dir_max_width = inner_width.saturating_sub(dir_prefix_width);
         let dir = self.format_directory(Some(dir_max_width));
         let dir_spans = vec![Span::from(dir_prefix).dim(), Span::from(dir)];
+
+        if self.compact_layout {
+            let mut compact = title_spans;
+            compact.push(" · ".dim());
+            compact.push(Span::styled(self.model.clone(), self.model_style));
+            if let Some(reasoning) = reasoning_label {
+                compact.push(" ".into());
+                compact.push(reasoning.into());
+            }
+            if self.show_fast_status {
+                compact.push(" · ".dim());
+                compact.push(Span::styled("fast", self.model_style.magenta()));
+            }
+            compact.push(" · ".dim());
+            compact.push(Span::from(
+                self.format_directory(Some(
+                    inner_width.saturating_sub(UnicodeWidthStr::width(
+                        compact
+                            .iter()
+                            .map(|span| span.content.as_ref())
+                            .collect::<String>()
+                            .as_str(),
+                    )),
+                )),
+            ));
+            if self.yolo_mode {
+                compact.push(" · ".dim());
+                compact.push("YOLO mode".magenta().bold());
+            }
+            return with_border(vec![make_row(compact)]);
+        }
 
         let mut lines = vec![
             make_row(title_spans),

@@ -74,7 +74,8 @@ Agents:
 
 Transcript/chrome:
 - condensed transcript toggle
-- compact startup history
+- compact startup placeholder while the fresh session is still configuring
+- no durable boxed startup header in terminal history
 - split status / footer
 - compact turn timing
 - transcript browser experiments
@@ -337,7 +338,10 @@ properties, treat that as a fork regression even if the merged tree compiles.
 - Fresh local TUI startup and clear-screen redraws do not print the boxed
   `OpenAI Codex` session header into terminal history. The prompt and compact
   footer/status surfaces are enough; the large model/directory/permissions
-  banner is startup noise in the local loop.
+  banner is startup noise in the local loop. While a newly started thread is
+  still configuring, the transient placeholder header honors
+  `tui.compact_session_header` so the temporary box stays one-line when the
+  placeholder is visible.
 - The Talon integration is per session. The live TUI control seam is the
   session-owned command socket; the state file remains ambient output for the
   same session. Together they expose editor/session state and narrow control

@@ -13,6 +13,18 @@ fn enable_test_ambient_pet(chat: &mut ChatWidget) {
     chat.install_test_ambient_pet_for_tests(/*animations_enabled*/ false);
 }
 
+#[tokio::test]
+async fn startup_placeholder_uses_compact_session_header_config() {
+    let (chat, _rx, _ops) = make_chatwidget_manual_with_config(
+        /*model_override*/ None,
+        |config| config.compact_session_header = true,
+    )
+    .await;
+
+    let placeholder = ChatWidget::placeholder_session_header_cell(chat.config_ref());
+    assert_eq!(placeholder.display_lines(/*width*/ 120).len(), 3);
+}
+
 /// Receiving a token usage update without usage clears the context indicator.
 #[tokio::test]
 async fn token_count_none_resets_context_indicator() {

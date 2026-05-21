@@ -185,3 +185,10 @@ codex-mac --lane tui-repair -- cargo check -p codex-tui -p codex-cli
   `cargo-target/debug/codex-exec`; unset the build-dir override for remote
   integration tests that rely on `codex_utils_cargo_bin` until those paths are
   aligned.
+- 2026-05-21: For clean-clone verification while another session keeps syncing
+  a dirty checkout into the canonical mirror, use a dedicated source mirror as
+  well as a dedicated lane, for example `codex-mac --remote-mirror
+  /Users/ec2-user/ci/builds/pc-codex-rust-m4pro/mirrors/fork-audit-compact-header
+  --lane fork-audit-compact-header-isolated -- cargo test -p codex-tui
+  compact_session_header`. A dedicated lane alone still builds whatever source
+  is in the shared canonical mirror when the command starts.

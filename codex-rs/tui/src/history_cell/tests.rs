@@ -1414,6 +1414,26 @@ fn session_header_hides_fast_status_when_disabled() {
     target_os = "windows",
     ignore = "snapshot path rendering differs on Windows"
 )]
+fn session_header_compacts_to_single_content_line_when_enabled() {
+    let cell = SessionHeaderHistoryCell::new(
+        "gpt-4o".to_string(),
+        Some(ReasoningEffortConfig::High),
+        /*show_fast_status*/ true,
+        test_path_buf("/tmp/project").abs().to_path_buf(),
+        "test",
+    )
+    .with_compact_layout(true)
+    .with_yolo_mode(true);
+
+    let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "snapshot path rendering differs on Windows"
+)]
 fn session_header_indicates_yolo_mode() {
     let cell = SessionHeaderHistoryCell::new(
         "gpt-5".to_string(),

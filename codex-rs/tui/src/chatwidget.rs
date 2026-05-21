@@ -1385,7 +1385,8 @@ impl ChatWidget {
                 config.cwd.to_path_buf(),
                 CODEX_CLI_VERSION,
             )
-            .with_yolo_mode(history_cell::is_yolo_mode(config)),
+            .with_yolo_mode(history_cell::is_yolo_mode(config))
+            .with_compact_layout(config.compact_session_header),
         )
     }
 
