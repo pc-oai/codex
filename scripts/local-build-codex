@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -13,9 +14,20 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CODEX_RS = REPO_ROOT / "codex-rs"
 VERSION_RS = CODEX_RS / "tui" / "src" / "version.rs"
-TARGET_DIR = CODEX_RS / "target"
-LOCAL_BUILDS_DIR = TARGET_DIR / "local-builds"
+DEFAULT_TARGET_DIR = CODEX_RS / "target"
+LOCAL_BUILDS_DIR = DEFAULT_TARGET_DIR / "local-builds"
 BUILD_NUMBER_RE = re.compile(r"(pub const LOCAL_BUILD_NUMBER: u32 = )(\d+)(;)")
+
+
+def build_target_dir() -> Path:
+    target_dir = os.environ.get("CARGO_TARGET_DIR")
+    if target_dir is None:
+        return DEFAULT_TARGET_DIR
+
+    target_dir_path = Path(target_dir)
+    if target_dir_path.is_absolute():
+        return target_dir_path
+    return CODEX_RS / target_dir_path
 
 
 def bumped_version_source(source: str) -> tuple[str, int]:
@@ -37,7 +49,7 @@ def executable_name(name: str) -> str:
 
 
 def built_codex_binary() -> Path:
-    return TARGET_DIR / "debug" / executable_name("codex")
+    return build_target_dir() / "debug" / executable_name("codex")
 
 
 def archived_codex_binary(build_number: int) -> Path:
