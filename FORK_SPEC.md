@@ -505,19 +505,29 @@ feed into this spec.
 
 ## Post-merge follow-up inventory
 
-These local commits came after the May 20 merge anchor. They are not needed to
+These local changes came after the May 20 merge anchor. They are not needed to
 reconstruct the pre-merge fork delta, but their lasting behavior belongs in the
-current fork contract.
+current fork contract. Keep this table grouped by behavior instead of turning
+it into a changelog; `FORK_AUDIT_PREMERGE_20260520.md` carries the detailed
+recovery evidence.
 
-| Commit | Local change | Spec area |
+| Commit(s) | Local change | Spec area |
 | --- | --- | --- |
 | `406381099e5c` | Remove stale reload-exit handling after the merge | Merge repair |
 | `ae69128ee2eb` | Archive numbered local Codex builds | Local runtime |
 | `62e3ef8067cc` | Drop stale merged state-test import | Merge repair |
 | `d493d92da968` | Remap conflicting old local state migrations | State compatibility |
-| `e6dda1d1ee04` | Advance the local build marker after the archived build | Local runtime |
 | `7c89664f2092` | Restore split footer status, compact agent picker, and direct edit shortcuts after merge | Footer, agents, editing |
-| `fafeb52f2fc3` | Advance the local build marker after `v60` verification | Local runtime |
+| `b227bf5118cf` | Suppress the durable boxed startup history header | Transcript/chrome |
+| `fd38c1e6b348`, `8aaf14488562`, `73c685cf724f` | Restore reload and agent rotation shortcuts, local title/session helpers, and condensed transcript mode | Keyboard workflow, titles, transcript |
+| `14a6b2800039`, `b2da512dcf40`, `3dd21ecbc80`, `21e726dcd153` | Restore agent prewarm activity updates, progress/status surfaces, edit/queue workflow, and slash aliases | Agents, runtime signals, editing |
+| `3a0cd90f4079`, `4ef824df2aa0`, `89a39f8b55f8` | Add direct and idle user-spawned subagents | Agents |
+| `b11052807110` | Persist runtime metrics without bringing verbose timing rows back into the transcript | Runtime signals |
+| `3b96a817ff6b`, `82be3373b6e1`, `99e7f29d0d22`, `b655d9f39145`, `ad05bd3795a1` | Restore recovery wiring around reload drafts, picker retrieval cues, edit preview accent, and selected subagent-tree reload | Session restore, editing |
+| `e490ff82a8d9`, `6bce2cb81a3e` | Add isolated local target-dir support and the remote build offload guide | Local runtime |
+| `9bed483d8452`, `0501917bd33`, `5d061edc3bce` | Keep fixed agent/rename shortcuts from being reclaimed by newer defaults | Keyboard workflow |
+| `eeef0758b169`, `ebea69832eab`, `f9d543d1bf08` | Restore async fresh startup, bundled-model bootstrap, and compact configuring placeholder | Startup/chrome |
+| `f90453686afb` | Cover standalone exec loader override propagation | Local runtime |
 
 ## Short session-ID suffix contract
 
