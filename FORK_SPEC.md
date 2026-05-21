@@ -8,6 +8,27 @@ to see that the tree compiles.
 file is the fuller motivation, pre-merge inventory, and post-merge validation
 guide.
 
+## Feature summary
+
+- Sessions: richer resume/fork lookup, retrieval cues in pickers, saved cwd and
+  user work state, stable reload/resume handoffs, and replay of durable work
+  output.
+- Titles: local naming, retitle, and emoji flows keep threads and terminal tabs
+  recognizable without polluting the transcript.
+- Editing: reversible edit-last-message, draft restoration, queue controls,
+  configurable key bindings, paste visibility, and local slash helpers keep
+  repeated prompt work fast without making it lossy.
+- Agents: compact picker/switching/prewarm behavior, visible active-agent
+  state, direct user-spawned subagents, and side conversations support many
+  active threads in one TUI.
+- Transcript and chrome: condensed scrollback, local transcript experiments,
+  compact startup history, split status/footer surfaces, compact timing output,
+  and optional Ghostty progress keep runtime state visible without transcript
+  noise.
+- Automation and builds: per-session Talon control, invocation-local runtime
+  overrides, visible local build numbers, and archived numbered binaries keep
+  local dogfooding reproducible.
+
 ## Historical baseline
 
 The local tip immediately before the May 20, 2026 merge of `upstream/main` is:
