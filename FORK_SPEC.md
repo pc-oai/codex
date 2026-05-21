@@ -330,7 +330,7 @@ properties, treat that as a fork regression even if the merged tree compiles.
   header. Compact context-used and timing summaries may also use the right side
   when configured.
 - Ghostty gets terminal-native indeterminate progress while a turn runs when
-  `tui.terminal_progress_bar` is enabled. The switch defaults off. Progress is
+  `tui.terminal_progress_bar` is enabled. The switch defaults on. Progress is
   cleared on completion or widget drop and is handed across thread-widget
   replacement to avoid flicker.
 - Runtime metrics stay available locally when runtime metrics are enabled even

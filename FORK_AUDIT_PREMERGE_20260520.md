@@ -71,8 +71,8 @@ multiple behaviors and should be checked by behavior, not by commit subject.
 ## Current comparison
 
 The current fork delta from the upstream side of the merge to current `HEAD`
-touches 283 files with 15,634 insertions and 1,226 deletions. Of the 263 old
-fork paths checked in the accounting pass, 248 also appear in that current fork
+touches 312 files with 17,863 insertions and 1,497 deletions. Of the 265 old
+fork paths checked in the accounting pass, 253 also appear in that current fork
 delta.
 
 The only files added by the old fork range that are absent from current `HEAD`
@@ -129,15 +129,36 @@ through Talon sockets, and the warmed all-directories page used by `Ctrl-A`.
 Static anchors are necessary, not sufficient. They do not prove constructor
 wiring, key routing, snapshot shape, or the binary Phil is running.
 
-### Current dirty worktree
+### Requirement evidence
 
-The current checkout is not a clean comparison target. At the time this report
-was written it had 41 tracked dirty files, and 26 of those overlap paths from
-the old fork delta. The dirty work includes `FORK_SPEC.md`, session selector and
-resume picker work, reload/model handoff work, user/runtime telemetry paths,
-subagent paths, timing separator work, and snapshots. Compare against `HEAD`
-first; re-run this section after that stack is committed or intentionally
-snapshotted.
+This table accounts for the behavior contract against the clean current `HEAD`.
+Code anchors prove that the merged tree still has the surface; tests or terminal
+checks are stronger evidence for the paths most likely to lose wiring during a
+merge.
+
+| Contract area | Current code evidence | Current verification evidence |
+| --- | --- | --- |
+| Composer clears, edit-last, queue controls | `clear_composer_draft`, `edit_last_message_from_command`, queued edit/discard/steer keymap actions | `ctrl_x_clears_composer_without_emitting_ops`, the edit-last preview/commit/cancel app tests, and queued-message binding tests under `chatwidget/tests/composer_submission.rs` |
+| Session selector lookup and picker retrieval | `SessionSelectorLookup`, `thread_id_contains_normalized_fragment`, `resume_picker.rs` title/message/cwd/open-state paths | `short_session_id_fragments_match_across_uuid_hyphens`, `cargo test -p codex-tui resume_picker`, a source-build ambiguous-fragment terminal check that opened the narrowed picker, and a unique-fragment check that resumed directly |
+| Thread delete and user work state | app-server `thread/delete`, `ThreadUserState`, local thread-store message-count overlay | `thread_delete_removes_materialized_rollout_and_sqlite_metadata`, `thread_metadata_update_sets_user_state_and_thread_read_preserves_it`, and local thread-store user-message-count coverage |
+| Titles and terminal identity | title suggestion app jobs, `/retitle`, `/emoji`, terminal-title session suffix formatting | title suggestion event-path tests, slash-command title tests, and `terminal_title_preview_uses_session_id_suffix_for_live_values` |
+| Saved cwd, fork boundary, resume replay | saved-session cwd resolution, fork truncation, saved exec replay, reload handoff | thread fork tests for last-completed-turn behavior, `replayed_completed_exec_turn_rehydrates_tool_output`, reload handoff tests, app draft replay tests, and a source-build `Ctrl-R` smoke that restored a non-empty draft after re-exec |
+| Rollback edit flow | rollback turn start payloads and `ThreadRolledBackNotification` routing | core rollback reconstruction tests plus app edit-last rollback tests |
+| Config and local CLI controls | `model_context_window_allow_unsafe_override`, `paste_text_inline_char_limit`, CLI `--private`, no-MCP/no-project-docs/config-file loader overrides | config/model tests, paste constructor coverage, CLI private flag coverage, and `constructor_applies_paste_text_inline_char_limit` |
+| Transcript and startup chrome | `ToggleCondensedTranscriptView`, suppressed startup header history, right-side footer/MCP status | condensed reflow and restored scrollback tests, clear-header snapshots, status/footer snapshots, and the `Alt-C` terminal smoke already done for archived local build `v64` |
+| Agent navigation and tree restore | agent menu/prewarm, `Alt-[` and `Alt-]` routing, resume subagent tree, reload tree handoff | agent prewarm tests, active-agent footer tests, `thread_resume_params_forward_tree_restore_flag`, and subagent tree resume coverage |
+| Talon per-session control | `start_socket_acceptor`, delayed startup retry in `App::run`, `talon_ambient_state`, status-row summary bridge | Talon socket unit tests and a live source-build `command.sock` smoke on `v65`: `get_state`, `set_buffer`, and socket-triggered exit all returned responses |
+| Runtime/build visibility | `scripts/local-build-codex`, local build footer label, Ghostty OSC progress path, runtime metrics surfaces | local build snapshots, terminal progress unit tests, runtime metrics tests, full TUI snapshots, and live source-build progress start/clear OSC bytes; Ghostty visual progress still needs the manual turn check below |
+| State compatibility | remapped old local applied migrations before current state migrator | `remaps_conflicting_local_migrations_before_current_state_migrations` and state runtime migration coverage |
+| Local experiments/runtime propagation | transcript outline/tree binaries and standalone exec loader override propagation | current binaries/code anchors plus CLI/exec loader override callsites |
+
+### Current checkout
+
+The path and requirement accounting above was rerun after the recovery commits
+with a clean worktree. The current delta is larger than the old fork delta
+because it includes post-merge repairs and later local additions such as idle
+thread-spawn and runtime-metrics persistence; those additions do not replace the
+pre-merge checks in this report.
 
 ## Post-merge repairs already observed
 
@@ -157,10 +178,11 @@ Use this order for the missing-functionality hunt:
 1. Check large compound commits `615a82f60acc` and `820635042674` by feature:
    session lookup/delete/state, title flows, startup/footer chrome, keymap and
    composer controls.
-2. Run live TUI checks for the behaviors that a static anchor cannot prove:
-   Talon socket round trip, short selector unique/ambiguous lookup, reload with
-   a non-empty draft and subagent tree, edit-last rollback/cancel/submit, and
-   Ghostty progress.
+2. Finish the remaining live TUI checks that a static anchor cannot prove:
+   reload with a selected subagent tree, edit-last rollback/cancel/submit, and
+   Ghostty visual progress. Source-build checks already covered the Talon socket
+   round trip, short selector unique/ambiguous lookup, reload with a non-empty
+   root draft, and terminal progress start/clear bytes.
 3. Use focused tests and snapshots around app-server thread payloads, thread
    state migrations/store, resume picker, footer/status lines, queue/edit UI,
    paste placeholders, and condensed transcript mode.
