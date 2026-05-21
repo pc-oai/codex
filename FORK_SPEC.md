@@ -231,6 +231,19 @@ properties, treat that as a fork regression even if the merged tree compiles.
 - Runtime-metrics transcript output stays compact. Do not regress to verbose
   per-turn timing lines or separators that expand websocket/local-tool totals
   into long transcript rows when a concise timing summary is enough.
+  - With compact timing enabled, the transcript timing line is one bullet:
+    `• Timing: <metric><duration>[  <metric><duration> ...]`. The default
+    metrics are TTFT and TBT with the default symbols, for example
+    `• Timing: 492ms  ≋11ms`. Do not show both iapi and service values or
+    append `(iapi)` / `(service)` labels in this compact line.
+  - The status-line `timing` item uses the same compact metric body without the
+    `Timing:` prefix, for example `492ms  ≋11ms`; the previous turn can remain
+    as a muted footer reference until the current turn reports timing.
+  - With compact timing enabled, a final separator keeps the worked duration
+    and at most a compact tool summary, for example
+    `─ Worked for 22m 59s • 153 tools 752.7s ─`. Do not add websocket send
+    counts, websocket receive counts, or expanded TTFT/TBT detail to that
+    separator.
 
 ### State compatibility
 
