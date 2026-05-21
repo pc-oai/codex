@@ -2318,7 +2318,8 @@ async fn slash_subagent_requests_child_spawn_while_task_running() {
         rx.try_recv(),
         Ok(AppEvent::StartSubagent {
             parent_thread_id: emitted_parent_thread_id,
-            prompt,
+            prompt: Some(prompt),
+            switch_to_child: false,
         }) if emitted_parent_thread_id == parent_thread_id
             && prompt == "check parser tests"
     );
