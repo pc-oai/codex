@@ -73,6 +73,11 @@ const LOAD_NEAR_THRESHOLD: usize = 5;
 const SESSION_ID_SUFFIX_LEN: usize = 8;
 const SESSION_META_INDENT_WIDTH: usize = 2;
 const SESSION_META_DATE_WIDTH: usize = 12;
+const DENSE_SESSION_DATE_WIDTH: usize = 16;
+const DENSE_SESSION_ID_WIDTH: usize = SESSION_ID_SUFFIX_LEN + 3;
+const DENSE_SESSION_MESSAGE_COUNT_WIDTH: usize = 9;
+const DENSE_SESSION_OPEN_STATE_WIDTH: usize = 8;
+const DENSE_SESSION_MIN_TITLE_WIDTH: usize = 16;
 const SESSION_META_FIELD_GAP_WIDTH: usize = 2;
 const SESSION_META_MIN_CWD_WIDTH: usize = 30;
 const SESSION_META_MAX_CWD_WIDTH: usize = 72;
@@ -2929,23 +2934,23 @@ fn render_dense_session_lines(
         ThreadSortKey::CreatedAt => created,
         ThreadSortKey::UpdatedAt => updated,
     };
+    let session_id = row
+        .thread_id
+        .map(session_id_suffix)
+        .unwrap_or_else(|| "-".to_string());
     let message_count = user_message_count_label(row.user_message_count);
-    let title = match row.thread_id {
-        Some(thread_id) => format!(
-            "{} {message_count} {} {}",
-            session_id_suffix(thread_id),
-            row.open_state.label(),
-            session_title_text(row)
-        ),
-        None => format!(
-            "{message_count} {} {}",
-            row.open_state.label(),
-            session_title_text(row)
-        ),
-    };
+    let show_open_state = state
+        .filtered_rows
+        .iter()
+        .any(|row| row.open_state == SessionOpenState::Open);
+    let title = session_title_text(row);
     let mut lines = vec![dense_summary_line(DenseSummaryInput {
         marker,
         date: &date,
+        session_id: &session_id,
+        message_count: &message_count,
+        open_state: row.open_state,
+        show_open_state,
         title: &title,
         has_custom_title: row.has_custom_title(),
         is_selected,
@@ -2961,6 +2966,10 @@ fn render_dense_session_lines(
 struct DenseSummaryInput<'a> {
     marker: Span<'static>,
     date: &'a str,
+    session_id: &'a str,
+    message_count: &'a str,
+    open_state: SessionOpenState,
+    show_open_state: bool,
     title: &'a str,
     has_custom_title: bool,
     is_selected: bool,
@@ -2971,18 +2980,30 @@ struct DenseSummaryInput<'a> {
 fn dense_summary_line(input: DenseSummaryInput<'_>) -> Line<'static> {
     let marker_width = input.marker.width();
     let available = (input.width as usize).saturating_sub(marker_width);
-    let columns = dense_columns(available);
+    let columns = dense_columns(available, input.show_open_state);
     let title = session_title_span(
         dense_column_text(input.title, columns.title_width),
         input.has_custom_title,
         input.is_selected,
     );
 
-    let spans = vec![
+    let mut spans = vec![
         input.marker,
         dense_column_text(input.date, columns.date_width).dim(),
-        title,
     ];
+    if columns.session_id_width > 0 {
+        spans.push(dense_column_text(input.session_id, columns.session_id_width).dim());
+    }
+    if columns.message_count_width > 0 {
+        spans.push(dense_column_text(input.message_count, columns.message_count_width).dim());
+    }
+    if columns.open_state_width > 0 {
+        spans.push(dense_open_state_column(
+            input.open_state,
+            columns.open_state_width,
+        ));
+    }
+    spans.push(title);
     let mut line = Line::from(spans);
     if input.is_selected {
         let padding = (input.width as usize).saturating_sub(line.width());
@@ -3004,14 +3025,36 @@ fn dense_summary_line(input: DenseSummaryInput<'_>) -> Line<'static> {
 
 struct DenseColumns {
     date_width: usize,
+    session_id_width: usize,
+    message_count_width: usize,
+    open_state_width: usize,
     title_width: usize,
 }
 
-fn dense_columns(width: usize) -> DenseColumns {
-    let date_width = SESSION_META_DATE_WIDTH;
+fn dense_columns(width: usize, show_open_state: bool) -> DenseColumns {
+    let date_width = DENSE_SESSION_DATE_WIDTH;
+    let session_id_width = DENSE_SESSION_ID_WIDTH;
+    let open_state_width = if show_open_state {
+        DENSE_SESSION_OPEN_STATE_WIDTH
+    } else {
+        0
+    };
+    let full_metadata_width =
+        date_width + session_id_width + DENSE_SESSION_MESSAGE_COUNT_WIDTH + open_state_width;
+    let keep_full_metadata =
+        width.saturating_sub(full_metadata_width) >= DENSE_SESSION_MIN_TITLE_WIDTH;
+    let (message_count_width, open_state_width) = if keep_full_metadata {
+        (DENSE_SESSION_MESSAGE_COUNT_WIDTH, open_state_width)
+    } else {
+        (0, 0)
+    };
     DenseColumns {
         date_width,
-        title_width: width.saturating_sub(date_width),
+        session_id_width,
+        message_count_width,
+        open_state_width,
+        title_width: width
+            .saturating_sub(date_width + session_id_width + message_count_width + open_state_width),
     }
 }
 
@@ -3039,6 +3082,13 @@ fn dense_column_text(text: &str, width: usize) -> String {
     let text = truncate_text(text, width.saturating_sub(1));
     let padding = width.saturating_sub(UnicodeWidthStr::width(text.as_str()));
     format!("{text}{}", " ".repeat(padding))
+}
+
+fn dense_open_state_column(open_state: SessionOpenState, width: usize) -> Span<'static> {
+    match open_state {
+        SessionOpenState::Open => dense_column_text("• open", width).green(),
+        SessionOpenState::Closed => dense_column_text("", width).dim(),
+    }
 }
 
 fn selection_marker(is_selected: bool, is_expanded: bool) -> Span<'static> {
@@ -3522,23 +3572,7 @@ fn format_relative_time(reference: DateTime<Utc>, ts: Option<DateTime<Utc>>) -> 
     let Some(ts) = ts else {
         return "-".to_string();
     };
-    let seconds = (reference - ts).num_seconds().max(0);
-    if seconds == 0 {
-        return "now".to_string();
-    }
-    if seconds < 60 {
-        return format!("{seconds}s ago");
-    }
-    let minutes = seconds / 60;
-    if minutes < 60 {
-        return format!("{minutes}m ago");
-    }
-    let hours = minutes / 60;
-    if hours < 24 {
-        return format!("{hours}h ago");
-    }
-    let days = hours / 24;
-    format!("{days}d ago")
+    format_relative_time_long(reference, ts)
 }
 
 fn format_relative_time_long(reference: DateTime<Utc>, ts: DateTime<Utc>) -> String {
@@ -3848,7 +3882,7 @@ mod tests {
         assert_eq!(format_relative_time(reference, Some(reference)), "now");
         assert_eq!(
             format_relative_time(reference, Some(reference - Duration::seconds(1))),
-            "1s ago"
+            "1 second ago"
         );
     }
 
@@ -5397,6 +5431,10 @@ session_picker_view = "dense"
         let line = dense_summary_line(DenseSummaryInput {
             marker: selection_marker(/*is_selected*/ true, /*is_expanded*/ false),
             date: "15m ago",
+            session_id: "…7f51f62c",
+            message_count: "0 msgs",
+            open_state: SessionOpenState::Closed,
+            show_open_state: false,
             title: "Selected dense row",
             has_custom_title: false,
             is_selected: true,
@@ -5414,6 +5452,10 @@ session_picker_view = "dense"
         let line = dense_summary_line(DenseSummaryInput {
             marker: selection_marker(/*is_selected*/ false, /*is_expanded*/ false),
             date: "15m ago",
+            session_id: "…7f51f62c",
+            message_count: "0 msgs",
+            open_state: SessionOpenState::Closed,
+            show_open_state: false,
             title: "Zebra dense row",
             has_custom_title: false,
             is_selected: false,
@@ -5468,6 +5510,8 @@ session_picker_view = "dense"
         first.preview = String::from("First dense row");
         let mut second = dense_snapshot_row();
         second.preview = String::from("Second dense row");
+        second.user_message_count = 12;
+        second.open_state = SessionOpenState::Open;
         second.git_branch = Some(String::from("fcoury/other-branch"));
         let mut state = PickerState::new(
             FrameRequester::test_dummy(),
