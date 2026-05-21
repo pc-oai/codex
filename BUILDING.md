@@ -192,3 +192,8 @@ codex-mac --lane tui-repair -- cargo check -p codex-tui -p codex-cli
   --lane fork-audit-compact-header-isolated -- cargo test -p codex-tui
   compact_session_header`. A dedicated lane alone still builds whatever source
   is in the shared canonical mirror when the command starts.
+- 2026-05-21: A warm dirty lane can retain stale test-profile protocol artifacts
+  across app-server API edits and report an impossible missing root re-export
+  while `cargo check` from rebuilt dev artifacts passes. When source inspection
+  shows the export is present, rerun the proof from a fresh target/build dir (or
+  a clean lane) before editing around that error.
