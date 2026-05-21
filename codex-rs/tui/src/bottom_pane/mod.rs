@@ -305,6 +305,10 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_paste_text_inline_char_limit(&mut self, limit: usize) {
+        self.composer.set_paste_text_inline_char_limit(limit);
+    }
+
     /// Update image-paste behavior for the active composer and repaint immediately.
     ///
     /// Callers use this to keep composer affordances aligned with model capabilities.

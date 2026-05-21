@@ -232,6 +232,9 @@ impl ChatWidget {
             .set_vim_enabled(widget.config.tui_vim_mode_default);
         widget
             .bottom_pane
+            .set_paste_text_inline_char_limit(widget.config.paste_text_inline_char_limit);
+        widget
+            .bottom_pane
             .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
         widget
             .bottom_pane

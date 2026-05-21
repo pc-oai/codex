@@ -9,6 +9,21 @@ use pretty_assertions::assert_eq;
 use std::collections::VecDeque;
 
 #[tokio::test]
+async fn constructor_applies_paste_text_inline_char_limit() {
+    let default_limit = codex_config::config_toml::DEFAULT_PASTE_TEXT_INLINE_CHAR_LIMIT;
+    let (mut chat, _rx, _op_rx) =
+        make_chatwidget_manual_with_config(/*model_override*/ None, |config| {
+            config.paste_text_inline_char_limit = default_limit + 10;
+        })
+        .await;
+    let pasted = "x".repeat(default_limit + 1);
+
+    chat.bottom_pane.handle_paste(pasted.clone());
+
+    assert_eq!(chat.bottom_pane.composer_text(), pasted);
+}
+
+#[tokio::test]
 async fn submission_preserves_text_elements_and_local_images() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
