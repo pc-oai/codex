@@ -157,7 +157,8 @@ pub(crate) enum AppEvent {
     /// Spawn a child agent from the active thread without switching focus.
     StartSubagent {
         parent_thread_id: ThreadId,
-        prompt: String,
+        prompt: Option<String>,
+        switch_to_child: bool,
     },
 
     /// Ask an ephemeral fork to generate thread-title metadata off the main transcript.

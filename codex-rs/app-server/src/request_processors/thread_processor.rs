@@ -1274,14 +1274,15 @@ impl ThreadRequestProcessor {
                 ThreadId::new().to_string().replace('-', "_")
             )
         });
-        let input = params
+        let initial_input = params
             .input
             .into_iter()
             .map(V2UserInput::into_core)
-            .collect();
+            .collect::<Vec<_>>();
+        let starts_turn = !initial_input.is_empty();
         let (thread_id, child_thread) = self
             .thread_manager
-            .spawn_thread_subagent(parent_thread_id, task_name, input)
+            .spawn_thread_subagent(parent_thread_id, task_name, initial_input)
             .await
             .map_err(|err| core_thread_write_error("spawn subagent", err))?;
 
@@ -1315,7 +1316,7 @@ impl ThreadRequestProcessor {
             self.thread_watch_manager
                 .loaded_status_for_thread(&thread.id)
                 .await,
-            /*has_in_progress_turn*/ true,
+            starts_turn,
         );
 
         let sandbox = thread_response_sandbox_policy(

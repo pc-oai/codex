@@ -140,8 +140,20 @@ impl App {
             && self.chat_widget.composer_text_with_pending().is_empty()
             && spawn_subagent_shortcut_matches(key_event)
         {
-            self.chat_widget
-                .set_composer_text("/subagent ".to_string(), Vec::new(), Vec::new());
+            if let Some(parent_thread_id) = self.chat_widget.thread_id() {
+                self.handle_start_subagent(
+                    tui,
+                    app_server,
+                    parent_thread_id,
+                    /*prompt*/ None,
+                    /*switch_to_child*/ true,
+                )
+                .await;
+            } else {
+                self.chat_widget.add_error_message(
+                    "Subagent creation is unavailable before the session starts.".to_string(),
+                );
+            }
             return;
         }
 

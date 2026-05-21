@@ -557,7 +557,6 @@ mod tests {
     use crate::history_cell::HistoryCell;
     #[cfg(target_os = "macos")]
     use crossterm::event::KeyEvent;
-    #[cfg(target_os = "macos")]
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;

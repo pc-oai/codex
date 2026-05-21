@@ -860,7 +860,8 @@ impl ChatWidget {
                 };
                 self.app_event_tx.send(AppEvent::StartSubagent {
                     parent_thread_id,
-                    prompt: args,
+                    prompt: Some(args),
+                    switch_to_child: false,
                 });
                 if source == SlashCommandDispatchSource::Live {
                     self.bottom_pane.drain_pending_submission_state();

@@ -11,6 +11,7 @@ use codex_app_server_protocol::ThreadSpawnResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
+use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::UserInput;
 use codex_protocol::protocol::SubAgentSource;
 use std::collections::BTreeMap;
@@ -95,6 +96,59 @@ async fn thread_spawn_creates_child_in_parent_session_tree() -> Result<()> {
         }
     };
     assert_eq!(started.thread, child);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_spawn_without_input_creates_idle_child() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        &BTreeMap::default(),
+        i64::MAX,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "",
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let parent_request_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let parent_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(parent_request_id)),
+    )
+    .await??;
+    let parent = to_response::<ThreadStartResponse>(parent_response)?.thread;
+
+    let spawn_request_id = mcp
+        .send_thread_spawn_request(ThreadSpawnParams {
+            thread_id: parent.id,
+            task_name: Some("idle_child".to_string()),
+            input: Vec::new(),
+        })
+        .await?;
+    let spawn_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(spawn_request_id)),
+    )
+    .await??;
+    let child = to_response::<ThreadSpawnResponse>(spawn_response)?.thread;
+
+    assert_eq!(child.status, ThreadStatus::Idle);
+    assert!(matches!(
+        child.source,
+        codex_app_server_protocol::SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            agent_path: Some(ref agent_path),
+            ..
+        }) if agent_path.as_str() == "/root/idle_child"
+    ));
 
     Ok(())
 }

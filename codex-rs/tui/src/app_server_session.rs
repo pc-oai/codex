@@ -180,6 +180,12 @@ pub(crate) struct AppServerStartedThread {
     pub(crate) turns: Vec<Turn>,
 }
 
+pub(crate) struct AppServerSpawnedSubagent {
+    pub(crate) started: AppServerStartedThread,
+    pub(crate) agent_nickname: Option<String>,
+    pub(crate) agent_role: Option<String>,
+}
+
 static BACKGROUND_REQUEST_ID: AtomicI64 = AtomicI64::new(-1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -439,9 +445,10 @@ impl AppServerSession {
 
     pub(crate) async fn spawn_subagent(
         &mut self,
+        config: &Config,
         parent_thread_id: ThreadId,
-        prompt: String,
-    ) -> Result<Thread> {
+        prompt: Option<String>,
+    ) -> Result<AppServerSpawnedSubagent> {
         let request_id = self.next_request_id();
         let response: ThreadSpawnResponse = self
             .client
@@ -449,16 +456,27 @@ impl AppServerSession {
                 request_id,
                 params: ThreadSpawnParams {
                     thread_id: parent_thread_id.to_string(),
-                    input: vec![UserInput::Text {
-                        text: prompt,
-                        text_elements: Vec::new(),
-                    }],
+                    input: prompt
+                        .map(|text| UserInput::Text {
+                            text,
+                            text_elements: Vec::new(),
+                        })
+                        .into_iter()
+                        .collect(),
                     task_name: None,
                 },
             })
             .await
             .map_err(|err| bootstrap_request_error("thread/spawn failed", err))?;
-        Ok(response.thread)
+        let agent_nickname = response.thread.agent_nickname.clone();
+        let agent_role = response.thread.agent_role.clone();
+        let started =
+            started_thread_from_spawn_response(response, config, self.thread_params_mode()).await?;
+        Ok(AppServerSpawnedSubagent {
+            started,
+            agent_nickname,
+            agent_role,
+        })
     }
 
     fn thread_params_mode(&self) -> ThreadParamsMode {
@@ -1505,6 +1523,21 @@ async fn started_thread_from_fork_response(
     })
 }
 
+async fn started_thread_from_spawn_response(
+    response: ThreadSpawnResponse,
+    config: &Config,
+    thread_params_mode: ThreadParamsMode,
+) -> Result<AppServerStartedThread> {
+    let session =
+        thread_session_state_from_thread_spawn_response(&response, config, thread_params_mode)
+            .await
+            .map_err(color_eyre::eyre::Report::msg)?;
+    Ok(AppServerStartedThread {
+        session,
+        turns: response.thread.turns,
+    })
+}
+
 async fn thread_session_state_from_thread_start_response(
     response: &ThreadStartResponse,
     config: &Config,
@@ -1580,6 +1613,38 @@ async fn thread_session_state_from_thread_resume_response(
 
 async fn thread_session_state_from_thread_fork_response(
     response: &ThreadForkResponse,
+    config: &Config,
+    thread_params_mode: ThreadParamsMode,
+) -> Result<ThreadSessionState, String> {
+    let permission_profile = display_permission_profile_from_thread_response(
+        &response.sandbox,
+        response.cwd.as_path(),
+        config,
+        thread_params_mode,
+    );
+    thread_session_state_from_thread_response(
+        &response.thread.id,
+        response.thread.forked_from_id.clone(),
+        response.thread.name.clone(),
+        response.thread.path.clone(),
+        response.model.clone(),
+        response.model_provider.clone(),
+        response.service_tier.clone(),
+        response.approval_policy,
+        response.approvals_reviewer.to_core(),
+        permission_profile,
+        response.active_permission_profile.clone().map(Into::into),
+        response.cwd.clone(),
+        response.runtime_workspace_roots.clone(),
+        response.instruction_sources.clone(),
+        response.reasoning_effort,
+        config,
+    )
+    .await
+}
+
+async fn thread_session_state_from_thread_spawn_response(
+    response: &ThreadSpawnResponse,
     config: &Config,
     thread_params_mode: ThreadParamsMode,
 ) -> Result<ThreadSessionState, String> {

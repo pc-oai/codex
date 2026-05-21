@@ -1723,9 +1723,16 @@ impl App {
             AppEvent::StartSubagent {
                 parent_thread_id,
                 prompt,
+                switch_to_child,
             } => {
-                self.handle_start_subagent(app_server, parent_thread_id, prompt)
-                    .await;
+                self.handle_start_subagent(
+                    tui,
+                    app_server,
+                    parent_thread_id,
+                    prompt,
+                    switch_to_child,
+                )
+                .await;
             }
             AppEvent::GenerateThreadNameSuggestion {
                 parent_thread_id,

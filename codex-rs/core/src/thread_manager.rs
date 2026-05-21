@@ -641,19 +641,13 @@ impl ThreadManager {
         self.start_thread_with_options(options).await
     }
 
-    /// Spawn a child agent below an already loaded thread and submit its first task.
+    /// Spawn a child agent below an already loaded thread.
     pub async fn spawn_thread_subagent(
         &self,
         parent_thread_id: ThreadId,
         task_name: String,
         input: Vec<UserInput>,
     ) -> CodexResult<(ThreadId, Arc<CodexThread>)> {
-        if input.is_empty() {
-            return Err(CodexErr::InvalidRequest(
-                "subagent input must not be empty".to_string(),
-            ));
-        }
-
         let parent_thread = self.get_thread(parent_thread_id).await?;
         let parent_snapshot = parent_thread.config_snapshot().await;
         let parent_base_instructions = parent_thread.codex.session.get_base_instructions().await;
@@ -701,7 +695,13 @@ impl ThreadManager {
             .agent_control
             .spawn_agent_with_metadata(
                 child_config,
-                input.into(),
+                if input.is_empty() {
+                    Op::ThreadSettings {
+                        thread_settings: Default::default(),
+                    }
+                } else {
+                    input.into()
+                },
                 Some(session_source),
                 SpawnAgentOptions::default(),
             )
