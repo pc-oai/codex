@@ -727,12 +727,12 @@ impl RuntimeKeymap {
                 toggle_condensed_transcript: default_bindings![alt(KeyCode::Char('c'))],
                 toggle_vim_mode: default_bindings![],
                 toggle_fast_mode: default_bindings![],
-                toggle_raw_output: default_bindings![alt(KeyCode::Char('r'))],
+                toggle_raw_output: default_bindings![],
             },
             chat: ChatKeymap {
                 decrease_reasoning_effort: default_bindings![alt(KeyCode::Char(','))],
                 increase_reasoning_effort: default_bindings![alt(KeyCode::Char('.'))],
-                rename_current_session: default_bindings![],
+                rename_current_session: default_bindings![alt(KeyCode::Char('r'))],
                 retitle_current_session: default_bindings![raw(KeyBinding::new(
                     KeyCode::Char('r'),
                     KeyModifiers::CONTROL | KeyModifiers::SHIFT,
@@ -1959,6 +1959,10 @@ mod tests {
             vec![key_hint::alt(KeyCode::Char('.'))]
         );
         assert_eq!(
+            runtime.chat.rename_current_session,
+            vec![key_hint::alt(KeyCode::Char('r'))]
+        );
+        assert_eq!(
             runtime.chat.edit_queued_message,
             vec![
                 key_hint::alt(KeyCode::Up),
@@ -2423,12 +2427,9 @@ mod tests {
     }
 
     #[test]
-    fn raw_output_toggle_defaults_to_alt_r() {
+    fn raw_output_toggle_is_unbound_by_default() {
         let runtime = RuntimeKeymap::defaults();
-        assert_eq!(
-            runtime.app.toggle_raw_output,
-            vec![key_hint::alt(KeyCode::Char('r'))]
-        );
+        assert_eq!(runtime.app.toggle_raw_output, Vec::new());
     }
 
     #[test]

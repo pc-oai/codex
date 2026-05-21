@@ -26,6 +26,15 @@ an ancestor of current `main` through the merge, but merge resolution and later
 refactors can still drop wiring or leave an old binary running. The paste inline
 limit and the `Alt-C` transcript toggle already demonstrated both failure modes.
 
+A follow-up source scan checked function names introduced by the old fork
+range against current `codex-rs`: every old-range function name still has a
+current source hit. That is a useful loss detector after the moved-file pass,
+but it still does not prove event routing, constructors, key bindings, or live
+terminal behavior. This pass found exactly that kind of drift: the manual
+rename action and its tests survived, but the old fork's default `Alt-R`
+binding had been displaced by the newer raw-output toggle until the default
+keymap was restored.
+
 ## Older backup-ref boundary
 
 The May pre-merge tag is the merge contract for this audit. The older local ref
@@ -180,10 +189,10 @@ merge.
 
 | Contract area | Current code evidence | Current verification evidence |
 | --- | --- | --- |
-| Composer clears, edit-last, queue controls | `clear_composer_draft`, `edit_last_message_from_command`, queued edit/discard/steer keymap actions | `ctrl_x_clears_composer_without_emitting_ops`, the edit-last preview/commit/cancel app tests, queued-message binding tests under `chatwidget/tests/composer_submission.rs`, private local build `v68` `Ctrl-E` smoke covering preview, `Esc` displaced-draft restoration, and rollback resubmit, `previous_message_edit_mode_uses_distinct_composer_accent`, remote `footer_mode_edit_last_message_snapshot`, and local build `v71` pencil edit-preview smoke |
+| Composer clears, edit-last, queue controls | `clear_composer_draft`, `edit_last_message_from_command`, queued edit/discard/steer keymap actions | `ctrl_x_clears_composer_without_emitting_ops`, the edit-last preview/commit/cancel app tests, `alt_down_steers_most_recent_queued_message`, `alt_enter_steers_most_recent_queued_message_while_one_is_queued`, queued-message binding tests under `chatwidget/tests/composer_submission.rs`, private local build `v68` `Ctrl-E` smoke covering preview, `Esc` displaced-draft restoration, and rollback resubmit, `previous_message_edit_mode_uses_distinct_composer_accent`, remote `footer_mode_edit_last_message_snapshot`, and local build `v71` pencil edit-preview smoke |
 | Session selector lookup and picker retrieval | `SessionSelectorLookup`, `thread_id_contains_normalized_fragment`, `resume_picker.rs` title/message/cwd/open-state paths | `short_session_id_fragments_match_across_uuid_hyphens`, `cargo test -p codex-tui resume_picker`, a source-build ambiguous-fragment terminal check that opened the narrowed picker, a unique-fragment check that resumed directly, and local build `v68` `resume --all` showing dense relative-time columns with live `open` indicators |
 | Thread delete and user work state | app-server `thread/delete`, `ThreadUserState`, local thread-store message-count overlay | `thread_delete_removes_materialized_rollout_and_sqlite_metadata`, `thread_metadata_update_sets_user_state_and_thread_read_preserves_it`, and local thread-store user-message-count coverage |
-| Titles and terminal identity | title suggestion app jobs, `/retitle`, `/emoji`, terminal-title session suffix formatting | title suggestion event-path tests, slash-command title tests, and `terminal_title_preview_uses_session_id_suffix_for_live_values` |
+| Titles and terminal identity | title suggestion app jobs, `/retitle`, `/emoji`, manual rename/retitle keymap actions, terminal-title session suffix formatting | title suggestion event-path tests, slash-command title tests, `alt_r_opens_manual_rename_prompt`, `ctrl_shift_r_requests_out_of_band_retitle_suggestion`, `terminal_title_preview_uses_session_id_suffix_for_live_values`, and a clean remote-built terminal smoke where `Alt-R` opened the `Name thread` prompt |
 | Saved cwd, fork boundary, resume replay | saved-session cwd resolution, fork truncation, saved exec replay, reload handoff | thread fork tests for last-completed-turn behavior, `replayed_completed_exec_turn_rehydrates_tool_output`, reload handoff tests, app draft replay tests, and a source-build `Ctrl-R` smoke that restored a non-empty draft after re-exec |
 | Rollback edit flow | rollback turn start payloads and `ThreadRolledBackNotification` routing | core rollback reconstruction tests plus app edit-last rollback tests |
 | Config and local CLI controls | `model_context_window_allow_unsafe_override`, `paste_text_inline_char_limit`, CLI `--private`, no-MCP/no-project-docs/config-file loader overrides | config/model tests, paste constructor coverage, CLI private flag coverage, and `constructor_applies_paste_text_inline_char_limit` |

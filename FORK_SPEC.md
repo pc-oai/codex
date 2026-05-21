@@ -18,6 +18,9 @@ and easy to scan.
 - `Ctrl-E`: open edit-last-message when the composer cursor is already at line
   end.
 - `Alt-E`: open queued-message edit.
+- `Alt-Down` / `Alt-Enter`: steer the newest queued follow-up immediately.
+- `Alt-R`: open manual rename for the current session.
+- `Ctrl-Shift-R`: request a fresh title suggestion for the current session.
 - `Ctrl-A`: open the compact agent menu when line-start movement has no more
   work to do.
 - `Ctrl-S`: rotate forward through agent threads.
@@ -56,7 +59,9 @@ Session restore:
 - active / parked / done state (separate from archive/delete)
 
 Titles:
+- manual rename (`Alt-R`)
 - retitle helper (`/retitle`)
+- retitle shortcut (`Ctrl-Shift-R`)
 - emoji helper (`/emoji`)
 - thread-aware terminal title (session ID item uses the ID suffix)
 
@@ -268,12 +273,15 @@ properties, treat that as a fork regression even if the merged tree compiles.
   Reverse-history search must not reclaim those two chords by default.
 - Rename, retitle, queued-message edit, queued-message discard, queued-message
   steer, and reverse-history bindings remain configurable local workflow
-  actions.
+  actions. The local defaults keep manual rename on `Alt-R`, retitle
+  suggestion on `Ctrl-Shift-R`, and immediate queued-message steer on both
+  `Alt-Down` and `Alt-Enter`.
 - Live keymap edits update queued-input footer hints from the newly resolved
   bindings. A picker that changes the edit binding must not leave the queued
   preview advertising an older default.
 - Local slash helpers keep repeated dogfooding work close to the session:
-  `/id`, `/copy-last-request`, `/delete`, `/effort`, and `/reload`.
+  `/id`, `/copy-last-request`, `/delete`, `/effort`, `/reload`, and the
+  lifecycle markers `/active`, `/park`, and `/done`.
 - Slash autocomplete keeps short command aliases visible alongside their long
   spellings, including aliases such as `/m`, `/e`, `/r`, `/c`, `/i`, `/rev`,
   `/t`, `/rt`, and `/em`.
