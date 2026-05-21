@@ -1589,8 +1589,13 @@ const MAIN_RESERVED_BINDINGS: &[(&str, KeyBinding)] = &[
         key_hint::shift(KeyCode::Tab),
     ),
     ("fixed.backtrack", key_hint::plain(KeyCode::Esc)),
-    ("fixed.previous_agent", key_hint::alt(KeyCode::Left)),
-    ("fixed.next_agent", key_hint::alt(KeyCode::Right)),
+    ("fixed.rotate_agent", key_hint::ctrl(KeyCode::Char('s'))),
+    (
+        "fixed.open_agent_picker",
+        key_hint::ctrl(KeyCode::Char('a')),
+    ),
+    ("fixed.previous_agent", key_hint::alt(KeyCode::Char('['))),
+    ("fixed.next_agent", key_hint::alt(KeyCode::Char(']'))),
     ("fixed.spawn_subagent", key_hint::alt(KeyCode::Char('\\'))),
     ("fixed.slash_command", key_hint::plain(KeyCode::Char('/'))),
     ("fixed.shell_command", key_hint::plain(KeyCode::Char('!'))),
@@ -2318,6 +2323,22 @@ mod tests {
         keymap.composer.submit = Some(one("ctrl-v"));
 
         expect_conflict(&keymap, "composer.submit", "fixed.paste_image");
+    }
+
+    #[test]
+    fn rejects_main_bindings_that_collide_with_agent_rotation_shortcut() {
+        let mut keymap = TuiKeymap::default();
+        keymap.composer.submit = Some(one("ctrl-s"));
+
+        expect_conflict(&keymap, "composer.submit", "fixed.rotate_agent");
+    }
+
+    #[test]
+    fn rejects_main_bindings_that_collide_with_agent_picker_shortcut() {
+        let mut keymap = TuiKeymap::default();
+        keymap.composer.submit = Some(one("ctrl-a"));
+
+        expect_conflict(&keymap, "composer.submit", "fixed.open_agent_picker");
     }
 
     #[test]

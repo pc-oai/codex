@@ -106,6 +106,12 @@ paths inside the reshaped picker: custom-title filtering and emphasis, message
 counts, compact cwd labels, the short ID suffix, local open-session detection
 through Talon sockets, and the warmed all-directories page used by `Ctrl-A`.
 
+The next keymap pass found the same shape of regression for agent rotation:
+`rotate_agent_shortcut_matches` still existed after the merge, but current app
+input only routed the explicit next-agent bracket shortcut. `Ctrl-S` belongs to
+the fixed forward-agent path from the old fork, so new configurable actions
+must not take it as a default binding.
+
 ### Current `HEAD` static anchors
 
 | Fork behavior | Current `HEAD` evidence found |
@@ -146,7 +152,7 @@ merge.
 | Rollback edit flow | rollback turn start payloads and `ThreadRolledBackNotification` routing | core rollback reconstruction tests plus app edit-last rollback tests |
 | Config and local CLI controls | `model_context_window_allow_unsafe_override`, `paste_text_inline_char_limit`, CLI `--private`, no-MCP/no-project-docs/config-file loader overrides | config/model tests, paste constructor coverage, CLI private flag coverage, and `constructor_applies_paste_text_inline_char_limit` |
 | Transcript and startup chrome | `ToggleCondensedTranscriptView`, suppressed startup header history, right-side footer/MCP status | condensed reflow and restored scrollback tests, clear-header snapshots, status/footer snapshots, and the `Alt-C` terminal smoke already done for archived local build `v64` |
-| Agent navigation and tree restore | agent menu/prewarm, `Alt-[` and `Alt-]` routing, resume subagent tree, reload tree handoff | agent prewarm tests, active-agent footer tests, `thread_resume_params_forward_tree_restore_flag`, `reload_exit_thread_id_prefers_primary_thread_for_tree_handoff`, subagent tree resume coverage, and local build `v74` selected-child reload smoke with the restored child draft confirmed through its Talon socket |
+| Agent navigation and tree restore | agent menu/prewarm, `Ctrl-S`, `Alt-[`, and `Alt-]` routing, resume subagent tree, reload tree handoff | agent prewarm tests, active-agent footer tests, `agent_shortcut_matches_explicit_rotation_bindings`, keymap fixed-shortcut conflict tests, `thread_resume_params_forward_tree_restore_flag`, `reload_exit_thread_id_prefers_primary_thread_for_tree_handoff`, subagent tree resume coverage, source TUI `v78` `Alt-\` plus `Ctrl-S` smoke that switched an idle spawned child back to main, and local build `v74` selected-child reload smoke with the restored child draft confirmed through its Talon socket |
 | Talon per-session control | `start_socket_acceptor`, delayed startup retry in `App::run`, `talon_ambient_state`, status-row summary bridge | Talon socket unit tests and a live source-build `command.sock` smoke on `v65`: `get_state`, `set_buffer`, and socket-triggered exit all returned responses |
 | Runtime/build visibility | `scripts/local-build-codex`, local build footer label, Ghostty OSC progress path, runtime metrics surfaces | local build snapshots, terminal progress unit tests, runtime metrics tests, full TUI snapshots, live source-build progress start/clear OSC bytes, and local build `v74` Ghostty captures showing the native top-surface progress bar during a real `sleep 60` turn and no bar after completion |
 | State compatibility | remapped old local applied migrations before current state migrator | `remaps_conflicting_local_migrations_before_current_state_migrations` and state runtime migration coverage |

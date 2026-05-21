@@ -20,6 +20,7 @@ and easy to scan.
 - `Alt-E`: open queued-message edit.
 - `Ctrl-A`: open the compact agent menu when line-start movement has no more
   work to do.
+- `Ctrl-S`: rotate forward through agent threads.
 - Session pickers use `Ctrl-A` to switch between current-directory sessions
   and all directories when a cwd filter exists.
 - Session pickers use `Ctrl-T` to filter to custom-titled sessions, and
@@ -256,6 +257,8 @@ properties, treat that as a fork regression even if the merged tree compiles.
   config is forward-compatible at load time so an older local binary ignores
   unknown future action names while generated schema stays strict for
   validation.
+- `Ctrl-R` and `Ctrl-S` stay reserved for reload and forward agent rotation.
+  Reverse-history search must not reclaim those two chords by default.
 - Rename, retitle, queued-message edit, queued-message discard, queued-message
   steer, and reverse-history bindings remain configurable local workflow
   actions.
@@ -289,6 +292,8 @@ properties, treat that as a fork regression even if the merged tree compiles.
 - `Alt-[` and `Alt-]` rotate to the previous and next agent thread. These
   explicit bracket shortcuts are part of the local workflow and must not be
   replaced by `Alt-Left` / `Alt-Right` word-motion chords.
+- `Ctrl-S` rotates forward through the same agent cycle for the fast one-key
+  path.
 - Active-agent footer labels refresh when a new subagent thread starts so the
   visible count and working-state marker do not lag behind the picker.
 - Loaded parent threads can spawn a child agent directly through app-server

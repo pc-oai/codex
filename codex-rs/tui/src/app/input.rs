@@ -118,7 +118,7 @@ impl App {
         }
         if self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
-            && next_agent_shortcut_matches(key_event)
+            && (next_agent_shortcut_matches(key_event) || rotate_agent_shortcut_matches(key_event))
         {
             if let Some(thread_id) = self
                 .adjacent_thread_id_for_switch_shortcut(app_server, AgentNavigationDirection::Next)
