@@ -347,6 +347,7 @@ properties, treat that as a fork regression even if the merged tree compiles.
   footer/status surfaces are enough; the large model/directory/permissions
   banner is startup noise in the local loop. A newly started thread must not
   briefly render a placeholder version of that table while it is configuring.
+  The accepted `tui.compact_session_header` setting does not re-enable one.
 - The Talon integration is per session. The live TUI control seam is the
   session-owned command socket; the state file remains ambient output for the
   same session. Together they expose editor/session state and narrow control
@@ -531,6 +532,7 @@ recovery evidence.
 | `e490ff82a8d9`, `6bce2cb81a3e` | Add isolated local target-dir support and the remote build offload guide | Local runtime |
 | `9bed483d8452`, `0501917bd33`, `5d061edc3bce` | Keep fixed agent/rename shortcuts from being reclaimed by newer defaults | Keyboard workflow |
 | `eeef0758b169`, `ebea69832eab`, `f9d543d1bf08` | Restore async fresh startup, bundled-model bootstrap, and compact configuring placeholder | Startup/chrome |
+| `90249ad37e71`, `319daa6ed213`, `5a7c58dda99b` | Remove the observed transient startup-table flash and close edit mode when an edited submit is accepted | Startup/chrome, editing |
 | `f90453686afb` | Cover standalone exec loader override propagation | Local runtime |
 
 ## Short session-ID suffix contract

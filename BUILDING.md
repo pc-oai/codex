@@ -197,3 +197,10 @@ codex-mac --lane tui-repair -- cargo check -p codex-tui -p codex-cli
   while `cargo check` from rebuilt dev artifacts passes. When source inspection
   shows the export is present, rerun the proof from a fresh target/build dir (or
   a clean lane) before editing around that error.
+- 2026-05-22: A clean terminal-proof build should use a uniquely named
+  worktree and an isolated local target when concurrent sessions are active.
+  One generic verification worktree was removed during
+  `scripts/local-build-codex`, and an attempted shared-target retry inherited
+  `RUSTC_WRAPPER=sccache` even though no local `sccache` executable was
+  available. Building from `codex-startup-edit-proof-5a7c` with that wrapper
+  unset produced archived clean build `v66` in `6m54s`.
