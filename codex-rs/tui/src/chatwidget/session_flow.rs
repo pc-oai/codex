@@ -105,14 +105,6 @@ impl ChatWidget {
                 show_fast_status,
             );
             self.apply_session_info_cell(session_info_cell);
-        } else if self
-            .transcript
-            .active_cell
-            .as_ref()
-            .is_some_and(|cell| cell.as_any().is::<history_cell::SessionHeaderHistoryCell>())
-        {
-            self.transcript.active_cell = None;
-            self.bump_active_cell_revision();
         }
         self.transcript.saw_copy_source_this_turn = false;
         self.refresh_skills_for_current_cwd(/*force_reload*/ true);

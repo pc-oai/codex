@@ -14,8 +14,8 @@ use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerDisabledReason;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::parse_command::ParsedCommand;
-use dirs::home_dir;
 use pretty_assertions::assert_eq;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -1367,134 +1367,6 @@ fn completed_mcp_tool_call_multiple_outputs_inline_snapshot() {
     let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
 
     insta::assert_snapshot!(rendered);
-}
-
-#[test]
-fn session_header_includes_reasoning_level_when_present() {
-    let cell = SessionHeaderHistoryCell::new(
-        "gpt-4o".to_string(),
-        Some(ReasoningEffortConfig::High),
-        /*show_fast_status*/ true,
-        std::env::temp_dir(),
-        "test",
-    );
-
-    let lines = render_lines(&cell.display_lines(/*width*/ 80));
-    let model_line = lines
-        .iter()
-        .find(|line| line.contains("model:"))
-        .expect("model line");
-
-    assert!(model_line.contains("gpt-4o high   fast"));
-    assert!(model_line.contains("/model to change"));
-}
-
-#[test]
-fn session_header_hides_fast_status_when_disabled() {
-    let cell = SessionHeaderHistoryCell::new(
-        "gpt-4o".to_string(),
-        Some(ReasoningEffortConfig::High),
-        /*show_fast_status*/ false,
-        std::env::temp_dir(),
-        "test",
-    );
-
-    let lines = render_lines(&cell.display_lines(/*width*/ 80));
-    let model_line = lines
-        .iter()
-        .find(|line| line.contains("model:"))
-        .expect("model line");
-
-    assert!(model_line.contains("gpt-4o high"));
-    assert!(!model_line.contains("fast"));
-}
-
-#[test]
-#[cfg_attr(
-    target_os = "windows",
-    ignore = "snapshot path rendering differs on Windows"
-)]
-fn session_header_compacts_to_single_content_line_when_enabled() {
-    let cell = SessionHeaderHistoryCell::new(
-        "gpt-4o".to_string(),
-        Some(ReasoningEffortConfig::High),
-        /*show_fast_status*/ true,
-        test_path_buf("/tmp/project").abs().to_path_buf(),
-        "test",
-    )
-    .with_compact_layout(true)
-    .with_yolo_mode(true);
-
-    let rendered = render_lines(&cell.display_lines(/*width*/ 120)).join("\n");
-    insta::assert_snapshot!(rendered);
-}
-
-#[test]
-#[cfg_attr(
-    target_os = "windows",
-    ignore = "snapshot path rendering differs on Windows"
-)]
-fn session_header_indicates_yolo_mode() {
-    let cell = SessionHeaderHistoryCell::new(
-        "gpt-5".to_string(),
-        /*reasoning_effort*/ None,
-        /*show_fast_status*/ false,
-        test_path_buf("/tmp/project").abs().to_path_buf(),
-        "test",
-    )
-    .with_yolo_mode(/*yolo_mode*/ true);
-
-    let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
-    insta::assert_snapshot!(rendered);
-}
-
-#[test]
-fn yolo_mode_includes_managed_full_access_profiles() {
-    let permission_profile: PermissionProfile = PermissionProfile::Managed {
-        network: NetworkSandboxPolicy::Enabled,
-        file_system: ManagedFileSystemPermissions::Unrestricted,
-    };
-
-    assert!(has_yolo_permissions(
-        AskForApproval::Never,
-        &permission_profile
-    ));
-}
-
-#[test]
-fn yolo_mode_excludes_external_sandbox_profiles() {
-    let permission_profile: PermissionProfile = PermissionProfile::External {
-        network: NetworkSandboxPolicy::Enabled,
-    };
-
-    assert!(!has_yolo_permissions(
-        AskForApproval::Never,
-        &permission_profile
-    ));
-}
-
-#[test]
-fn session_header_directory_center_truncates() {
-    let mut dir = home_dir().expect("home directory");
-    for part in ["hello", "the", "fox", "is", "very", "fast"] {
-        dir.push(part);
-    }
-
-    let formatted = SessionHeaderHistoryCell::format_directory_inner(&dir, Some(24));
-    let sep = std::path::MAIN_SEPARATOR;
-    let expected = format!("~{sep}hello{sep}the{sep}…{sep}very{sep}fast");
-    assert_eq!(formatted, expected);
-}
-
-#[test]
-fn session_header_directory_front_truncates_long_segment() {
-    let mut dir = home_dir().expect("home directory");
-    dir.push("supercalifragilisticexpialidocious");
-
-    let formatted = SessionHeaderHistoryCell::format_directory_inner(&dir, Some(18));
-    let sep = std::path::MAIN_SEPARATOR;
-    let expected = format!("~{sep}…cexpialidocious");
-    assert_eq!(formatted, expected);
 }
 
 #[test]

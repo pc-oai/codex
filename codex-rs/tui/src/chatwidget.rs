@@ -174,8 +174,6 @@ use rand::Rng;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
-use ratatui::style::Modifier;
-use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Text;
@@ -1172,16 +1170,7 @@ impl ChatWidget {
     }
 
     fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
-        // Keep the placeholder session header as the active cell until real session info arrives,
-        // so we can merge headers instead of committing a duplicate box to history.
-        let keep_placeholder_header_active = !self.is_session_configured()
-            && self
-                .transcript
-                .active_cell
-                .as_ref()
-                .is_some_and(|c| c.as_any().is::<history_cell::SessionHeaderHistoryCell>());
-
-        if !keep_placeholder_header_active && !cell.display_lines(u16::MAX).is_empty() {
+        if !cell.display_lines(u16::MAX).is_empty() {
             // Only break exec grouping if the cell renders visible lines.
             if !self.has_active_stream_tail() {
                 self.flush_active_cell();
@@ -1373,49 +1362,8 @@ impl ChatWidget {
         self.bottom_pane.plugins().map(Vec::as_slice)
     }
 
-    /// Build a placeholder header cell while the session is configuring.
-    fn placeholder_session_header_cell(config: &Config) -> Box<dyn HistoryCell> {
-        let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
-        Box::new(
-            history_cell::SessionHeaderHistoryCell::new_with_style(
-                DEFAULT_MODEL_DISPLAY_NAME.to_string(),
-                placeholder_style,
-                /*reasoning_effort*/ None,
-                /*show_fast_status*/ false,
-                config.cwd.to_path_buf(),
-                CODEX_CLI_VERSION,
-            )
-            .with_yolo_mode(history_cell::is_yolo_mode(config))
-            .with_compact_layout(config.compact_session_header),
-        )
-    }
-
-    /// Merge the real session info cell with any placeholder header to avoid double boxes.
     fn apply_session_info_cell(&mut self, cell: history_cell::SessionInfoCell) {
-        let mut session_info_cell = Some(Box::new(cell) as Box<dyn HistoryCell>);
-        let merged_header = if let Some(active) = self.transcript.active_cell.take() {
-            if active
-                .as_any()
-                .is::<history_cell::SessionHeaderHistoryCell>()
-            {
-                // Reuse the existing placeholder header to avoid rendering two boxes.
-                if let Some(cell) = session_info_cell.take() {
-                    self.transcript.active_cell = Some(cell);
-                }
-                true
-            } else {
-                self.transcript.active_cell = Some(active);
-                false
-            }
-        } else {
-            false
-        };
-
-        self.flush_active_cell();
-
-        if !merged_header && let Some(cell) = session_info_cell {
-            self.add_boxed_history(cell);
-        }
+        self.add_boxed_history(Box::new(cell));
     }
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {

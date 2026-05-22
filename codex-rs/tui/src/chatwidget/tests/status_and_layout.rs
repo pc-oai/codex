@@ -14,15 +14,51 @@ fn enable_test_ambient_pet(chat: &mut ChatWidget) {
 }
 
 #[tokio::test]
-async fn startup_placeholder_uses_compact_session_header_config() {
-    let (chat, _rx, _ops) = make_chatwidget_manual_with_config(
-        /*model_override*/ None,
-        |config| config.compact_session_header = true,
-    )
-    .await;
+async fn startup_does_not_render_transient_session_header_table() {
+    let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+    let tx = AppEventSender::new(tx_raw);
+    let mut config = test_config().await;
+    config.compact_session_header = true;
+    let model = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+    let session_telemetry = test_session_telemetry(&config, model.as_str());
+    let init = ChatWidgetInit {
+        config: config.clone(),
+        frame_requester: FrameRequester::test_dummy(),
+        app_event_tx: tx,
+        workspace_command_runner: None,
+        initial_user_message: None,
+        enhanced_keys_supported: false,
+        has_chatgpt_account: false,
+        model_catalog: test_model_catalog(&config),
+        feedback: codex_feedback::CodexFeedback::new(),
+        is_first_run: true,
+        status_account_display: None,
+        runtime_model_provider_base_url: None,
+        initial_plan_type: None,
+        model: Some(model),
+        startup_tooltip_override: None,
+        status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        session_telemetry,
+    };
+    let mut chat = ChatWidget::new_with_app_event(init);
+    chat.show_welcome_banner = false;
+    chat.bottom_pane
+        .set_placeholder_text("Ask Codex to do anything".to_string());
 
-    let placeholder = ChatWidget::placeholder_session_header_cell(chat.config_ref());
-    assert_eq!(placeholder.display_lines(/*width*/ 120).len(), 3);
+    assert!(chat.active_cell_transcript_lines(/*width*/ 80).is_none());
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal =
+        ratatui::Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|frame| chat.render(frame.area(), frame.buffer_mut()))
+        .expect("draw initial startup frame");
+    let rendered = normalized_backend_snapshot(terminal.backend()).replace(
+        &crate::version::local_build_label().expect("source build label"),
+        "vNN",
+    );
+    assert_chatwidget_snapshot!("startup_without_transient_session_header_table", rendered);
 }
 
 /// Receiving a token usage update without usage clears the context indicator.

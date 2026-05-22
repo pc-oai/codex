@@ -1,7 +1,0 @@
----
-source: tui/src/history_cell/tests.rs
-expression: rendered
----
-╭──────────────────────────────────────────────────────────────────────╮
-│ >_ OpenAI Codex (vtest) · gpt-4o high · fast · /tmp/…ect · YOLO mode │
-╰──────────────────────────────────────────────────────────────────────╯

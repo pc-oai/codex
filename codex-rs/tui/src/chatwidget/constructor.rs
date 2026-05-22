@@ -61,7 +61,7 @@ impl ChatWidget {
             settings: fallback_default,
         };
 
-        let active_cell = Some(Self::placeholder_session_header_cell(&config));
+        let active_cell = None;
 
         let current_cwd = Some(config.cwd.to_path_buf());
         let effective_service_tier = config.service_tier.clone();

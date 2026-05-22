@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: rendered
+---
+"                                                                                "
+"                                                                                "
+"› Ask Codex to do anything                                                      "
+"                                                                                "
+"  gpt-5.5 default · /tmp/project                                           vNN  "
