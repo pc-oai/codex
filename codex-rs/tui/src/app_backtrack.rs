@@ -622,21 +622,19 @@ impl App {
             edited_user_message: Some(edited_user_message.clone()),
             submission_already_started: true,
         });
-        self.chat_widget
-            .show_edit_last_message_pending_hint(edit_last_message_hint_target(
-                usize::try_from(rollback_turns).unwrap_or(usize::MAX),
-            ));
         if !self
             .chat_widget
             .submit_user_message_from_backtrack_edit(edited_user_message, Some(rollback_turns))
         {
             self.handle_backtrack_rollback_failed();
+        } else {
+            self.chat_widget.clear_edit_last_message_hint();
         }
         true
     }
 
     pub(crate) fn backtrack_edit_preview_active(&self) -> bool {
-        self.backtrack.edit_preview.is_some()
+        self.backtrack.edit_preview.is_some() && !self.pending_combined_edit_rollback_active()
     }
 
     pub(crate) fn pending_combined_edit_rollback_active(&self) -> bool {

@@ -302,13 +302,6 @@ impl ChatWidget {
         ]));
     }
 
-    pub(crate) fn show_edit_last_message_pending_hint(&mut self, target: String) {
-        self.bottom_pane
-            .set_previous_message_edit_mode(/*enabled*/ true);
-        self.bottom_pane
-            .set_footer_hint_override(Some(vec![("Rewinding".to_string(), target)]));
-    }
-
     pub(crate) fn clear_edit_last_message_hint(&mut self) {
         self.bottom_pane
             .set_previous_message_edit_mode(/*enabled*/ false);

@@ -5486,13 +5486,8 @@ async fn commit_older_edit_last_message_preview_rolls_back_selected_depth() {
         })
     );
     assert!(op_rx.try_recv().is_err());
-    assert_eq!(
-        app.chat_widget.footer_hint_override_items(),
-        Some(vec![(
-            "Rewinding".to_string(),
-            "2 messages back".to_string(),
-        )])
-    );
+    assert!(!app.backtrack_edit_preview_active());
+    assert_eq!(app.chat_widget.footer_hint_override_items(), None);
 }
 
 #[tokio::test]
@@ -5561,15 +5556,9 @@ async fn commit_edit_last_message_preview_rolls_back_then_submits_edit() {
 
     assert!(app.commit_backtrack_edit_preview());
 
-    assert!(app.backtrack_edit_preview_active());
+    assert!(!app.backtrack_edit_preview_active());
     assert_eq!(app.chat_widget.composer_text_with_pending(), "");
-    assert_eq!(
-        app.chat_widget.footer_hint_override_items(),
-        Some(vec![(
-            "Rewinding".to_string(),
-            "previous message".to_string(),
-        )])
-    );
+    assert_eq!(app.chat_widget.footer_hint_override_items(), None);
     assert_matches!(
         op_rx.try_recv(),
         Ok(Op::UserTurn {
@@ -5705,6 +5694,8 @@ async fn failed_edit_last_message_preview_rollback_restores_edited_draft() {
             ..
         })
     );
+    assert!(!app.backtrack_edit_preview_active());
+    assert_eq!(app.chat_widget.footer_hint_override_items(), None);
 
     app.handle_backtrack_rollback_failed();
 
