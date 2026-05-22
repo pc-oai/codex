@@ -75,8 +75,7 @@ Agents:
 
 Transcript/chrome:
 - condensed transcript toggle
-- compact startup placeholder while the fresh session is still configuring
-- no durable boxed startup header in terminal history
+- no boxed or transient startup header table
 - split status / footer
 - compact turn timing
 - transcript browser experiments
@@ -111,7 +110,7 @@ Automation/builds:
   state, direct user-spawned subagents, and side conversations support many
   active threads in one TUI.
 - Transcript and chrome: condensed scrollback, local transcript experiments,
-  compact configuring chrome without a durable startup history banner, split
+  no startup session-header table, split
   status/footer surfaces, compact timing output, and optional Ghostty progress
   keep runtime state visible without transcript noise.
 - Automation and builds: per-session Talon control, invocation-local runtime
@@ -254,8 +253,10 @@ properties, treat that as a fork regression even if the merged tree compiles.
   does not throw away active draft work.
 - Edit-last-message remains reversible before commit. The idle shortcut opens
   a preview, `Esc` cancels it, and submission performs rollback and resubmit.
-  `Ctrl-E` can claim the shortcut when line-end movement would be a no-op, but
-  normal editor movement still wins while the cursor is inside a draft.
+  Once submission is accepted, the yellow editing surface closes immediately;
+  it reopens with the edited draft only if rollback fails. `Ctrl-E` can claim
+  the shortcut when line-end movement would be a no-op, but normal editor
+  movement still wins while the cursor is inside a draft.
 - App-server turn start supports rollback-driven edit flows, and the TUI routes
   rollback notifications through its thread state instead of losing the edit
   context during resume or side switching.
@@ -344,10 +345,8 @@ properties, treat that as a fork regression even if the merged tree compiles.
 - Fresh local TUI startup and clear-screen redraws do not print the boxed
   `OpenAI Codex` session header into terminal history. The prompt and compact
   footer/status surfaces are enough; the large model/directory/permissions
-  banner is startup noise in the local loop. While a newly started thread is
-  still configuring, the transient placeholder header honors
-  `tui.compact_session_header` so the temporary box stays one-line when the
-  placeholder is visible.
+  banner is startup noise in the local loop. A newly started thread must not
+  briefly render a placeholder version of that table while it is configuring.
 - The Talon integration is per session. The live TUI control seam is the
   session-owned command socket; the state file remains ambient output for the
   same session. Together they expose editor/session state and narrow control
