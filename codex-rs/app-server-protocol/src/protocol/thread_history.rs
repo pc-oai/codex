@@ -379,7 +379,11 @@ impl ThreadHistoryBuilder {
             .unwrap_or_else(|| self.new_turn(/*id*/ None));
         let id = self.next_item_id();
         let content = self.build_user_inputs(payload);
-        turn.items.push(ThreadItem::UserMessage { id, content });
+        turn.items.push(ThreadItem::UserMessage {
+            id,
+            client_id: payload.client_id.clone(),
+            content,
+        });
         self.current_turn = Some(turn);
     }
 
@@ -626,6 +630,7 @@ impl ThreadHistoryBuilder {
                 .clone()
                 .unwrap_or(serde_json::Value::Null),
             mcp_app_resource_uri: payload.mcp_app_resource_uri.clone(),
+            plugin_id: payload.plugin_id.clone(),
             result: None,
             error: None,
             duration_ms: None,
@@ -667,6 +672,7 @@ impl ThreadHistoryBuilder {
                 .clone()
                 .unwrap_or(serde_json::Value::Null),
             mcp_app_resource_uri: payload.mcp_app_resource_uri.clone(),
+            plugin_id: payload.plugin_id.clone(),
             result,
             error,
             duration_ms,
@@ -1345,6 +1351,7 @@ mod tests {
     fn builds_multiple_turns_with_reasoning_items() {
         let events = vec![
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "First turn".into(),
                 images: Some(vec!["https://example.com/one.png".into()]),
                 text_elements: Vec::new(),
@@ -1363,6 +1370,7 @@ mod tests {
                 text: "full reasoning".into(),
             }),
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "Second turn".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -1391,6 +1399,7 @@ mod tests {
             first.items[0],
             ThreadItem::UserMessage {
                 id: "item-1".into(),
+                client_id: None,
                 content: vec![
                     UserInput::Text {
                         text: "First turn".into(),
@@ -1429,6 +1438,7 @@ mod tests {
             second.items[0],
             ThreadItem::UserMessage {
                 id: "item-4".into(),
+                client_id: None,
                 content: vec![UserInput::Text {
                     text: "Second turn".into(),
                     text_elements: Vec::new(),
@@ -1451,6 +1461,7 @@ mod tests {
         let local_path = PathBuf::from("/tmp/local.png");
         let events = vec![RolloutItem::EventMsg(EventMsg::UserMessage(
             UserMessageEvent {
+                client_id: None,
                 message: "inspect these".into(),
                 images: Some(vec!["https://example.com/image.png".into()]),
                 image_details: vec![Some(ImageDetail::Original)],
@@ -1467,6 +1478,7 @@ mod tests {
             turns[0].items[0],
             ThreadItem::UserMessage {
                 id: "item-1".into(),
+                client_id: None,
                 content: vec![
                     UserInput::Text {
                         text: "inspect these".into(),
@@ -1492,11 +1504,13 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: turn_id.to_string(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "hello".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -1508,6 +1522,7 @@ mod tests {
                 turn_id: turn_id.to_string(),
                 item: CoreTurnItem::UserMessage(CoreUserMessageItem {
                     id: "user-item-id".to_string(),
+                    client_id: None,
                     content: Vec::new(),
                 }),
                 started_at_ms: 0,
@@ -1532,11 +1547,73 @@ mod tests {
             turns[0].items[0],
             ThreadItem::UserMessage {
                 id: "item-1".into(),
+                client_id: None,
                 content: vec![UserInput::Text {
                     text: "hello".into(),
                     text_elements: Vec::new(),
                 }],
             }
+        );
+    }
+
+    #[test]
+    fn preserves_user_message_client_id_from_legacy_event() {
+        let turn_id = "turn-1";
+        let thread_id = ThreadId::new();
+        let events = vec![
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: turn_id.to_string(),
+                trace_id: None,
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+            EventMsg::ItemStarted(ItemStartedEvent {
+                thread_id,
+                turn_id: turn_id.to_string(),
+                item: CoreTurnItem::UserMessage(CoreUserMessageItem {
+                    id: "user-item-id".to_string(),
+                    client_id: Some("client-message-1".to_string()),
+                    content: vec![codex_protocol::user_input::UserInput::Text {
+                        text: "hello".into(),
+                        text_elements: Vec::new(),
+                    }],
+                }),
+                started_at_ms: 0,
+            }),
+            EventMsg::UserMessage(UserMessageEvent {
+                client_id: Some("client-message-1".to_string()),
+                message: "hello".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+                ..Default::default()
+            }),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: turn_id.to_string(),
+                last_agent_message: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            }),
+        ];
+
+        let items = events
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        let turns = build_turns_from_rollout_items(&items);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(
+            turns[0].items,
+            vec![ThreadItem::UserMessage {
+                id: "item-1".into(),
+                client_id: Some("client-message-1".to_string()),
+                content: vec![UserInput::Text {
+                    text: "hello".into(),
+                    text_elements: Vec::new(),
+                }],
+            }]
         );
     }
 
@@ -1570,11 +1647,13 @@ mod tests {
         let items = vec![
             RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-image".into(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             })),
             RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "generate an image".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -1612,6 +1691,7 @@ mod tests {
                 items: vec![
                     ThreadItem::UserMessage {
                         id: "item-1".into(),
+                        client_id: None,
                         content: vec![UserInput::Text {
                             text: "generate an image".into(),
                             text_elements: Vec::new(),
@@ -1633,6 +1713,7 @@ mod tests {
     fn splits_reasoning_when_interleaved() {
         let events = vec![
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "Turn start".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -1686,6 +1767,7 @@ mod tests {
     fn marks_turn_as_interrupted_when_aborted() {
         let events = vec![
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "Please do the thing".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -1704,6 +1786,7 @@ mod tests {
                 duration_ms: None,
             }),
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "Let's try again".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -1731,6 +1814,7 @@ mod tests {
             first_turn.items[0],
             ThreadItem::UserMessage {
                 id: "item-1".into(),
+                client_id: None,
                 content: vec![UserInput::Text {
                     text: "Please do the thing".into(),
                     text_elements: Vec::new(),
@@ -1754,6 +1838,7 @@ mod tests {
             second_turn.items[0],
             ThreadItem::UserMessage {
                 id: "item-3".into(),
+                client_id: None,
                 content: vec![UserInput::Text {
                     text: "Let's try again".into(),
                     text_elements: Vec::new(),
@@ -1775,6 +1860,7 @@ mod tests {
     fn drops_last_turns_on_thread_rollback() {
         let events = vec![
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "First".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -1787,6 +1873,7 @@ mod tests {
                 memory_citation: None,
             }),
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "Second".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -1800,6 +1887,7 @@ mod tests {
             }),
             EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "Third".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -1829,6 +1917,7 @@ mod tests {
             vec![
                 ThreadItem::UserMessage {
                     id: "item-1".into(),
+                    client_id: None,
                     content: vec![UserInput::Text {
                         text: "First".into(),
                         text_elements: Vec::new(),
@@ -1847,6 +1936,7 @@ mod tests {
             vec![
                 ThreadItem::UserMessage {
                     id: "item-3".into(),
+                    client_id: None,
                     content: vec![UserInput::Text {
                         text: "Third".into(),
                         text_elements: Vec::new(),
@@ -1866,6 +1956,7 @@ mod tests {
     fn thread_rollback_clears_all_turns_when_num_turns_exceeds_history() {
         let events = vec![
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "One".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -1878,6 +1969,7 @@ mod tests {
                 memory_citation: None,
             }),
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "Two".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -1905,11 +1997,13 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-a".into(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "Start".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -1917,6 +2011,7 @@ mod tests {
                 ..Default::default()
             }),
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "Steer".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -1944,6 +2039,7 @@ mod tests {
             vec![
                 ThreadItem::UserMessage {
                     id: "item-1".into(),
+                    client_id: None,
                     content: vec![UserInput::Text {
                         text: "Start".into(),
                         text_elements: Vec::new(),
@@ -1951,6 +2047,7 @@ mod tests {
                 },
                 ThreadItem::UserMessage {
                     id: "item-2".into(),
+                    client_id: None,
                     content: vec![UserInput::Text {
                         text: "Steer".into(),
                         text_elements: Vec::new(),
@@ -1965,11 +2062,13 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-1".into(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "run tools".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -2012,6 +2111,7 @@ mod tests {
                     arguments: Some(serde_json::json!({"id":"123"})),
                 },
                 mcp_app_resource_uri: None,
+                plugin_id: None,
                 duration: Duration::from_millis(8),
                 result: Err("boom".into()),
             }),
@@ -2061,6 +2161,7 @@ mod tests {
                 status: McpToolCallStatus::Failed,
                 arguments: serde_json::json!({"id":"123"}),
                 mcp_app_resource_uri: None,
+                plugin_id: None,
                 result: None,
                 error: Some(McpToolCallError {
                     message: "boom".into(),
@@ -2075,6 +2176,7 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-1".into(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
@@ -2087,6 +2189,7 @@ mod tests {
                     arguments: Some(serde_json::json!({"id":"123"})),
                 },
                 mcp_app_resource_uri: Some("ui://widget/lookup.html".into()),
+                plugin_id: Some("sample@test".into()),
                 duration: Duration::from_millis(8),
                 result: Ok(CallToolResult {
                     content: vec![serde_json::json!({
@@ -2117,6 +2220,7 @@ mod tests {
                 status: McpToolCallStatus::Completed,
                 arguments: serde_json::json!({"id":"123"}),
                 mcp_app_resource_uri: Some("ui://widget/lookup.html".into()),
+                plugin_id: Some("sample@test".into()),
                 result: Some(Box::new(McpToolCallResult {
                     content: vec![serde_json::json!({
                         "type": "text",
@@ -2138,11 +2242,13 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-1".into(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "run dynamic tool".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -2204,11 +2310,13 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-1".into(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "run tools".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -2294,11 +2402,13 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-1".into(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "review this command".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -2378,11 +2488,13 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-1".into(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "run a subcommand".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -2442,11 +2554,13 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-a".into(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "first".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -2462,11 +2576,13 @@ mod tests {
             }),
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-b".into(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "second".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -2536,11 +2652,13 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-a".into(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "first".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -2556,11 +2674,13 @@ mod tests {
             }),
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-b".into(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "second".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -2610,6 +2730,7 @@ mod tests {
             turns[1].items[0],
             ThreadItem::UserMessage {
                 id: "item-2".into(),
+                client_id: None,
                 content: vec![UserInput::Text {
                     text: "second".into(),
                     text_elements: Vec::new(),
@@ -2625,11 +2746,13 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: turn_id.to_string(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "apply patch".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -2665,6 +2788,7 @@ mod tests {
             vec![
                 ThreadItem::UserMessage {
                     id: "item-1".into(),
+                    client_id: None,
                     content: vec![UserInput::Text {
                         text: "apply patch".into(),
                         text_elements: Vec::new(),
@@ -2690,11 +2814,13 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: turn_id.to_string(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "apply patch".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -2732,6 +2858,7 @@ mod tests {
             vec![
                 ThreadItem::UserMessage {
                     id: "item-1".into(),
+                    client_id: None,
                     content: vec![UserInput::Text {
                         text: "apply patch".into(),
                         text_elements: Vec::new(),
@@ -2755,11 +2882,13 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-a".into(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "first".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -2775,11 +2904,13 @@ mod tests {
             }),
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-b".into(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "second".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -2823,11 +2954,13 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-a".into(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "first".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -2843,11 +2976,13 @@ mod tests {
             }),
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-b".into(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "second".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -2884,6 +3019,7 @@ mod tests {
         let items = vec![
             RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-compact".into(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
@@ -2921,6 +3057,7 @@ mod tests {
     fn reconstructs_collab_resume_end_item() {
         let events = vec![
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "resume agent".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -2979,6 +3116,7 @@ mod tests {
             .expect("valid receiver thread id");
         let events = vec![
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "spawn agent".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -3041,6 +3179,7 @@ mod tests {
             .expect("valid receiver thread id");
         let events = vec![
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "redirect".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -3105,6 +3244,7 @@ mod tests {
     fn rollback_failed_error_does_not_mark_turn_failed() {
         let events = vec![
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "hello".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -3137,11 +3277,13 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-a".into(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "hello".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -3179,6 +3321,7 @@ mod tests {
                 items_view: TurnItemsView::Full,
                 items: vec![ThreadItem::UserMessage {
                     id: "item-1".into(),
+                    client_id: None,
                     content: vec![UserInput::Text {
                         text: "hello".into(),
                         text_elements: Vec::new(),
@@ -3193,11 +3336,13 @@ mod tests {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-a".into(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             }),
             EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "hello".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -3251,11 +3396,13 @@ mod tests {
         let items = vec![
             RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-a".into(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
             })),
             RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                client_id: None,
                 message: "hello".into(),
                 images: None,
                 text_elements: Vec::new(),
@@ -3299,6 +3446,7 @@ mod tests {
         let items = vec![
             RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-a".into(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),
@@ -3330,6 +3478,7 @@ mod tests {
         let items = vec![
             RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-a".into(),
+                trace_id: None,
                 started_at: None,
                 model_context_window: None,
                 collaboration_mode_kind: Default::default(),

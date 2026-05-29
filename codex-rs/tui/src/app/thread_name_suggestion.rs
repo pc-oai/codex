@@ -236,11 +236,11 @@ impl App {
 
 fn suggestion_from_turn(turn: &Turn) -> Option<&str> {
     turn.items.iter().rev().find_map(|item| match item {
-        ThreadItem::AgentMessage { text, phase, .. }
-            if matches!(phase, Some(MessagePhase::FinalAnswer) | None) =>
-        {
-            Some(text.as_str())
-        }
+        ThreadItem::AgentMessage {
+            text,
+            phase: Some(MessagePhase::FinalAnswer) | None,
+            ..
+        } => Some(text.as_str()),
         _ => None,
     })
 }
@@ -251,11 +251,11 @@ fn suggestion_from_notification(notification: &ServerNotification) -> Option<&st
     };
 
     match &notification.item {
-        ThreadItem::AgentMessage { text, phase, .. }
-            if matches!(phase, Some(MessagePhase::FinalAnswer) | None) =>
-        {
-            Some(text.as_str())
-        }
+        ThreadItem::AgentMessage {
+            text,
+            phase: Some(MessagePhase::FinalAnswer) | None,
+            ..
+        } => Some(text.as_str()),
         _ => None,
     }
 }

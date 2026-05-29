@@ -89,6 +89,7 @@ fn sample_turn_start_request() -> ClientRequest {
         request_id: RequestId::Integer(1),
         params: TurnStartParams {
             thread_id: "thread-1".to_string(),
+            client_user_message_id: None,
             input: Vec::new(),
             ..Default::default()
         },
@@ -101,8 +102,10 @@ fn sample_turn_steer_request() -> ClientRequest {
         params: TurnSteerParams {
             thread_id: "thread-1".to_string(),
             expected_turn_id: "turn-1".to_string(),
+            client_user_message_id: None,
             input: Vec::new(),
             responsesapi_client_metadata: None,
+            additional_context: None,
         },
     }
 }
@@ -137,6 +140,8 @@ fn sample_thread(thread_id: &str) -> Thread {
         git_info: None,
         name: None,
         turns: Vec::new(),
+        user_message_count: 0,
+        user_state: codex_app_server_protocol::ThreadUserState::Active,
     }
 }
 
@@ -171,6 +176,7 @@ fn sample_thread_resume_response() -> ClientResponsePayload {
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
         reasoning_effort: None,
+        initial_turns_page: None,
     })
 }
 

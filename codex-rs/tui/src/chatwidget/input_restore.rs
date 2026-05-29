@@ -271,6 +271,7 @@ impl ChatWidget {
                 .mention_bindings
                 .into_iter()
                 .map(|binding| crate::reload_handoff::ReloadMentionBinding {
+                    sigil: binding.sigil,
                     mention: binding.mention,
                     path: binding.path,
                 })
@@ -286,6 +287,7 @@ impl ChatWidget {
             .mention_bindings
             .into_iter()
             .map(|binding| MentionBinding {
+                sigil: binding.sigil,
                 mention: binding.mention,
                 path: binding.path,
             })

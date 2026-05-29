@@ -94,16 +94,12 @@ impl From<ThreadSource> for CoreThreadSource {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+#[derive(Default)]
 pub enum ThreadUserState {
+    #[default]
     Active,
     Done,
     Parked,
-}
-
-impl Default for ThreadUserState {
-    fn default() -> Self {
-        Self::Active
-    }
 }
 
 impl From<CoreThreadUserState> for ThreadUserState {

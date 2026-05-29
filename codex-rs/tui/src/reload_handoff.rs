@@ -25,8 +25,14 @@ const RESUME_DRAFT_DIR: &str = "resume-drafts";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ReloadMentionBinding {
+    #[serde(default = "default_reload_mention_sigil")]
+    pub(crate) sigil: char,
     pub(crate) mention: String,
     pub(crate) path: String,
+}
+
+fn default_reload_mention_sigil() -> char {
+    '$'
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -223,6 +229,7 @@ mod tests {
             local_image_paths: vec![PathBuf::from("/tmp/image.png")],
             remote_image_urls: vec!["https://example.com/image.png".to_string()],
             mention_bindings: vec![ReloadMentionBinding {
+                sigil: '$',
                 mention: "docs".to_string(),
                 path: "app://docs".to_string(),
             }],

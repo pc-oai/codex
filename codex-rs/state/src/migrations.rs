@@ -6,6 +6,7 @@ use sqlx::migrate::Migrator;
 pub(crate) static STATE_MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 pub(crate) static LOGS_MIGRATOR: Migrator = sqlx::migrate!("./logs_migrations");
 pub(crate) static GOALS_MIGRATOR: Migrator = sqlx::migrate!("./goals_migrations");
+pub(crate) static MEMORIES_MIGRATOR: Migrator = sqlx::migrate!("./memory_migrations");
 
 /// Allow an older Codex binary to open a database that has already been
 /// migrated by a newer binary running in parallel.
@@ -19,6 +20,8 @@ fn runtime_migrator(base: &'static Migrator) -> Migrator {
         ignore_missing: true,
         locking: base.locking,
         no_tx: base.no_tx,
+        table_name: base.table_name.clone(),
+        create_schemas: base.create_schemas.clone(),
     }
 }
 
@@ -32,6 +35,10 @@ pub(crate) fn runtime_logs_migrator() -> Migrator {
 
 pub(crate) fn runtime_goals_migrator() -> Migrator {
     runtime_migrator(&GOALS_MIGRATOR)
+}
+
+pub(crate) fn runtime_memories_migrator() -> Migrator {
+    runtime_migrator(&MEMORIES_MIGRATOR)
 }
 
 /// Renumber local-fork state migrations that were merged after upstream reused
@@ -50,9 +57,12 @@ pub(crate) async fn remap_legacy_state_migrations(pool: &SqlitePool) -> sqlx::Re
 
     let mut tx = pool.begin().await?;
     for (legacy_version, current_version, description) in [
-        (30_i64, 35_i64, "threads user message count"),
-        (33_i64, 36_i64, "threads user message count known"),
-        (34_i64, 37_i64, "threads user state"),
+        (37_i64, 38_i64, "threads user state"),
+        (36_i64, 37_i64, "threads user message count known"),
+        (35_i64, 36_i64, "threads user message count"),
+        (34_i64, 38_i64, "threads user state"),
+        (33_i64, 37_i64, "threads user message count known"),
+        (30_i64, 36_i64, "threads user message count"),
     ] {
         sqlx::query(
             "UPDATE _sqlx_migrations
@@ -107,6 +117,8 @@ mod tests {
             ignore_missing: STATE_MIGRATOR.ignore_missing,
             locking: STATE_MIGRATOR.locking,
             no_tx: STATE_MIGRATOR.no_tx,
+            table_name: STATE_MIGRATOR.table_name.clone(),
+            create_schemas: STATE_MIGRATOR.create_schemas.clone(),
         }
     }
 
@@ -169,7 +181,7 @@ mod tests {
             &pool,
             30,
             "threads user message count",
-            state_migration_checksum(35),
+            state_migration_checksum(36),
         )
         .await;
         insert_applied_migration(&pool, 31, "reset backfill for user message count", vec![31])
@@ -191,7 +203,7 @@ mod tests {
             &pool,
             33,
             "threads user message count known",
-            state_migration_checksum(36),
+            state_migration_checksum(37),
         )
         .await;
         sqlx::query("ALTER TABLE threads ADD COLUMN user_state TEXT NOT NULL DEFAULT 'active'")
@@ -206,7 +218,7 @@ mod tests {
             &pool,
             34,
             "threads user state",
-            state_migration_checksum(37),
+            state_migration_checksum(38),
         )
         .await;
 
@@ -235,9 +247,110 @@ mod tests {
                 (32, "threads preview".to_string()),
                 (33, "thread goal stopped statuses".to_string()),
                 (34, "drop thread goals".to_string()),
-                (35, "threads user message count".to_string()),
-                (36, "threads user message count known".to_string()),
-                (37, "threads user state".to_string()),
+                (35, "drop memory tables".to_string()),
+                (36, "threads user message count".to_string()),
+                (37, "threads user message count known".to_string()),
+                (38, "threads user state".to_string()),
+            ]
+        );
+
+        pool.close().await;
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn remaps_applied_local_migration_35_before_upstream_migration_35() {
+        let codex_home = unique_temp_dir();
+        tokio::fs::create_dir_all(&codex_home)
+            .await
+            .expect("create codex home");
+        let state_path = crate::state_db_path(codex_home.as_path());
+        let pool = SqlitePool::connect_with(
+            SqliteConnectOptions::new()
+                .filename(&state_path)
+                .create_if_missing(true),
+        )
+        .await
+        .expect("open state db");
+        Migrator {
+            migrations: Cow::Owned(
+                STATE_MIGRATOR
+                    .migrations
+                    .iter()
+                    .filter(|migration| migration.version <= 34)
+                    .cloned()
+                    .collect(),
+            ),
+            ignore_missing: STATE_MIGRATOR.ignore_missing,
+            locking: STATE_MIGRATOR.locking,
+            no_tx: STATE_MIGRATOR.no_tx,
+            table_name: STATE_MIGRATOR.table_name.clone(),
+            create_schemas: STATE_MIGRATOR.create_schemas.clone(),
+        }
+        .run(&pool)
+        .await
+        .expect("apply upstream state schema before migration 35");
+        sqlx::query("ALTER TABLE threads ADD COLUMN user_message_count INTEGER NOT NULL DEFAULT 0")
+            .execute(&pool)
+            .await
+            .expect("add local user message count");
+        sqlx::query(
+            "ALTER TABLE threads ADD COLUMN user_message_count_known INTEGER NOT NULL DEFAULT 0",
+        )
+        .execute(&pool)
+        .await
+        .expect("add local known user message count flag");
+        sqlx::query("ALTER TABLE threads ADD COLUMN user_state TEXT NOT NULL DEFAULT 'active'")
+            .execute(&pool)
+            .await
+            .expect("add local user state");
+        sqlx::query("CREATE INDEX idx_threads_user_state ON threads(user_state)")
+            .execute(&pool)
+            .await
+            .expect("index local user state");
+        insert_applied_migration(
+            &pool,
+            35,
+            "threads user message count",
+            state_migration_checksum(36),
+        )
+        .await;
+        insert_applied_migration(
+            &pool,
+            36,
+            "threads user message count known",
+            state_migration_checksum(37),
+        )
+        .await;
+        insert_applied_migration(
+            &pool,
+            37,
+            "threads user state",
+            state_migration_checksum(38),
+        )
+        .await;
+
+        remap_legacy_state_migrations(&pool)
+            .await
+            .expect("remap applied local migrations");
+        runtime_state_migrator()
+            .run(&pool)
+            .await
+            .expect("apply upstream migration 35");
+        let migrations = sqlx::query_as::<_, (i64, String)>(
+            "SELECT version, description FROM _sqlx_migrations WHERE version >= 35 ORDER BY version",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("read remapped migrations");
+
+        assert_eq!(
+            migrations,
+            vec![
+                (35, "drop memory tables".to_string()),
+                (36, "threads user message count".to_string()),
+                (37, "threads user message count known".to_string()),
+                (38, "threads user state".to_string()),
             ]
         );
 

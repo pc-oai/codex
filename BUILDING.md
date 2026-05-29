@@ -327,3 +327,8 @@ test runs rebuild or refresh snapshots that include the local build label.
   `3.147.77.99:22` timed out. Focused local snapshot tests had already passed;
   use local verification only as a declared fallback during this outage and
   re-check M4 reachability before assuming a builder-capacity shortfall.
+- 2026-05-29: `codex-mac --lane upstream-merge-20260529 --sync-back -- just
+  fix` failed before Clippy ran because the mirrored remote source tree has no
+  Git metadata and Cargo refused `--fix` without VCS protection. For remote
+  lint-fix runs through this mirror, pass `--allow-no-vcs` through `just fix`;
+  keep `--sync-back` because a successful run may edit source files.

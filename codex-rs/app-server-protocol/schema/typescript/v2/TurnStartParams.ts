@@ -10,7 +10,7 @@ import type { AskForApproval } from "./AskForApproval";
 import type { SandboxPolicy } from "./SandboxPolicy";
 import type { UserInput } from "./UserInput";
 
-export type TurnStartParams = {threadId: string, input: Array<UserInput>, /**
+export type TurnStartParams = {threadId: string, clientUserMessageId?: string | null, input: Array<UserInput>, /**
  * Optionally rewind the last N user turns before starting this turn.
  *
  * This supports direct edit flows that replace an earlier user message.

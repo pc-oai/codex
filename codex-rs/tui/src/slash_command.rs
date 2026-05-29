@@ -42,6 +42,7 @@ pub enum SlashCommand {
     #[strum(to_string = "emoji", serialize = "em")]
     Emoji,
     New,
+    Archive,
     Resume,
     #[strum(to_string = "reload", serialize = "r")]
     Reload,
@@ -56,6 +57,7 @@ pub enum SlashCommand {
     Side,
     #[strum(to_string = "id", serialize = "i")]
     Id,
+    Btw,
     Copy,
     Snippets,
     Paths,
@@ -118,6 +120,7 @@ impl SlashCommand {
             SlashCommand::Emoji => "prepend a representative emoji to the thread title",
             SlashCommand::Resume => "resume a saved chat",
             SlashCommand::Reload => "restart Codex and resume this chat",
+            SlashCommand::Archive => "archive this session and exit",
             SlashCommand::Clear => "clear the terminal and start a new chat",
             SlashCommand::Fork => "fork the current chat",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
@@ -154,7 +157,9 @@ impl SlashCommand {
             SlashCommand::Goal => "set or view the goal for a long-running task",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
             SlashCommand::Subagent => "spawn a child agent from this thread",
-            SlashCommand::Side => "start a side conversation in an ephemeral fork",
+            SlashCommand::Side | SlashCommand::Btw => {
+                "start a side conversation in an ephemeral fork"
+            }
             SlashCommand::Permissions => "choose what Codex is allowed to do",
             SlashCommand::Keymap => "remap TUI shortcuts",
             SlashCommand::Vim => "toggle Vim mode for the composer",
@@ -214,6 +219,7 @@ impl SlashCommand {
                 | SlashCommand::Pets
                 | SlashCommand::Side
                 | SlashCommand::Subagent
+                | SlashCommand::Btw
                 | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
         )
@@ -240,6 +246,7 @@ impl SlashCommand {
     pub fn available_during_task(self) -> bool {
         match self {
             SlashCommand::New
+            | SlashCommand::Archive
             | SlashCommand::Resume
             | SlashCommand::Reload
             | SlashCommand::Fork
@@ -293,7 +300,8 @@ impl SlashCommand {
             | SlashCommand::Quit
             | SlashCommand::Exit
             | SlashCommand::Delete
-            | SlashCommand::Side => true,
+            | SlashCommand::Side
+            | SlashCommand::Btw => true,
             SlashCommand::Condensed => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,

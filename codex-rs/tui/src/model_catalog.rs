@@ -15,10 +15,17 @@ impl ModelCatalog {
     }
 
     pub(crate) fn try_list_models(&self) -> Result<Vec<ModelPreset>, Infallible> {
-        Ok(self.models.read().expect("model catalog poisoned").clone())
+        Ok(self
+            .models
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone())
     }
 
     pub(crate) fn replace_models(&self, models: Vec<ModelPreset>) {
-        *self.models.write().expect("model catalog poisoned") = models;
+        *self
+            .models
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = models;
     }
 }

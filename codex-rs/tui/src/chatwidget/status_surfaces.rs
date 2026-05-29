@@ -1228,13 +1228,14 @@ fn permissions_display(config: &Config) -> String {
 
 fn approval_mode_display(config: &Config) -> String {
     let approval_policy = AskForApproval::from(config.permissions.approval_policy.value());
-    if approval_policy == AskForApproval::OnRequest
-        && config.approvals_reviewer == ApprovalsReviewer::AutoReview
-    {
-        "auto-review".to_string()
-    } else {
-        config.permissions.approval_policy.value().to_string()
+    if approval_policy == AskForApproval::OnRequest {
+        return match config.approvals_reviewer {
+            ApprovalsReviewer::AutoReview => "Approve for me".to_string(),
+            ApprovalsReviewer::User => "Ask for approval".to_string(),
+        };
     }
+
+    config.permissions.approval_policy.value().to_string()
 }
 
 fn format_context_used(used: i64, used_tokens: Option<i64>, style: TuiContextUsedStyle) -> String {

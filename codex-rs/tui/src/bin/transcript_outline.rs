@@ -103,11 +103,10 @@ fn run(data: BrowserData) -> Result<()> {
                 KeyCode::End | KeyCode::Char('G') => {
                     selected = data.nodes.len().saturating_sub(1);
                 }
-                KeyCode::Enter | KeyCode::Char(' ') => {
-                    if !expanded.insert(selected) {
+                KeyCode::Enter | KeyCode::Char(' ')
+                    if !expanded.insert(selected) => {
                         expanded.remove(&selected);
                     }
-                }
                 _ => {}
             }
         }
