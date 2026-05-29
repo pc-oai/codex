@@ -83,14 +83,7 @@ impl ChatWidget {
                 self.quit_shortcut_expires_at = None;
                 self.quit_shortcut_key = None;
             }
-            KeyEvent {
-                code: KeyCode::Char(c),
-                modifiers,
-                kind: KeyEventKind::Press,
-                ..
-            } if modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-                && c.eq_ignore_ascii_case(&'v') =>
-            {
+            key_event if is_image_paste_shortcut(key_event) => {
                 match paste_image_to_temp_png() {
                     Ok((path, info)) => {
                         tracing::debug!(
@@ -701,5 +694,49 @@ impl ChatWidget {
             thread_id,
             status: AppThreadGoalStatus::Paused,
         });
+    }
+}
+
+fn is_image_paste_shortcut(key_event: KeyEvent) -> bool {
+    matches!(
+        key_event,
+        KeyEvent {
+            code: KeyCode::Char(c),
+            modifiers,
+            kind: KeyEventKind::Press,
+            ..
+        } if modifiers.intersects(
+            KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER
+        ) && c.eq_ignore_ascii_case(&'v')
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_image_paste_shortcut;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyModifiers;
+
+    #[test]
+    fn image_paste_shortcuts_include_command_v_forwarded_by_ghostty() {
+        for modifiers in [
+            KeyModifiers::CONTROL,
+            KeyModifiers::ALT,
+            KeyModifiers::SUPER,
+        ] {
+            assert!(is_image_paste_shortcut(KeyEvent::new(
+                KeyCode::Char('v'),
+                modifiers
+            )));
+        }
+    }
+
+    #[test]
+    fn plain_v_is_not_an_image_paste_shortcut() {
+        assert!(!is_image_paste_shortcut(KeyEvent::new(
+            KeyCode::Char('v'),
+            KeyModifiers::NONE
+        )));
     }
 }

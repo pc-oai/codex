@@ -14,6 +14,8 @@ Update this list first when the fork's local key bindings change. Keep it short
 and easy to scan.
 
 - `Ctrl-R`: reload the current session in a fresh process.
+- `Cmd-V` / `Ctrl-V`: paste clipboard images into the composer. In Ghostty,
+  text `Cmd-V` remains normal terminal paste; image-only clipboards reach Codex.
 - `Ctrl-X`: clear the composer or discard the relevant queued draft.
 - `Ctrl-E`: open edit-last-message when the composer cursor is already at line
   end.
@@ -294,6 +296,9 @@ properties, treat that as a fork regression even if the merged tree compiles.
   arrow-key paths move.
 - Pasted text stays intact for submission while the inline display threshold is
   configurable with `paste_text_inline_char_limit`.
+- In Ghostty, an image-only clipboard makes its performable `Cmd-V` text-paste
+  binding pass the key through; Codex accepts the resulting `Cmd-V` as image
+  paste alongside `Ctrl-V`. Text clipboards remain ordinary terminal paste.
 - Local model experiments can opt in to a context window above the catalog max
   with `model_context_window_allow_unsafe_override`.
 
