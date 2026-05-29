@@ -49,6 +49,9 @@ pub struct ModelListParams {
     /// When true, include models that are hidden from the default picker list.
     #[ts(optional = nullable)]
     pub include_hidden: Option<bool>,
+    /// When true, refresh the remote model catalog instead of reusing a fresh cache entry.
+    #[ts(optional = nullable)]
+    pub force_refresh: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

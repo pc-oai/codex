@@ -189,7 +189,8 @@ impl ChatWidget {
     }
 
     pub(crate) fn replace_model_catalog(&mut self, models: Vec<ModelPreset>) {
-        self.model_catalog.replace_models(models);
+        self.model_catalog.replace_models(models.clone());
+        self.refresh_model_picker_if_open(models);
         self.refresh_model_dependent_surfaces();
     }
 
@@ -594,7 +595,11 @@ impl ChatWidget {
         if previous_mode != next_mode
             && (previous_model != next_model || previous_effort != next_effort)
         {
-            let mut message = format!("Model changed to {next_model}");
+            let mut message = if previous_model == next_model {
+                format!("Model changed to {next_model}")
+            } else {
+                format!("Model changed from {previous_model} to {next_model}")
+            };
             if !next_model.starts_with("codex-auto-") {
                 let reasoning_label = match next_effort {
                     Some(ReasoningEffortConfig::Minimal) => "minimal",

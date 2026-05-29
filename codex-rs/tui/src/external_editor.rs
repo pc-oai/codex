@@ -1,5 +1,6 @@
 use std::env;
 use std::fs;
+use std::path::Path;
 use std::process::Stdio;
 
 use color_eyre::eyre::Report;
@@ -52,13 +53,47 @@ pub(crate) fn resolve_editor_command() -> std::result::Result<Vec<String>, Edito
 
 /// Write `seed` to a temp file, launch the editor command, and return the updated content.
 pub(crate) async fn run_editor(seed: &str, editor_cmd: &[String]) -> Result<String> {
-    if editor_cmd.is_empty() {
-        return Err(Report::msg("editor command is empty"));
-    }
-
     // Convert to TempPath immediately so no file handle stays open on Windows.
     let temp_path = Builder::new().suffix(".md").tempfile()?.into_temp_path();
     fs::write(&temp_path, seed)?;
+
+    let mut cmd = editor_command(editor_cmd)?;
+    let status = cmd
+        .arg(&temp_path)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .await?;
+
+    if !status.success() {
+        return Err(Report::msg(format!("editor exited with status {status}")));
+    }
+
+    let contents = fs::read_to_string(&temp_path)?;
+    Ok(contents)
+}
+
+/// Open `path` with the configured external editor and wait for the editor command to finish.
+pub(crate) async fn open_path(path: &Path, editor_cmd: &[String]) -> Result<()> {
+    let status = editor_command(editor_cmd)?
+        .arg(path)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .await?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(Report::msg(format!("editor exited with status {status}")))
+    }
+}
+
+fn editor_command(editor_cmd: &[String]) -> Result<Command> {
+    if editor_cmd.is_empty() {
+        return Err(Report::msg("editor command is empty"));
+    }
 
     let mut cmd = {
         #[cfg(windows)]
@@ -74,20 +109,7 @@ pub(crate) async fn run_editor(seed: &str, editor_cmd: &[String]) -> Result<Stri
     if editor_cmd.len() > 1 {
         cmd.args(&editor_cmd[1..]);
     }
-    let status = cmd
-        .arg(&temp_path)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()
-        .await?;
-
-    if !status.success() {
-        return Err(Report::msg(format!("editor exited with status {status}")));
-    }
-
-    let contents = fs::read_to_string(&temp_path)?;
-    Ok(contents)
+    Ok(cmd)
 }
 
 #[cfg(test)]

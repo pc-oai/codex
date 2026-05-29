@@ -7,6 +7,7 @@ use super::*;
 
 const SIDE_EDIT_PREVIOUS_UNAVAILABLE_MESSAGE: &str =
     "Editing previous prompts is unavailable in side conversations.";
+const REDRAW_FULL_SCROLLBACK_FLASH_DURATION: Duration = Duration::from_secs(2);
 
 impl App {
     pub(super) async fn launch_external_editor(&mut self, tui: &mut tui::Tui) {
@@ -51,6 +52,44 @@ impl App {
                         "Failed to open editor: {err}",
                     )));
             }
+        }
+        tui.frame_requester().schedule_frame();
+    }
+
+    pub(super) async fn launch_touched_path_editor(&mut self, tui: &mut tui::Tui, path: PathBuf) {
+        let editor_cmd = match external_editor::resolve_editor_command() {
+            Ok(cmd) => cmd,
+            Err(external_editor::EditorError::MissingEditor) => {
+                self.chat_widget
+                    .add_to_history(history_cell::new_error_event(
+                        "Cannot open touched path: set $VISUAL or $EDITOR before starting Codex."
+                            .to_string(),
+                    ));
+                return;
+            }
+            Err(err) => {
+                self.chat_widget
+                    .add_to_history(history_cell::new_error_event(format!(
+                        "Failed to open touched path: {err}",
+                    )));
+                return;
+            }
+        };
+
+        let result = tui
+            .with_restored(tui::RestoreMode::KeepRaw, || async {
+                external_editor::open_path(&path, &editor_cmd).await
+            })
+            .await;
+        match result {
+            Ok(()) => self.chat_widget.add_info_message(
+                format!("Opened {} in your editor.", path.display()),
+                /*hint*/ None,
+            ),
+            Err(err) => self.chat_widget.add_error_message(format!(
+                "Failed to open {} in your editor: {err}",
+                path.display()
+            )),
         }
         tui.frame_requester().schedule_frame();
     }
@@ -103,6 +142,7 @@ impl App {
             && self.chat_widget.no_modal_or_popup_active()
             && previous_agent_shortcut_matches(key_event)
         {
+            self.show_agent_switch_status(tui);
             if let Some(thread_id) = self
                 .adjacent_thread_id_for_switch_shortcut(
                     app_server,
@@ -115,12 +155,14 @@ impl App {
                     .select_agent_thread_and_discard_side(tui, app_server, thread_id)
                     .await;
             }
+            self.chat_widget.set_agent_switch_pending(false);
             return;
         }
         if self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
-            && (next_agent_shortcut_matches(key_event) || rotate_agent_shortcut_matches(key_event))
+            && next_agent_shortcut_matches(key_event)
         {
+            self.show_agent_switch_status(tui);
             if let Some(thread_id) = self
                 .adjacent_thread_id_for_switch_shortcut(app_server, AgentNavigationDirection::Next)
                 .await
@@ -130,6 +172,7 @@ impl App {
                     .select_agent_thread_and_discard_side(tui, app_server, thread_id)
                     .await;
             }
+            self.chat_widget.set_agent_switch_pending(false);
             return;
         }
         if side_return_shortcut_matches(key_event)
@@ -137,10 +180,29 @@ impl App {
         {
             return;
         }
+        if let Some((thread_id, switch_target_thread_id)) =
+            self.ctrl_d_subagent_close_target(key_event)
+        {
+            self.close_active_subagent_from_shortcut(
+                tui,
+                app_server,
+                thread_id,
+                switch_target_thread_id,
+            )
+            .await;
+            return;
+        }
+        let spawn_history = if fresh_subagent_shortcut_matches(key_event) {
+            Some(ThreadSpawnHistory::Fresh)
+        } else if spawn_subagent_shortcut_matches(key_event) {
+            Some(ThreadSpawnHistory::FullHistory)
+        } else {
+            None
+        };
         if self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
             && self.chat_widget.composer_text_with_pending().is_empty()
-            && spawn_subagent_shortcut_matches(key_event)
+            && let Some(history) = spawn_history
         {
             if let Some(parent_thread_id) = self.chat_widget.thread_id() {
                 self.handle_start_subagent(
@@ -148,6 +210,7 @@ impl App {
                     app_server,
                     parent_thread_id,
                     /*prompt*/ None,
+                    history,
                     /*switch_to_child*/ true,
                 )
                 .await;
@@ -218,6 +281,43 @@ impl App {
                 self.transcript_cells.clone(),
                 self.keymap.pager.clone(),
             ));
+            tui.frame_requester().schedule_frame();
+            return;
+        }
+
+        if app_keymap_shortcuts_available && self.keymap.app.open_snippets.is_pressed(key_event) {
+            self.chat_widget.open_snippet_picker();
+            return;
+        }
+
+        if app_keymap_shortcuts_available
+            && self.keymap.app.open_touched_paths.is_pressed(key_event)
+        {
+            self.chat_widget.open_touched_path_menu();
+            return;
+        }
+
+        if app_keymap_shortcuts_available && self.keymap.app.open_model_picker.is_pressed(key_event)
+        {
+            self.chat_widget.open_model_popup();
+            return;
+        }
+
+        if app_keymap_shortcuts_available
+            && self.keymap.app.redraw_full_scrollback.is_pressed(key_event)
+        {
+            match self.redraw_full_scrollback(tui) {
+                Ok(true) => self.chat_widget.show_footer_flash(
+                    Line::from("Redrew full scrollback.".cyan().bold()),
+                    REDRAW_FULL_SCROLLBACK_FLASH_DURATION,
+                ),
+                Ok(false) => {}
+                Err(err) => {
+                    tracing::warn!(error = %err, "failed to redraw full native scrollback");
+                    self.chat_widget
+                        .add_error_message(format!("Failed to redraw scrollback: {err}"));
+                }
+            }
             tui.frame_requester().schedule_frame();
             return;
         }
@@ -334,6 +434,11 @@ impl App {
             && !self.chat_widget.should_handle_vim_insert_escape(key_event)
     }
 
+    fn show_agent_switch_status(&mut self, tui: &mut tui::Tui) {
+        self.chat_widget.set_agent_switch_pending(true);
+        self.draw_agent_switch_feedback(tui);
+    }
+
     fn show_agent_switch_feedback(&mut self, tui: &mut tui::Tui, target_thread_id: ThreadId) {
         if let Some(strip) = self.agent_navigation.agent_neighbor_strip(
             Some(target_thread_id),
@@ -343,6 +448,10 @@ impl App {
             self.chat_widget
                 .show_agent_navigation_strip(strip, Duration::from_millis(900));
         }
+        self.draw_agent_switch_feedback(tui);
+    }
+
+    fn draw_agent_switch_feedback(&mut self, tui: &mut tui::Tui) {
         let terminal_resize_reflow_enabled = self.terminal_resize_reflow_enabled();
         if terminal_resize_reflow_enabled && let Err(err) = self.handle_draw_pre_render(tui) {
             tracing::debug!(error = %err, "failed to prepare agent switch feedback frame");
@@ -422,6 +531,25 @@ impl App {
         self.overlay.is_none() && self.chat_widget.no_modal_or_popup_active()
     }
 
+    fn ctrl_d_subagent_close_target(&self, key_event: KeyEvent) -> Option<(ThreadId, ThreadId)> {
+        if !crate::key_hint::ctrl(KeyCode::Char('d')).is_press(key_event)
+            || !self.app_keymap_shortcuts_available()
+            || !self.chat_widget.composer_is_empty()
+        {
+            return None;
+        }
+        let thread_id = self.active_thread_id?;
+        let primary_thread_id = self.primary_thread_id?;
+        if self.side_threads.contains_key(&thread_id) || thread_id == primary_thread_id {
+            return None;
+        }
+        let switch_target_thread_id = self
+            .agent_navigation
+            .adjacent_thread_id(Some(thread_id), AgentNavigationDirection::Previous)
+            .unwrap_or(primary_thread_id);
+        Some((thread_id, switch_target_thread_id))
+    }
+
     pub(super) fn refresh_status_line(&mut self) {
         self.chat_widget.refresh_status_line();
     }
@@ -430,6 +558,10 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::super::test_support::make_test_app;
+    use codex_protocol::ThreadId;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyModifiers;
 
     #[tokio::test]
     async fn app_keymap_shortcuts_are_disabled_while_keymap_view_is_active() {
@@ -440,5 +572,47 @@ mod tests {
         app.chat_widget.open_keymap_debug(&keymap);
 
         assert!(!app.app_keymap_shortcuts_available());
+    }
+
+    #[tokio::test]
+    async fn ctrl_d_close_target_claims_empty_visible_subagent_only() {
+        let mut app = make_test_app().await;
+        let primary_thread_id = ThreadId::new();
+        let previous_thread_id = ThreadId::new();
+        let child_thread_id = ThreadId::new();
+        let ctrl_d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
+        app.primary_thread_id = Some(primary_thread_id);
+        app.active_thread_id = Some(child_thread_id);
+        app.agent_navigation.upsert(
+            primary_thread_id,
+            Some("Main".to_string()),
+            None,
+            /*is_closed*/ false,
+        );
+        app.agent_navigation.upsert(
+            previous_thread_id,
+            Some("Previous".to_string()),
+            None,
+            /*is_closed*/ false,
+        );
+        app.agent_navigation.upsert(
+            child_thread_id,
+            Some("Child".to_string()),
+            None,
+            /*is_closed*/ false,
+        );
+
+        assert_eq!(
+            app.ctrl_d_subagent_close_target(ctrl_d),
+            Some((child_thread_id, previous_thread_id))
+        );
+
+        app.active_thread_id = Some(primary_thread_id);
+        assert_eq!(app.ctrl_d_subagent_close_target(ctrl_d), None);
+
+        app.active_thread_id = Some(child_thread_id);
+        app.chat_widget
+            .set_composer_text("draft".to_string(), Vec::new(), Vec::new());
+        assert_eq!(app.ctrl_d_subagent_close_target(ctrl_d), None);
     }
 }

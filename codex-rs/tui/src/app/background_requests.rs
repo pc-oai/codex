@@ -116,6 +116,20 @@ impl App {
         });
     }
 
+    pub(super) fn refresh_model_catalog(&mut self, app_server: &AppServerSession) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = AppServerSession::models_list_with_request_handle(
+                request_handle,
+                /*force_refresh*/ true,
+            )
+            .await
+            .map_err(|err| format!("{err:#}"));
+            app_event_tx.send(AppEvent::ModelCatalogLoaded { result });
+        });
+    }
+
     pub(super) fn fetch_plugins_list(&mut self, app_server: &AppServerSession, cwd: PathBuf) {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();

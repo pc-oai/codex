@@ -1438,6 +1438,121 @@ async fn slash_copy_reports_when_no_agent_response_exists() {
 }
 
 #[tokio::test]
+async fn slash_snippets_opens_last_response_snippet_picker() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.transcript.last_agent_markdown =
+        Some("Run `cargo test -p codex-tui`, then inspect `tui/src/keymap.rs`.".to_string());
+
+    chat.dispatch_command(SlashCommand::Snippets);
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    let menu = popup
+        .lines()
+        .take(/*menu rows*/ 4)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_chatwidget_snapshot!("slash_snippets_picker", menu);
+    assert!(popup.contains("cargo test -p codex-tui"));
+    assert!(popup.contains("tui/src/keymap.rs"));
+}
+
+#[tokio::test]
+async fn snippet_picker_accepts_selected_snippet_for_copy() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.transcript.last_agent_markdown =
+        Some("Run `cargo test -p codex-tui`, then inspect `tui/src/keymap.rs`.".to_string());
+    chat.open_snippet_picker();
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let AppEvent::CopySnippet(snippet) = rx.try_recv().expect("copy snippet event") else {
+        panic!("expected copy snippet event");
+    };
+    assert_eq!(snippet, "cargo test -p codex-tui");
+}
+
+#[tokio::test]
+async fn snippet_shortcut_cycles_to_older_response_while_menu_is_open() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.record_visible_user_turn_for_copy();
+    chat.record_agent_markdown("Older uses `older-snippet`.");
+    chat.record_visible_user_turn_for_copy();
+    chat.record_agent_markdown("Latest uses `latest-snippet`.");
+    chat.open_snippet_picker();
+
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("latest-snippet"));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+
+    let AppEvent::OpenSnippetMenuFromResponse(response_offset) =
+        rx.try_recv().expect("snippet cycle event")
+    else {
+        panic!("expected snippet cycle event");
+    };
+    assert_eq!(response_offset, 1);
+
+    chat.open_snippet_menu_from_response(response_offset);
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(popup.contains("older-snippet"));
+    assert!(!popup.contains("latest-snippet"));
+}
+
+#[tokio::test]
+async fn snippet_copy_stores_clipboard_lease() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.copy_snippet_to_clipboard_with("CODEX_HOME".to_string(), |copied| {
+        assert_eq!(copied, "CODEX_HOME");
+        Ok(Some(crate::clipboard_copy::ClipboardLease::test()))
+    });
+
+    assert!(chat.clipboard_lease.is_some());
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one info message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(rendered.contains("Copied snippet to clipboard"));
+    assert!(rendered.contains("CODEX_HOME"));
+}
+
+#[tokio::test]
+async fn slash_paths_opens_recent_touched_path_in_editor() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let mut changes = HashMap::new();
+    changes.insert(
+        PathBuf::from("src/lib.rs"),
+        FileChange::Update {
+            unified_diff: String::new(),
+            move_path: None,
+        },
+    );
+    handle_patch_apply_end(
+        &mut chat,
+        "patch-1",
+        "turn-1",
+        changes,
+        AppServerPatchApplyStatus::Completed,
+    );
+
+    chat.dispatch_command(SlashCommand::Paths);
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(
+        popup.contains("src/lib.rs"),
+        "expected path menu, got {popup:?}"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let AppEvent::OpenTouchedPathInEditor { path } =
+        rx.try_recv().expect("open touched path event")
+    else {
+        panic!("expected open touched path event");
+    };
+    assert_eq!(path, chat.config.cwd.as_path().join("src/lib.rs"));
+}
+
+#[tokio::test]
 async fn slash_effort_opens_current_model_reasoning_popup() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     chat.thread_id = Some(ThreadId::new());
@@ -2319,6 +2434,7 @@ async fn slash_subagent_requests_child_spawn_while_task_running() {
         Ok(AppEvent::StartSubagent {
             parent_thread_id: emitted_parent_thread_id,
             prompt: Some(prompt),
+            history: codex_app_server_protocol::ThreadSpawnHistory::FullHistory,
             switch_to_child: false,
         }) if emitted_parent_thread_id == parent_thread_id
             && prompt == "check parser tests"

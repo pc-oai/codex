@@ -50,6 +50,23 @@
       ],
       "type": "object"
     },
+    "ThreadSpawnHistory": {
+      "oneOf": [
+        {
+          "enum": [
+            "fresh"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Copy committed parent turns and omit any currently in-progress parent turn.",
+          "enum": [
+            "fullHistory"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "UserInput": {
       "oneOf": [
         {
@@ -195,6 +212,17 @@
   },
   "description": "Spawn a child agent thread from an already loaded parent thread.",
   "properties": {
+    "history": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ThreadSpawnHistory"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Parent transcript history to include in the child thread.\n\nOmitted copies completed parent turns and excludes any turn still in progress."
+    },
     "input": {
       "items": {
         "$ref": "#/definitions/UserInput"

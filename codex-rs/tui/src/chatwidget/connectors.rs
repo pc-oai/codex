@@ -12,7 +12,7 @@ pub(super) enum ConnectorsCacheState {
     Failed(String),
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(super) struct ConnectorsState {
     pub(super) cache: ConnectorsCacheState,
     pub(super) partial_snapshot: Option<ConnectorsSnapshot>,

@@ -47,6 +47,8 @@ use codex_app_server_protocol::ThreadApproveGuardianDeniedActionParams;
 use codex_app_server_protocol::ThreadApproveGuardianDeniedActionResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
+use codex_app_server_protocol::ThreadCloseParams;
+use codex_app_server_protocol::ThreadCloseResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadDeleteParams;
@@ -91,6 +93,7 @@ use codex_app_server_protocol::ThreadSetNameResponse;
 use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadShellCommandResponse;
 use codex_app_server_protocol::ThreadSource;
+use codex_app_server_protocol::ThreadSpawnHistory;
 use codex_app_server_protocol::ThreadSpawnParams;
 use codex_app_server_protocol::ThreadSpawnResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -398,8 +401,11 @@ impl AppServerSession {
         config: Config,
         thread_id: ThreadId,
     ) -> Result<AppServerStartedThread> {
-        self.resume_thread_with_tree_restore(config, thread_id, /*resume_subagent_tree*/ false)
-            .await
+        self.resume_thread_with_tree_restore(
+            config, thread_id, /*resume_subagent_tree*/ false,
+            /*preserve_recorded_model*/ false,
+        )
+        .await
     }
 
     pub(crate) async fn resume_thread_with_tree_restore(
@@ -407,6 +413,7 @@ impl AppServerSession {
         config: Config,
         thread_id: ThreadId,
         resume_subagent_tree: bool,
+        preserve_recorded_model: bool,
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let response: ThreadResumeResponse = self
@@ -419,6 +426,7 @@ impl AppServerSession {
                     self.thread_params_mode(),
                     self.remote_cwd_override.as_deref(),
                     resume_subagent_tree,
+                    preserve_recorded_model,
                 ),
             })
             .await
@@ -470,6 +478,7 @@ impl AppServerSession {
         config: &Config,
         parent_thread_id: ThreadId,
         prompt: Option<String>,
+        history: ThreadSpawnHistory,
     ) -> Result<AppServerSpawnedSubagent> {
         let request_id = self.next_request_id();
         let response: ThreadSpawnResponse = self
@@ -485,6 +494,7 @@ impl AppServerSession {
                         })
                         .into_iter()
                         .collect(),
+                    history: Some(history),
                     task_name: None,
                 },
             })
@@ -773,6 +783,21 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/delete failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_close(&mut self, thread_id: ThreadId) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadCloseResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadClose {
+                request_id,
+                params: ThreadCloseParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/close failed in TUI")?;
         Ok(())
     }
 
@@ -1150,6 +1175,29 @@ impl AppServerSession {
             .collect())
     }
 
+    pub(crate) async fn models_list_with_request_handle(
+        request_handle: AppServerRequestHandle,
+        force_refresh: bool,
+    ) -> Result<Vec<ModelPreset>> {
+        let response: ModelListResponse = request_handle
+            .request_typed(ClientRequest::ModelList {
+                request_id: next_background_request_id(),
+                params: ModelListParams {
+                    cursor: None,
+                    limit: None,
+                    include_hidden: Some(true),
+                    force_refresh: force_refresh.then_some(true),
+                },
+            })
+            .await
+            .wrap_err("model/list failed during TUI model catalog refresh")?;
+        Ok(response
+            .data
+            .into_iter()
+            .map(model_preset_from_api_model)
+            .collect())
+    }
+
     pub(crate) async fn resume_thread_with_request_handle(
         request_handle: AppServerRequestHandle,
         config: Config,
@@ -1166,6 +1214,7 @@ impl AppServerSession {
                     thread_params_mode,
                     remote_cwd_override.as_deref(),
                     /*resume_subagent_tree*/ false,
+                    /*preserve_recorded_model*/ false,
                 ),
             })
             .await
@@ -1468,6 +1517,7 @@ fn thread_resume_params_from_config(
     thread_params_mode: ThreadParamsMode,
     remote_cwd_override: Option<&std::path::Path>,
     resume_subagent_tree: bool,
+    preserve_recorded_model: bool,
 ) -> ThreadResumeParams {
     let permissions = permissions_selection_from_config(&config, thread_params_mode);
     let sandbox = permissions
@@ -1481,8 +1531,12 @@ fn thread_resume_params_from_config(
         .flatten();
     ThreadResumeParams {
         thread_id: thread_id.to_string(),
-        model: config.model.clone(),
-        model_provider: thread_params_mode.model_provider_from_config(&config),
+        model: (!preserve_recorded_model)
+            .then(|| config.model.clone())
+            .flatten(),
+        model_provider: (!preserve_recorded_model)
+            .then(|| thread_params_mode.model_provider_from_config(&config))
+            .flatten(),
         service_tier: service_tier_override_from_config(&config),
         cwd: thread_cwd_from_config(&config, thread_params_mode, remote_cwd_override),
         runtime_workspace_roots: Some(
@@ -2098,6 +2152,7 @@ mod tests {
             ThreadParamsMode::Remote,
             /*remote_cwd_override*/ None,
             /*resume_subagent_tree*/ false,
+            /*preserve_recorded_model*/ false,
         );
         let fork = thread_fork_params_from_config(
             config,
@@ -2145,9 +2200,29 @@ mod tests {
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
             /*resume_subagent_tree*/ true,
+            /*preserve_recorded_model*/ false,
         );
 
         assert!(resume.resume_subagent_tree);
+    }
+
+    #[tokio::test]
+    async fn reload_resume_params_preserve_recorded_model() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut config = build_config(&temp_dir).await;
+        config.model = Some("gpt-reload-test".to_string());
+
+        let resume = thread_resume_params_from_config(
+            config,
+            ThreadId::new(),
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+            /*resume_subagent_tree*/ false,
+            /*preserve_recorded_model*/ true,
+        );
+
+        assert_eq!(resume.model, None);
+        assert_eq!(resume.model_provider, None);
     }
 
     #[test]
@@ -2232,6 +2307,7 @@ mod tests {
             ThreadParamsMode::Remote,
             Some(remote_cwd.as_path()),
             /*resume_subagent_tree*/ false,
+            /*preserve_recorded_model*/ false,
         );
         let fork = thread_fork_params_from_config(
             config,
@@ -2283,6 +2359,7 @@ mod tests {
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
             /*resume_subagent_tree*/ false,
+            /*preserve_recorded_model*/ false,
         );
         let fork = thread_fork_params_from_config(
             config,

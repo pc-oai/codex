@@ -982,6 +982,9 @@ impl MessageProcessor {
                     )
                     .await
             }
+            ClientRequest::ThreadClose { params, .. } => {
+                self.thread_processor.thread_close(params).await
+            }
             ClientRequest::ThreadUnsubscribe { params, .. } => {
                 self.thread_processor
                     .thread_unsubscribe(&request_id, params)

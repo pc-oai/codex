@@ -26,6 +26,7 @@ use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
+use codex_app_server_protocol::ThreadSpawnHistory;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
@@ -158,6 +159,7 @@ pub(crate) enum AppEvent {
     StartSubagent {
         parent_thread_id: ThreadId,
         prompt: Option<String>,
+        history: ThreadSpawnHistory,
         switch_to_child: bool,
     },
 
@@ -243,6 +245,17 @@ pub(crate) enum AppEvent {
 
     /// Copy the most recent user request in the visible transcript.
     CopyLastRequest,
+
+    /// Copy one snippet selected from a recent agent response.
+    CopySnippet(String),
+
+    /// Open the snippet menu at or after one recent agent response offset.
+    OpenSnippetMenuFromResponse(usize),
+
+    /// Open one touched path in the configured external editor.
+    OpenTouchedPathInEditor {
+        path: PathBuf,
+    },
 
     /// Request to exit the application.
     ///
@@ -338,6 +351,14 @@ pub(crate) enum AppEvent {
     ConnectorsLoaded {
         result: Result<ConnectorsSnapshot, String>,
         is_final: bool,
+    },
+
+    /// Refresh the model catalog after opening the model picker.
+    RefreshModelCatalog,
+
+    /// Result of a background model catalog refresh.
+    ModelCatalogLoaded {
+        result: Result<Vec<ModelPreset>, String>,
     },
 
     /// Result of computing a `/diff` command.
@@ -669,6 +690,7 @@ pub(crate) enum AppEvent {
 
     /// Persist the selected model and reasoning effort to the appropriate config.
     PersistModelSelection {
+        previous_model: String,
         model: String,
         effort: Option<ReasoningEffort>,
     },
@@ -726,6 +748,9 @@ pub(crate) enum AppEvent {
     OpenAllModelsPopup {
         models: Vec<ModelPreset>,
     },
+
+    /// Open a prompt to select a model by explicit model id.
+    OpenCustomModelPrompt,
 
     /// Open the confirmation prompt before enabling full access mode.
     OpenFullAccessConfirmation {

@@ -168,6 +168,7 @@ use super::footer::FooterKeyHints;
 use super::footer::FooterMode;
 use super::footer::FooterProps;
 use super::footer::GoalStatusIndicator;
+use super::footer::InFlightSubmissionMode;
 use super::footer::SummaryLeft;
 use super::footer::can_show_left_with_context;
 use super::footer::context_window_line;
@@ -362,6 +363,8 @@ pub(crate) struct ChatComposer {
     /// full text remains available for submission.
     paste_text_inline_char_limit: usize,
     previous_message_edit_mode: bool,
+    subagent_spawn_pending: bool,
+    in_flight_submission_mode: InFlightSubmissionMode,
     /// Slash-command draft staged for local recall after application-level dispatch.
     ///
     /// This slot is intentionally separate from `ChatComposerHistory` so inline slash commands can
@@ -389,6 +392,7 @@ pub(crate) struct ChatComposer {
     history_search: Option<HistorySearchSession>,
     submit_keys: Vec<KeyBinding>,
     queue_keys: Vec<KeyBinding>,
+    toggle_submission_mode_keys: Vec<KeyBinding>,
     toggle_shortcuts_keys: Vec<KeyBinding>,
     history_search_previous_keys: Vec<KeyBinding>,
     history_search_next_keys: Vec<KeyBinding>,
@@ -508,6 +512,7 @@ impl ChatComposer {
                 goal_status_indicator: None,
                 ide_context_active: false,
                 status_line_value: None,
+                status_line_submission_mode_after_span: None,
                 status_line_right_value: None,
                 status_line_hyperlink_url: None,
                 status_line_enabled: false,
@@ -521,6 +526,7 @@ impl ChatComposer {
                     use_shift_enter_hint,
                 ),
                 queue_key: Some(key_hint::plain(KeyCode::Tab)),
+                toggle_submission_mode_key: Some(key_hint::alt(KeyCode::Enter)),
                 toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
                 history_search_key: primary_binding(
                     &default_keymap.composer.history_search_previous,
@@ -535,6 +541,8 @@ impl ChatComposer {
             is_task_running: false,
             paste_text_inline_char_limit: LARGE_PASTE_CHAR_THRESHOLD,
             previous_message_edit_mode: false,
+            subagent_spawn_pending: false,
+            in_flight_submission_mode: InFlightSubmissionMode::Steer,
             pending_slash_command_history: None,
             #[cfg(not(target_os = "linux"))]
             next_element_id: 0,
@@ -557,6 +565,7 @@ impl ChatComposer {
             history_search: None,
             submit_keys: vec![key_hint::plain(KeyCode::Enter)],
             queue_keys: vec![key_hint::plain(KeyCode::Tab)],
+            toggle_submission_mode_keys: vec![key_hint::alt(KeyCode::Enter)],
             toggle_shortcuts_keys: vec![
                 key_hint::plain(KeyCode::Char('?')),
                 key_hint::shift(KeyCode::Char('?')),
@@ -661,6 +670,7 @@ impl ChatComposer {
     pub(crate) fn set_keymap_bindings(&mut self, keymap: &RuntimeKeymap) {
         self.submit_keys = keymap.composer.submit.clone();
         self.queue_keys = keymap.composer.queue.clone();
+        self.toggle_submission_mode_keys = keymap.composer.toggle_submission_mode.clone();
         self.toggle_shortcuts_keys = keymap.composer.toggle_shortcuts.clone();
         self.history_search_previous_keys = keymap.composer.history_search_previous.clone();
         self.history_search_next_keys = keymap.composer.history_search_next.clone();
@@ -674,6 +684,8 @@ impl ChatComposer {
             self.footer.use_shift_enter_hint,
         );
         self.footer.queue_key = primary_binding(&keymap.composer.queue);
+        self.footer.toggle_submission_mode_key =
+            primary_binding(&keymap.composer.toggle_submission_mode);
         self.footer.toggle_shortcuts_key = primary_binding(&keymap.composer.toggle_shortcuts);
         self.footer.history_search_key = primary_binding(&keymap.composer.history_search_previous);
         self.footer.reasoning_down_key = primary_binding(&keymap.chat.decrease_reasoning_effort);
@@ -711,9 +723,15 @@ impl ChatComposer {
         self.side_conversation_active = active;
     }
 
-    /// Compatibility shim for tests that still toggle the removed steer mode flag.
+    /// Compatibility shim for tests written before in-flight mode became one-shot.
     #[cfg(test)]
-    pub fn set_steer_enabled(&mut self, _enabled: bool) {}
+    pub fn set_steer_enabled(&mut self, enabled: bool) {
+        self.in_flight_submission_mode = if enabled {
+            InFlightSubmissionMode::Steer
+        } else {
+            InFlightSubmissionMode::Queue
+        };
+    }
     /// Centralized feature gating keeps config checks out of call sites.
     fn popups_enabled(&self) -> bool {
         self.config.popups_enabled
@@ -803,7 +821,7 @@ impl ChatComposer {
         area: Rect,
         textarea_right_reserve: u16,
     ) -> Option<(u16, u16)> {
-        if !self.draft.input_enabled || self.attachments.selected_remote_image_index.is_some() {
+        if !self.input_enabled() || self.attachments.selected_remote_image_index.is_some() {
             return None;
         }
 
@@ -911,6 +929,10 @@ impl ChatComposer {
     /// In all cases, clears any paste-burst Enter suppression state so a real paste cannot affect
     /// the next user Enter key, then syncs popup state.
     pub fn handle_paste(&mut self, pasted: String) -> bool {
+        if !self.input_enabled() {
+            return false;
+        }
+
         let pasted = pasted.replace("\r\n", "\n").replace('\r', "\n");
         let char_count = pasted.chars().count();
         if char_count > self.paste_text_inline_char_limit {
@@ -1176,7 +1198,7 @@ impl ChatComposer {
 
     /// Returns whether the composer currently accepts interactive draft edits.
     pub(crate) fn input_enabled(&self) -> bool {
-        self.draft.input_enabled
+        self.draft.input_enabled && !self.subagent_spawn_pending
     }
 
     pub(crate) fn pending_pastes(&self) -> Vec<(String, String)> {
@@ -1199,6 +1221,15 @@ impl ChatComposer {
 
     pub(crate) fn set_previous_message_edit_mode(&mut self, enabled: bool) {
         self.previous_message_edit_mode = enabled;
+    }
+
+    pub(crate) fn set_subagent_spawn_pending(&mut self, pending: bool) {
+        self.subagent_spawn_pending = pending;
+
+        // Avoid leaving interactive popups open while input is blocked.
+        if pending && self.popups.active() {
+            self.popups.active = ActivePopup::None;
+        }
     }
 
     #[cfg(test)]
@@ -1241,7 +1272,6 @@ impl ChatComposer {
         urls
     }
 
-    #[cfg(test)]
     pub(crate) fn show_footer_flash(&mut self, line: Line<'static>, duration: Duration) {
         self.footer.show_flash(line, duration);
     }
@@ -1680,7 +1710,7 @@ impl ChatComposer {
 
     /// Handle a key event coming from the main UI.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
-        if !self.draft.input_enabled {
+        if !self.input_enabled() {
             return (InputResult::None, false);
         }
 
@@ -1694,6 +1724,14 @@ impl ChatComposer {
 
         if Self::is_history_search_key(&key_event, &self.history_search_previous_keys) {
             return self.begin_history_search();
+        }
+
+        if self.toggle_submission_mode_keys.is_pressed(key_event) {
+            self.in_flight_submission_mode = match self.in_flight_submission_mode {
+                InFlightSubmissionMode::Steer => InFlightSubmissionMode::Queue,
+                InFlightSubmissionMode::Queue => InFlightSubmissionMode::Steer,
+            };
+            return (InputResult::None, true);
         }
 
         let result = match &mut self.popups.active {
@@ -2861,6 +2899,14 @@ impl ChatComposer {
     fn handle_submission(&mut self, should_queue: bool) -> (InputResult, bool) {
         let result = self.handle_submission_with_time(should_queue, Instant::now());
         self.reset_vim_mode_after_successful_dispatch(&result.0);
+        if self.is_task_running
+            && matches!(
+                &result.0,
+                InputResult::Submitted { .. } | InputResult::Queued { .. }
+            )
+        {
+            self.in_flight_submission_mode = InFlightSubmissionMode::Steer;
+        }
         result
     }
 
@@ -3299,7 +3345,10 @@ impl ChatComposer {
         }
 
         if self.submit_keys.is_pressed(key_event) {
-            return self.handle_submission(/*should_queue*/ false);
+            return self.handle_submission(
+                self.is_task_running
+                    && self.in_flight_submission_mode == InFlightSubmissionMode::Queue,
+            );
         }
 
         if let KeyEvent {
@@ -3620,14 +3669,19 @@ impl ChatComposer {
             esc_backtrack_hint: self.footer.esc_backtrack_hint,
             use_shift_enter_hint: self.footer.use_shift_enter_hint,
             is_task_running: self.is_task_running,
+            in_flight_submission_mode: self.in_flight_submission_mode,
             quit_shortcut_key: self.footer.quit_shortcut_key,
             collaboration_modes_enabled: self.collaboration_modes_enabled,
             is_wsl,
             status_line_value: self.footer.status_line_value.clone(),
+            status_line_submission_mode_after_span: self
+                .footer
+                .status_line_submission_mode_after_span,
             status_line_enabled: self.footer.status_line_enabled,
             key_hints: FooterKeyHints {
                 toggle_shortcuts: self.footer.toggle_shortcuts_key,
                 queue: self.footer.queue_key,
+                toggle_submission_mode: self.footer.toggle_submission_mode_key,
                 insert_newline: self.footer.insert_newline_key,
                 external_editor: self.footer.external_editor_key,
                 edit_previous: Some(key_hint::plain(KeyCode::Esc)),
@@ -4207,6 +4261,9 @@ impl ChatComposer {
 
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
+        if !running {
+            self.in_flight_submission_mode = InFlightSubmissionMode::Steer;
+        }
     }
 
     pub(crate) fn set_context_window(&mut self, percent: Option<i64>, used_tokens: Option<i64>) {
@@ -4233,6 +4290,17 @@ impl ChatComposer {
             return false;
         }
         self.footer.status_line_value = status_line;
+        true
+    }
+
+    pub(crate) fn set_status_line_submission_mode_after_span(
+        &mut self,
+        span_index: Option<usize>,
+    ) -> bool {
+        if self.footer.status_line_submission_mode_after_span == span_index {
+            return false;
+        }
+        self.footer.status_line_submission_mode_after_span = span_index;
         true
     }
 
@@ -4492,7 +4560,9 @@ impl ChatComposer {
                 let show_cycle_hint = !footer_props.is_task_running
                     && self.footer.collaboration_mode_indicator.is_some();
                 let show_shortcuts_hint = match footer_props.mode {
-                    FooterMode::ComposerEmpty => !self.is_in_paste_burst(),
+                    FooterMode::ComposerEmpty => {
+                        !footer_props.is_task_running && !self.is_in_paste_burst()
+                    }
                     FooterMode::ComposerHasDraft => false,
                     FooterMode::HistorySearch
                     | FooterMode::QuitShortcutReminder
@@ -4500,10 +4570,11 @@ impl ChatComposer {
                     | FooterMode::EscHint => false,
                 };
                 let show_queue_hint = match footer_props.mode {
-                    FooterMode::ComposerHasDraft => footer_props.is_task_running,
+                    FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft => {
+                        footer_props.is_task_running
+                    }
                     FooterMode::HistorySearch
                     | FooterMode::QuitShortcutReminder
-                    | FooterMode::ComposerEmpty
                     | FooterMode::ShortcutOverlay
                     | FooterMode::EscHint => false,
                 };
@@ -4629,7 +4700,7 @@ impl ChatComposer {
                                         show_cycle_hint,
                                         show_shortcuts_hint,
                                         show_queue_hint,
-                                        footer_props.key_hints,
+                                        &footer_props,
                                     ))
                                 }
                                 FooterMode::EscHint
@@ -4720,7 +4791,7 @@ impl ChatComposer {
                 }
             }
         }
-        let style = if self.previous_message_edit_mode {
+        let style = if self.previous_message_edit_mode || self.subagent_spawn_pending {
             edited_user_message_style()
         } else {
             user_message_style()
@@ -4732,7 +4803,7 @@ impl ChatComposer {
                 .render_ref(remote_images_rect, buf);
         }
         if !textarea_rect.is_empty() {
-            let prompt = if self.draft.input_enabled {
+            let prompt = if self.input_enabled() {
                 if self.draft.is_bash_mode {
                     Span::from("!").light_red().bold()
                 } else if self.previous_message_edit_mode {
@@ -4758,7 +4829,7 @@ impl ChatComposer {
 
         let mut state = self.draft.textarea_state.borrow_mut();
         let textarea_is_empty = self.draft.textarea.text().is_empty() && !self.draft.is_bash_mode;
-        if self.draft.input_enabled {
+        if self.input_enabled() {
             if let Some(mask_char) = mask_char {
                 self.draft
                     .textarea
@@ -4789,9 +4860,11 @@ impl ChatComposer {
                 }
             }
         }
-        if !self.draft.input_enabled || textarea_is_empty {
-            let text = if self.draft.input_enabled {
+        if !self.input_enabled() || textarea_is_empty {
+            let text = if self.input_enabled() {
                 self.placeholder_text.as_str().to_string()
+            } else if self.subagent_spawn_pending {
+                "Starting subagent...".to_string()
             } else {
                 self.draft
                     .input_disabled_placeholder
@@ -8095,6 +8168,136 @@ mod tests {
     }
 
     #[test]
+    fn alt_enter_toggles_only_the_next_running_submission_to_queue() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_task_running(/*running*/ true);
+        composer
+            .draft
+            .textarea
+            .set_text_clearing_elements("wait until later");
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
+
+        assert_eq!(result, InputResult::None);
+        assert!(needs_redraw);
+        assert_eq!(
+            composer.in_flight_submission_mode,
+            InFlightSubmissionMode::Queue
+        );
+        assert_eq!(composer.current_text(), "wait until later");
+
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(
+            result,
+            InputResult::Queued { ref text, .. } if text == "wait until later"
+        ));
+        assert_eq!(
+            composer.in_flight_submission_mode,
+            InFlightSubmissionMode::Steer
+        );
+
+        composer
+            .draft
+            .textarea
+            .set_text_clearing_elements("steer now");
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(
+            result,
+            InputResult::Submitted { ref text, .. } if text == "steer now"
+        ));
+    }
+
+    #[test]
+    fn alt_enter_while_idle_primes_the_first_running_follow_up_to_queue() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
+        assert_eq!(result, InputResult::None);
+        assert!(needs_redraw);
+        assert_eq!(
+            composer.in_flight_submission_mode,
+            InFlightSubmissionMode::Queue
+        );
+
+        composer
+            .draft
+            .textarea
+            .set_text_clearing_elements("start working");
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(
+            result,
+            InputResult::Submitted { ref text, .. } if text == "start working"
+        ));
+        assert_eq!(
+            composer.in_flight_submission_mode,
+            InFlightSubmissionMode::Queue
+        );
+
+        composer.set_task_running(/*running*/ true);
+        composer
+            .draft
+            .textarea
+            .set_text_clearing_elements("wait until later");
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(
+            result,
+            InputResult::Queued { ref text, .. } if text == "wait until later"
+        ));
+        assert_eq!(
+            composer.in_flight_submission_mode,
+            InFlightSubmissionMode::Steer
+        );
+    }
+
+    #[test]
+    fn finishing_task_clears_toggled_queue_submission_mode() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_task_running(/*running*/ true);
+        composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
+        assert_eq!(
+            composer.in_flight_submission_mode,
+            InFlightSubmissionMode::Queue
+        );
+
+        composer.set_task_running(/*running*/ false);
+
+        assert_eq!(
+            composer.in_flight_submission_mode,
+            InFlightSubmissionMode::Steer
+        );
+    }
+
+    #[test]
     fn tab_queues_slash_led_prompts_while_task_running_without_validation() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
@@ -10858,6 +11061,9 @@ mod tests {
 
         assert_eq!(result, InputResult::None);
         assert!(!needs_redraw);
+        assert_eq!(composer.current_text(), "hello");
+
+        assert!(!composer.handle_paste(" pasted".to_string()));
         assert_eq!(composer.current_text(), "hello");
 
         let area = Rect {

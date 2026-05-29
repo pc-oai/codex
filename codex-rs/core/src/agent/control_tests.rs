@@ -2,6 +2,7 @@ use super::*;
 use crate::CodexThread;
 use crate::StateDbHandle;
 use crate::ThreadManager;
+use crate::ThreadSpawnHistory;
 use crate::agent::agent_status_from_event;
 use crate::config::AgentRoleConfig;
 use crate::config::Config;
@@ -957,6 +958,104 @@ async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
     assert!(
         history_contains_text(history.raw_items(), "unflushed final answer"),
         "forked child history should include unflushed assistant final answers after flushing the parent rollout"
+    );
+
+    let _ = harness
+        .control
+        .shutdown_live_agent(child_thread_id)
+        .await
+        .expect("child shutdown should submit");
+    let _ = parent_thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("parent shutdown should submit");
+}
+
+#[tokio::test]
+async fn thread_spawn_full_history_drops_in_progress_parent_turn() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+
+    parent_thread
+        .codex
+        .session
+        .persist_rollout_items(&[
+            RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "completed-parent-turn".to_string(),
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: ModeKind::Default,
+            })),
+            RolloutItem::ResponseItem(ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "completed parent context".to_string(),
+                }],
+                phase: None,
+            }),
+            RolloutItem::ResponseItem(assistant_message(
+                "completed parent answer",
+                Some(MessagePhase::FinalAnswer),
+            )),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "completed-parent-turn".to_string(),
+                last_agent_message: Some("completed parent answer".to_string()),
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            })),
+            RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "active-parent-turn".to_string(),
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: ModeKind::Default,
+            })),
+            RolloutItem::ResponseItem(ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "unfinished parent request".to_string(),
+                }],
+                phase: None,
+            }),
+        ])
+        .await;
+    parent_thread
+        .codex
+        .session
+        .ensure_rollout_materialized()
+        .await;
+    parent_thread
+        .codex
+        .session
+        .flush_rollout()
+        .await
+        .expect("parent rollout should flush");
+
+    let (child_thread_id, child_thread) = harness
+        .manager
+        .spawn_thread_subagent(
+            parent_thread_id,
+            "idle_child".to_string(),
+            Vec::new(),
+            ThreadSpawnHistory::FullHistory,
+        )
+        .await
+        .expect("full-history thread spawn should succeed");
+    let history = child_thread.codex.session.clone_history().await;
+
+    assert!(
+        history_contains_text(history.raw_items(), "completed parent context"),
+        "stable full-history spawn should keep completed parent context"
+    );
+    assert!(
+        history_contains_text(history.raw_items(), "completed parent answer"),
+        "stable full-history spawn should keep completed parent answers"
+    );
+    assert!(
+        !history_contains_text(history.raw_items(), "unfinished parent request"),
+        "stable full-history spawn should omit an in-progress parent turn"
     );
 
     let _ = harness

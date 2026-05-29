@@ -1160,7 +1160,36 @@ async fn alt_down_steers_most_recent_queued_message() {
 }
 
 #[tokio::test]
-async fn alt_enter_steers_most_recent_queued_message_while_one_is_queued() {
+async fn default_alt_enter_toggles_new_draft_without_steering_existing_queue() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.turn_lifecycle.agent_turn_running = true;
+    chat.bottom_pane.set_task_running(/*running*/ true);
+    chat.input_queue
+        .queued_user_messages
+        .push_back(UserMessage::from("already queued".to_string()).into());
+    chat.set_composer_text("new draft".to_string(), Vec::new(), Vec::new());
+    chat.refresh_pending_input_preview();
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
+
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["already queued".to_string()]
+    );
+    assert!(chat.input_queue.pending_steers.is_empty());
+    assert_eq!(chat.bottom_pane.composer_text(), "new draft");
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["already queued".to_string(), "new draft".to_string()]
+    );
+    assert!(chat.input_queue.pending_steers.is_empty());
+}
+
+#[tokio::test]
+async fn remapped_alt_enter_steers_most_recent_queued_message_while_one_is_queued() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.chat_keymap.steer_queued_message = vec![crate::key_hint::alt(KeyCode::Enter)];
     chat.thread_id = Some(ThreadId::new());

@@ -2560,6 +2560,37 @@ async fn active_agent_label_shows_cycle_position_and_working_subagent_count() {
 }
 
 #[tokio::test]
+async fn automatic_reload_guard_treats_inactive_running_agent_as_busy() {
+    let mut app = make_test_app().await;
+    let idle_thread_id = ThreadId::new();
+    let working_agent_id = ThreadId::new();
+
+    app.active_thread_id = Some(idle_thread_id);
+    app.thread_event_channels.insert(
+        idle_thread_id,
+        ThreadEventChannel::new_with_session(
+            THREAD_EVENT_CHANNEL_CAPACITY,
+            test_thread_session(idle_thread_id, test_path_buf("/tmp/main")),
+            Vec::new(),
+        ),
+    );
+    app.thread_event_channels.insert(
+        working_agent_id,
+        ThreadEventChannel::new_with_session(
+            THREAD_EVENT_CHANNEL_CAPACITY,
+            test_thread_session(working_agent_id, test_path_buf("/tmp/working-agent")),
+            vec![test_turn(
+                "turn-working",
+                TurnStatus::InProgress,
+                Vec::new(),
+            )],
+        ),
+    );
+
+    assert!(app.agent_tree_is_busy().await);
+}
+
+#[tokio::test]
 async fn inactive_thread_approval_bubbles_into_active_view() -> Result<()> {
     let mut app = make_test_app().await;
     let main_thread_id =
@@ -3326,6 +3357,114 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
     let session = store.session.clone().expect("inferred session");
 
     assert_eq!(session.model, primary_session.model);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_spawn_started_notification_keeps_parent_model_until_live_refresh() -> Result<()> {
+    let mut app = make_test_app().await;
+    let main_thread_id =
+        ThreadId::from_string("00000000-0000-0000-0000-000000000311").expect("valid thread");
+    let agent_thread_id =
+        ThreadId::from_string("00000000-0000-0000-0000-000000000312").expect("valid thread");
+    let primary_cwd = test_path_buf("/tmp/main").abs();
+    let primary_session = ThreadSessionState {
+        approval_policy: AskForApproval::OnRequest,
+        permission_profile: PermissionProfile::workspace_write(),
+        runtime_workspace_roots: vec![primary_cwd.clone()],
+        ..test_thread_session(main_thread_id, primary_cwd.to_path_buf())
+    };
+
+    app.primary_thread_id = Some(main_thread_id);
+    app.active_thread_id = Some(main_thread_id);
+    app.agent_navigation.upsert(
+        main_thread_id,
+        /*agent_nickname*/ None,
+        /*agent_role*/ None,
+        /*is_closed*/ false,
+    );
+    app.primary_session_configured = Some(primary_session.clone());
+    app.thread_event_channels.insert(
+        main_thread_id,
+        ThreadEventChannel::new_with_session(
+            /*capacity*/ 4,
+            primary_session.clone(),
+            Vec::new(),
+        ),
+    );
+    app.active_thread_id = Some(agent_thread_id);
+
+    app.enqueue_thread_notification(
+        agent_thread_id,
+        ServerNotification::ThreadStarted(ThreadStartedNotification {
+            thread: Thread {
+                id: agent_thread_id.to_string(),
+                session_id: main_thread_id.to_string(),
+                forked_from_id: None,
+                preview: "spawned agent".to_string(),
+                ephemeral: false,
+                model_provider: "agent-provider".to_string(),
+                created_at: 1,
+                updated_at: 2,
+                status: codex_app_server_protocol::ThreadStatus::Idle,
+                path: Some(test_path_buf("/tmp/unmaterialized-agent-rollout.jsonl")),
+                cwd: test_path_buf("/tmp/agent").abs(),
+                cli_version: "0.0.0".to_string(),
+                source: SessionSource::SubAgent(
+                    codex_protocol::protocol::SubAgentSource::ThreadSpawn {
+                        parent_thread_id: main_thread_id,
+                        depth: 1,
+                        agent_path: None,
+                        agent_nickname: Some("Scout".to_string()),
+                        agent_role: Some("worker".to_string()),
+                    },
+                ),
+                thread_source: Some(codex_app_server_protocol::ThreadSource::Subagent),
+                agent_nickname: Some("Scout".to_string()),
+                agent_role: Some("worker".to_string()),
+                git_info: None,
+                name: Some("spawned agent".to_string()),
+                user_message_count: 0,
+                user_state: codex_app_server_protocol::ThreadUserState::Active,
+                turns: Vec::new(),
+            },
+        }),
+    )
+    .await?;
+
+    let store = app
+        .thread_event_channels
+        .get(&agent_thread_id)
+        .expect("agent thread channel")
+        .store
+        .lock()
+        .await;
+    let snapshot = store.snapshot();
+
+    assert_eq!(
+        snapshot
+            .session
+            .as_ref()
+            .map(|session| session.model.as_str()),
+        Some(primary_session.model.as_str())
+    );
+    assert_eq!(
+        snapshot
+            .session
+            .as_ref()
+            .and_then(|session| session.rollout_path.as_ref()),
+        None
+    );
+    assert!(app.should_refresh_snapshot_session(
+        agent_thread_id,
+        /*is_replay_only*/ false,
+        &snapshot
+    ));
+    assert_eq!(
+        app.chat_widget.active_agent_label(),
+        Some("Scout [worker] · 2/2")
+    );
 
     Ok(())
 }
@@ -4544,6 +4683,21 @@ async fn scrollback_replay_preserves_normal_spacing_between_history_cells() {
 }
 
 #[tokio::test]
+async fn redraw_full_scrollback_ignores_automatic_resize_row_cap() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(3);
+    app.transcript_cells = (0..4)
+        .map(|i| plain_line_cell(format!("cell {i}")))
+        .collect();
+
+    let rendered = app.render_transcript_lines_for_scrollback_replay(/*width*/ 80);
+
+    assert_eq!(rendered.len(), 7);
+    assert_eq!(rendered_line_text(&rendered[0]), "cell 0");
+    assert_eq!(rendered_line_text(&rendered[6]), "cell 3");
+}
+
+#[tokio::test]
 async fn scrollback_replay_restores_hidden_non_message_cells_after_condensed_mode() {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
     app.transcript_cells = vec![
@@ -4689,6 +4843,65 @@ async fn thread_switch_replay_buffer_defers_terminal_writes_without_row_cap() {
         .expect("thread switch replay buffer should be active");
     assert!(!buffer.render_from_transcript_tail);
     assert!(buffer.defer_terminal_writes);
+}
+
+#[tokio::test]
+async fn thread_switch_replay_batches_history_when_resize_reflow_is_disabled() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    app.config
+        .features
+        .set_enabled(Feature::TerminalResizeReflow, /*enabled*/ false)
+        .expect("feature should be configurable");
+    while app_event_rx.try_recv().is_ok() {}
+    assert!(!app.terminal_resize_reflow_enabled());
+
+    app.replay_thread_snapshot(
+        ThreadEventSnapshot {
+            session: None,
+            turns: vec![test_turn("switch-turn", TurnStatus::Completed, Vec::new())],
+            events: Vec::new(),
+            input_state: None,
+        },
+        /*resume_restored_queue*/ false,
+    );
+
+    let mut saw_begin = false;
+    let mut saw_end = false;
+    while let Ok(event) = app_event_rx.try_recv() {
+        saw_begin |= matches!(event, AppEvent::BeginThreadSwitchHistoryReplayBuffer);
+        saw_end |= matches!(event, AppEvent::EndInitialHistoryReplayBuffer);
+    }
+
+    assert!(saw_begin);
+    assert!(saw_end);
+}
+
+#[tokio::test]
+async fn thread_switch_replay_retaining_workspace_metadata_skips_refresh_requests() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    while app_event_rx.try_recv().is_ok() {}
+
+    app.replay_thread_snapshot_retaining_workspace_metadata(
+        ThreadEventSnapshot {
+            session: Some(test_thread_session(
+                ThreadId::new(),
+                app.chat_widget.config_ref().cwd.to_path_buf(),
+            )),
+            turns: Vec::new(),
+            events: Vec::new(),
+            input_state: None,
+        },
+        /*resume_restored_queue*/ false,
+    );
+
+    while let Ok(event) = app_event_rx.try_recv() {
+        assert!(!matches!(
+            event,
+            AppEvent::CodexOp(AppCommand::ListSkills { .. })
+                | AppEvent::RefreshPluginMentions
+                | AppEvent::FetchConnectorsList { .. }
+        ));
+    }
 }
 
 #[tokio::test]
@@ -5663,6 +5876,85 @@ async fn edit_last_message_can_reopen_after_submitted_edit_is_committed() {
 }
 
 #[tokio::test]
+async fn edit_last_message_live_echo_before_rollback_renders_one_confirmed_row() {
+    let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    app.chat_widget.handle_thread_session(test_thread_session(
+        thread_id,
+        test_path_buf("/home/user/project"),
+    ));
+    while op_rx.try_recv().is_ok() {}
+    while app_event_rx.try_recv().is_ok() {}
+    app.transcript_cells = vec![
+        Arc::new(UserHistoryCell {
+            message: "original".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>,
+        Arc::new(AgentMessageCell::new(
+            vec![Line::from("assistant reply")],
+            /*is_first_line*/ true,
+        )) as Arc<dyn HistoryCell>,
+    ];
+
+    assert!(app.edit_last_message_from_command());
+    app.chat_widget
+        .set_composer_text("edited once".to_string(), Vec::new(), Vec::new());
+    assert!(app.commit_backtrack_edit_preview());
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::UserTurn {
+            rollback_num_turns: Some(1),
+            ..
+        })
+    );
+
+    app.handle_thread_event_now(ThreadBufferedEvent::Notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: "turn-edit".to_string(),
+            completed_at_ms: 0,
+            item: ThreadItem::UserMessage {
+                id: "user-edited".to_string(),
+                content: vec![AppServerUserInput::Text {
+                    text: "edited once".to_string(),
+                    text_elements: Vec::new(),
+                }],
+            },
+        }),
+    ));
+    while let Ok(event) = app_event_rx.try_recv() {
+        assert!(
+            !matches!(event, AppEvent::InsertHistoryCell(_)),
+            "the live user-message echo rendered before rollback confirmation"
+        );
+    }
+
+    app.handle_thread_event_now(ThreadBufferedEvent::Notification(
+        ServerNotification::ThreadRolledBack(
+            codex_app_server_protocol::ThreadRolledBackNotification {
+                thread_id: thread_id.to_string(),
+                num_turns: 1,
+            },
+        ),
+    ));
+
+    let mut rendered_cells = Vec::new();
+    while let Ok(event) = app_event_rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            rendered_cells.push(lines_to_single_string(&cell.display_lines(/*width*/ 80)));
+        }
+    }
+
+    assert_eq!(rendered_cells.len(), 1);
+    assert_app_snapshot!(
+        "edit_last_message_live_echo_before_rollback_renders_one_confirmed_row",
+        rendered_cells.join("\n")
+    );
+}
+
+#[tokio::test]
 async fn failed_edit_last_message_preview_rollback_restores_edited_draft() {
     let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
     app.chat_widget.handle_thread_session(test_thread_session(
@@ -6502,5 +6794,25 @@ fn reload_model_handoff_is_left_alone_for_non_resume_startup() {
     assert_eq!(
         std::env::var(RELOAD_MODEL_ENV_VAR),
         Ok("gpt-reload-test".to_string())
+    );
+}
+
+#[tokio::test]
+async fn reload_resume_config_drops_persisted_model_selection() {
+    let mut config = ConfigBuilder::default()
+        .build()
+        .await
+        .expect("build config");
+    config.model = Some("gpt-reload-test".to_string());
+    config.model_reasoning_effort = Some(ReasoningEffortConfig::High);
+
+    let resume_config = config_for_reload_resume(&config, Some("gpt-reload-test"));
+
+    assert_eq!(resume_config.model, None);
+    assert_eq!(resume_config.model_reasoning_effort, None);
+    assert_eq!(config.model.as_deref(), Some("gpt-reload-test"));
+    assert_eq!(
+        config.model_reasoning_effort,
+        Some(ReasoningEffortConfig::High)
     );
 }

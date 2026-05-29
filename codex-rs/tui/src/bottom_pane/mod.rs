@@ -25,6 +25,7 @@ use crate::bottom_pane::pending_thread_approvals::PendingThreadApprovals;
 use crate::bottom_pane::unified_exec_footer::UnifiedExecFooter;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
+use crate::key_hint::KeyBindingListExt;
 use crate::keymap::RuntimeKeymap;
 use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
@@ -590,6 +591,15 @@ impl BottomPane {
                 return InputResult::None;
             }
 
+            if self.keymap.app.open_snippets.is_pressed(key_event)
+                && let Some(response_offset) = agent_menu.next_snippet_response_offset()
+            {
+                self.app_event_tx
+                    .send(AppEvent::OpenSnippetMenuFromResponse(response_offset));
+                self.request_redraw();
+                return InputResult::None;
+            }
+
             if agent_menu.handle_key_event(key_event) {
                 self.agent_menu = None;
             }
@@ -934,6 +944,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_subagent_spawn_pending(&mut self, pending: bool) {
+        self.composer.set_subagent_spawn_pending(pending);
+        self.request_redraw();
+    }
+
     #[cfg(test)]
     pub(crate) fn footer_hint_override_items(&self) -> Option<Vec<(String, String)>> {
         self.composer.footer_hint_override_items()
@@ -1154,6 +1169,25 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Show the compact floating snippet chooser without replacing the composer.
+    pub(crate) fn show_snippet_menu(&mut self, snippets: Vec<String>, response_offset: usize) {
+        self.agent_menu = Some(agent_menu::AgentMenu::new_snippets(
+            snippets,
+            response_offset,
+            self.app_event_tx.clone(),
+        ));
+        self.request_redraw();
+    }
+
+    /// Show the compact floating path chooser without replacing the composer.
+    pub(crate) fn show_touched_path_menu(&mut self, paths: Vec<(String, PathBuf)>) {
+        self.agent_menu = Some(agent_menu::AgentMenu::new_touched_paths(
+            paths,
+            self.app_event_tx.clone(),
+        ));
+        self.request_redraw();
+    }
+
     fn apply_standard_popup_hint(&self, params: &mut list_selection_view::SelectionViewParams) {
         if params.footer_hint.is_none()
             || params.footer_hint.as_ref() == Some(&popup_consts::standard_popup_hint_line())
@@ -1241,6 +1275,13 @@ impl BottomPane {
             .last()
             .filter(|view| view.view_id() == Some(view_id))
             .and_then(|view| view.active_tab_id())
+    }
+
+    pub(crate) fn search_query_for_active_view(&self, view_id: &'static str) -> Option<&str> {
+        self.view_stack
+            .last()
+            .filter(|view| view.view_id() == Some(view_id))
+            .and_then(|view| view.search_query())
     }
 
     pub(crate) fn dismiss_active_view_if_id(&mut self, view_id: &'static str) -> bool {
@@ -1748,8 +1789,12 @@ impl BottomPane {
         area: Rect,
         composer_right_reserve: u16,
     ) -> Option<(u16, u16)> {
-        self.as_renderable_with_composer_right_reserve(composer_right_reserve)
-            .cursor_pos(area)
+        if self.agent_menu.is_some() {
+            None
+        } else {
+            self.as_renderable_with_composer_right_reserve(composer_right_reserve)
+                .cursor_pos(area)
+        }
     }
 
     pub(crate) fn cursor_style_with_composer_right_reserve(
@@ -1763,6 +1808,15 @@ impl BottomPane {
 
     pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) {
         if self.composer.set_status_line(status_line) {
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn set_status_line_submission_mode_after_span(&mut self, span_index: Option<usize>) {
+        if self
+            .composer
+            .set_status_line_submission_mode_after_span(span_index)
+        {
             self.request_redraw();
         }
     }
@@ -1797,6 +1851,23 @@ impl BottomPane {
 
     pub(crate) fn show_agent_navigation_strip(&mut self, line: Line<'static>, duration: Duration) {
         self.composer.show_agent_navigation_strip(line, duration);
+        self.request_redraw();
+    }
+
+    pub(crate) fn show_footer_flash(&mut self, line: Line<'static>, duration: Duration) {
+        self.composer.show_footer_flash(line, duration);
+        let frame_requester = self.frame_requester.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                tokio::time::sleep(duration).await;
+                frame_requester.schedule_frame();
+            });
+        } else {
+            std::thread::spawn(move || {
+                std::thread::sleep(duration);
+                frame_requester.schedule_frame();
+            });
+        }
         self.request_redraw();
     }
 
@@ -1961,6 +2032,25 @@ mod tests {
             animations_enabled: true,
             skills: Some(Vec::new()),
         })
+    }
+
+    #[test]
+    fn snippet_menu_hides_cursor_with_composer_right_reserve() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let mut pane = test_pane(AppEventSender::new(tx_raw));
+        let area = Rect::new(0, 0, 48, pane.desired_height(/*width*/ 48));
+
+        assert!(
+            pane.cursor_pos_with_composer_right_reserve(area, /*composer_right_reserve*/ 4)
+                .is_some()
+        );
+
+        pane.show_snippet_menu(vec!["CODEX_HOME".to_string()], /*response_offset*/ 0);
+
+        assert_eq!(
+            pane.cursor_pos_with_composer_right_reserve(area, /*composer_right_reserve*/ 4),
+            None
+        );
     }
 
     fn exec_request() -> ApprovalRequest {

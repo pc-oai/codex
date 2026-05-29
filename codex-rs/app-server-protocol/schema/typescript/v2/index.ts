@@ -359,6 +359,8 @@ export type { ThreadApproveGuardianDeniedActionResponse } from "./ThreadApproveG
 export type { ThreadArchiveParams } from "./ThreadArchiveParams";
 export type { ThreadArchiveResponse } from "./ThreadArchiveResponse";
 export type { ThreadArchivedNotification } from "./ThreadArchivedNotification";
+export type { ThreadCloseParams } from "./ThreadCloseParams";
+export type { ThreadCloseResponse } from "./ThreadCloseResponse";
 export type { ThreadClosedNotification } from "./ThreadClosedNotification";
 export type { ThreadCompactStartParams } from "./ThreadCompactStartParams";
 export type { ThreadCompactStartResponse } from "./ThreadCompactStartResponse";
@@ -405,6 +407,7 @@ export type { ThreadShellCommandResponse } from "./ThreadShellCommandResponse";
 export type { ThreadSortKey } from "./ThreadSortKey";
 export type { ThreadSource } from "./ThreadSource";
 export type { ThreadSourceKind } from "./ThreadSourceKind";
+export type { ThreadSpawnHistory } from "./ThreadSpawnHistory";
 export type { ThreadSpawnParams } from "./ThreadSpawnParams";
 export type { ThreadSpawnResponse } from "./ThreadSpawnResponse";
 export type { ThreadStartParams } from "./ThreadStartParams";

@@ -1081,6 +1081,30 @@
             },
             "method": {
               "enum": [
+                "thread/close"
+              ],
+              "title": "Thread/closeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadCloseParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/closeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/delete"
               ],
               "title": "Thread/deleteRequestMethod",
@@ -7939,6 +7963,13 @@
             "null"
           ]
         },
+        "forceRefresh": {
+          "description": "When true, refresh the remote model catalog instead of reusing a fresh cache entry.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "includeHidden": {
           "description": "When true, include models that are hidden from the default picker list.",
           "type": [
@@ -13382,6 +13413,25 @@
       "title": "ThreadArchivedNotification",
       "type": "object"
     },
+    "ThreadCloseParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Close a spawned child agent thread and its live descendants.",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadCloseParams",
+      "type": "object"
+    },
+    "ThreadCloseResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ThreadCloseResponse",
+      "type": "object"
+    },
     "ThreadClosedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -15252,10 +15302,38 @@
       ],
       "type": "string"
     },
+    "ThreadSpawnHistory": {
+      "oneOf": [
+        {
+          "enum": [
+            "fresh"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Copy committed parent turns and omit any currently in-progress parent turn.",
+          "enum": [
+            "fullHistory"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "ThreadSpawnParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Spawn a child agent thread from an already loaded parent thread.",
       "properties": {
+        "history": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadSpawnHistory"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Parent transcript history to include in the child thread.\n\nOmitted copies completed parent turns and excludes any turn still in progress."
+        },
         "input": {
           "items": {
             "$ref": "#/definitions/UserInput"

@@ -69,6 +69,7 @@ pub(crate) struct FooterProps {
     pub(crate) esc_backtrack_hint: bool,
     pub(crate) use_shift_enter_hint: bool,
     pub(crate) is_task_running: bool,
+    pub(crate) in_flight_submission_mode: InFlightSubmissionMode,
     pub(crate) collaboration_modes_enabled: bool,
     pub(crate) is_wsl: bool,
     /// Which key the user must press again to quit.
@@ -76,6 +77,10 @@ pub(crate) struct FooterProps {
     /// This is rendered when `mode` is `FooterMode::QuitShortcutReminder`.
     pub(crate) quit_shortcut_key: KeyBinding,
     pub(crate) status_line_value: Option<Line<'static>>,
+    /// Insert the next-message icon after this many left status-line spans.
+    ///
+    /// `None` keeps the compact indicator at the beginning of the line.
+    pub(crate) status_line_submission_mode_after_span: Option<usize>,
     pub(crate) status_line_enabled: bool,
     pub(crate) key_hints: FooterKeyHints,
     /// Active thread label shown when the footer is rendering contextual information instead of an
@@ -95,6 +100,12 @@ pub(crate) enum CollaborationModeIndicator {
     Execute,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum InFlightSubmissionMode {
+    Steer,
+    Queue,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GoalStatusIndicator {
     Active { usage: Option<String> },
@@ -112,6 +123,7 @@ const FOOTER_CONTEXT_GAP_COLS: u16 = 1;
 pub(crate) struct FooterKeyHints {
     pub(crate) toggle_shortcuts: Option<KeyBinding>,
     pub(crate) queue: Option<KeyBinding>,
+    pub(crate) toggle_submission_mode: Option<KeyBinding>,
     pub(crate) insert_newline: Option<KeyBinding>,
     pub(crate) external_editor: Option<KeyBinding>,
     pub(crate) edit_previous: Option<KeyBinding>,
@@ -127,6 +139,7 @@ impl FooterKeyHints {
         Self {
             toggle_shortcuts: Some(key_hint::plain(KeyCode::Char('?'))),
             queue: Some(key_hint::plain(KeyCode::Tab)),
+            toggle_submission_mode: Some(key_hint::alt(KeyCode::Enter)),
             insert_newline: Some(key_hint::ctrl(KeyCode::Char('j'))),
             external_editor: Some(key_hint::ctrl(KeyCode::Char('g'))),
             edit_previous: Some(key_hint::plain(KeyCode::Esc)),
@@ -167,6 +180,15 @@ impl CollaborationModeIndicator {
     }
 }
 
+impl InFlightSubmissionMode {
+    fn indicator_span(self) -> Option<Span<'static>> {
+        match self {
+            Self::Steer => None,
+            Self::Queue => Some("".magenta()),
+        }
+    }
+}
+
 /// Selects which footer content is rendered.
 ///
 /// The current mode is owned by `ChatComposer`, which may override it based on transient state
@@ -182,11 +204,14 @@ pub(crate) enum FooterMode {
     /// Transient "press Esc again" hint shown after the first Esc while idle.
     EscHint,
     /// Base single-line footer when the composer is empty.
+    ///
+    /// While a task is running, this mode shows what the next submitted
+    /// message will do even before the user begins drafting it.
     ComposerEmpty,
     /// Base single-line footer when the composer contains a draft.
     ///
     /// The shortcuts hint is suppressed here; when a task is running, this
-    /// mode can show the queue hint instead.
+    /// mode shows what the next submitted message will do.
     ComposerHasDraft,
 }
 
@@ -232,7 +257,7 @@ pub(crate) fn reset_mode_after_activity(current: FooterMode) -> FooterMode {
 
 pub(crate) fn footer_height(props: &FooterProps) -> u16 {
     let show_shortcuts_hint = match props.mode {
-        FooterMode::ComposerEmpty => true,
+        FooterMode::ComposerEmpty => !props.is_task_running,
         FooterMode::ComposerHasDraft => false,
         FooterMode::HistorySearch
         | FooterMode::QuitShortcutReminder
@@ -240,10 +265,9 @@ pub(crate) fn footer_height(props: &FooterProps) -> u16 {
         | FooterMode::EscHint => false,
     };
     let show_queue_hint = match props.mode {
-        FooterMode::ComposerHasDraft => props.is_task_running,
+        FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft => props.is_task_running,
         FooterMode::QuitShortcutReminder
         | FooterMode::HistorySearch
-        | FooterMode::ComposerEmpty
         | FooterMode::ShortcutOverlay
         | FooterMode::EscHint => false,
     };
@@ -306,8 +330,7 @@ pub(crate) fn left_fits(area: Rect, left_width: u16) -> bool {
 enum SummaryHintKind {
     None,
     Shortcuts,
-    QueueMessage,
-    QueueShort,
+    SubmissionMode,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -320,6 +343,7 @@ fn left_side_line(
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     state: LeftSideState,
     key_hints: FooterKeyHints,
+    in_flight_submission_mode: InFlightSubmissionMode,
 ) -> Line<'static> {
     let mut line = Line::from("");
     match state.hint {
@@ -330,22 +354,15 @@ fn left_side_line(
                 line.push_span(" for shortcuts".dim());
             }
         }
-        SummaryHintKind::QueueMessage => {
-            if let Some(key) = key_hints.queue {
-                line.push_span(key);
-                line.push_span(" to queue message".dim());
-            }
-        }
-        SummaryHintKind::QueueShort => {
-            if let Some(key) = key_hints.queue {
-                line.push_span(key);
-                line.push_span(" to queue".dim());
+        SummaryHintKind::SubmissionMode => {
+            if let Some(indicator) = in_flight_submission_mode.indicator_span() {
+                line.push_span(indicator);
             }
         }
     };
 
     if let Some(collaboration_mode_indicator) = collaboration_mode_indicator {
-        if !matches!(state.hint, SummaryHintKind::None) {
+        if !line.spans.is_empty() {
             line.push_span(" · ".dim());
         }
         line.push_span(collaboration_mode_indicator.styled_span(state.show_cycle_hint));
@@ -369,10 +386,12 @@ pub(crate) fn single_line_footer_layout(
     show_cycle_hint: bool,
     show_shortcuts_hint: bool,
     show_queue_hint: bool,
-    key_hints: FooterKeyHints,
+    props: &FooterProps,
 ) -> (SummaryLeft, bool) {
+    let key_hints = props.key_hints;
+    let in_flight_submission_mode = props.in_flight_submission_mode;
     let hint_kind = if show_queue_hint {
-        SummaryHintKind::QueueMessage
+        SummaryHintKind::SubmissionMode
     } else if show_shortcuts_hint {
         SummaryHintKind::Shortcuts
     } else {
@@ -382,7 +401,12 @@ pub(crate) fn single_line_footer_layout(
         hint: hint_kind,
         show_cycle_hint,
     };
-    let default_line = left_side_line(collaboration_mode_indicator, default_state, key_hints);
+    let default_line = left_side_line(
+        collaboration_mode_indicator,
+        default_state,
+        key_hints,
+        in_flight_submission_mode,
+    );
     let default_width = default_line.width() as u16;
     if default_width > 0 && can_show_left_with_context(area, default_width, context_width) {
         return (SummaryLeft::Default, true);
@@ -392,7 +416,12 @@ pub(crate) fn single_line_footer_layout(
         if state == default_state {
             default_line.clone()
         } else {
-            left_side_line(collaboration_mode_indicator, state, key_hints)
+            left_side_line(
+                collaboration_mode_indicator,
+                state,
+                key_hints,
+                in_flight_submission_mode,
+            )
         }
     };
     let state_width = |state: LeftSideState| -> u16 { state_line(state).width() as u16 };
@@ -402,18 +431,7 @@ pub(crate) fn single_line_footer_layout(
     let context_requires_cycle_hint = show_cycle_hint && !show_queue_hint;
 
     if show_queue_hint {
-        // In queue mode, prefer dropping context before dropping the queue hint.
-        let queue_states = [
-            default_state,
-            LeftSideState {
-                hint: SummaryHintKind::QueueMessage,
-                show_cycle_hint: false,
-            },
-            LeftSideState {
-                hint: SummaryHintKind::QueueShort,
-                show_cycle_hint: false,
-            },
-        ];
+        let queue_states = [default_state];
 
         // Pass 1: keep the right-side context indicator if any queue variant
         // can fit alongside it. We skip adjacent duplicates because
@@ -504,6 +522,7 @@ pub(crate) fn single_line_footer_layout(
             Some(collaboration_mode_indicator),
             mode_only_state,
             key_hints,
+            in_flight_submission_mode,
         )
         .width() as u16;
         if !context_requires_cycle_hint
@@ -514,6 +533,7 @@ pub(crate) fn single_line_footer_layout(
                     Some(collaboration_mode_indicator),
                     mode_only_state,
                     key_hints,
+                    in_flight_submission_mode,
                 )),
                 true, // show_context
             );
@@ -524,6 +544,7 @@ pub(crate) fn single_line_footer_layout(
                     Some(collaboration_mode_indicator),
                     mode_only_state,
                     key_hints,
+                    in_flight_submission_mode,
                 )),
                 false, // show_context
             );
@@ -729,7 +750,9 @@ fn footer_from_props_lines(
         FooterMode::HistorySearch => vec![Line::from("reverse-i-search: ").dim()],
         FooterMode::ComposerEmpty => {
             let state = LeftSideState {
-                hint: if show_shortcuts_hint {
+                hint: if show_queue_hint {
+                    SummaryHintKind::SubmissionMode
+                } else if show_shortcuts_hint {
                     SummaryHintKind::Shortcuts
                 } else {
                     SummaryHintKind::None
@@ -740,6 +763,7 @@ fn footer_from_props_lines(
                 collaboration_mode_indicator,
                 state,
                 key_hints,
+                props.in_flight_submission_mode,
             )]
         }
         FooterMode::ShortcutOverlay => {
@@ -756,7 +780,7 @@ fn footer_from_props_lines(
         FooterMode::ComposerHasDraft => {
             let state = LeftSideState {
                 hint: if show_queue_hint {
-                    SummaryHintKind::QueueMessage
+                    SummaryHintKind::SubmissionMode
                 } else if show_shortcuts_hint {
                     SummaryHintKind::Shortcuts
                 } else {
@@ -768,6 +792,7 @@ fn footer_from_props_lines(
                 collaboration_mode_indicator,
                 state,
                 key_hints,
+                props.in_flight_submission_mode,
             )]
         }
     }
@@ -775,9 +800,10 @@ fn footer_from_props_lines(
 
 /// Returns the contextual footer row when the footer is not busy showing an instructional hint.
 ///
-/// The returned line may contain the configured status line, the currently viewed agent label, or
-/// both combined. Active instructional states such as quit reminders, shortcut overlays, and queue
-/// prompts deliberately return `None` so those call-to-action hints stay visible.
+/// The returned line may contain the next-message indicator, the configured status line, the
+/// currently viewed agent label, or a combination of them. Active instructional states such as
+/// quit reminders, shortcut overlays, and queue prompts deliberately return `None` so those
+/// call-to-action hints stay visible.
 pub(crate) fn passive_footer_status_line(props: &FooterProps) -> Option<Line<'static>> {
     if !shows_passive_footer_line(props) {
         return None;
@@ -798,17 +824,33 @@ pub(crate) fn passive_footer_status_line(props: &FooterProps) -> Option<Line<'st
         }
     }
 
+    if let Some(icon) = props.in_flight_submission_mode.indicator_span() {
+        if let Some(insert_at) = props.status_line_submission_mode_after_span
+            && let Some(line) = line.as_mut()
+            && insert_at <= line.spans.len()
+        {
+            line.spans.splice(insert_at..insert_at, [" · ".dim(), icon]);
+        } else {
+            let mut spans = vec![icon];
+            if let Some(line) = line.take() {
+                spans.push(" ".into());
+                spans.extend(line.spans);
+            }
+            line = Some(Line::from(spans));
+        }
+    }
+
     line
 }
 
 /// Whether the current footer mode allows contextual information to replace instructional hints.
 ///
-/// In practice this means the composer is idle, or it has a draft but is not currently running a
-/// task, so the footer can spend the row on ambient context instead of "what to do next" text.
+/// In practice this means the composer is idle or has a draft, so the footer can spend the row on
+/// ambient context and the persistent next-message indicator instead of other instruction text.
 pub(crate) fn shows_passive_footer_line(props: &FooterProps) -> bool {
     match props.mode {
         FooterMode::ComposerEmpty => true,
-        FooterMode::ComposerHasDraft => !props.is_task_running,
+        FooterMode::ComposerHasDraft => true,
         FooterMode::HistorySearch
         | FooterMode::QuitShortcutReminder
         | FooterMode::ShortcutOverlay
@@ -896,6 +938,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut commands = Line::from("");
     let mut shell_commands = Line::from("");
     let mut newline = Line::from("");
+    let mut toggle_submission_mode = Line::from("");
     let mut queue_message_tab = Line::from("");
     let mut file_paths = Line::from("");
     let mut paste_image = Line::from("");
@@ -915,6 +958,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::Commands => commands = text,
                 ShortcutId::ShellCommands => shell_commands = text,
                 ShortcutId::InsertNewline => newline = text,
+                ShortcutId::ToggleSubmissionMode => toggle_submission_mode = text,
                 ShortcutId::QueueMessageTab => queue_message_tab = text,
                 ShortcutId::FilePaths => file_paths = text,
                 ShortcutId::PasteImage => paste_image = text,
@@ -935,6 +979,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         commands,
         shell_commands,
         newline,
+        toggle_submission_mode,
         queue_message_tab,
         file_paths,
         paste_image,
@@ -1026,6 +1071,7 @@ enum ShortcutId {
     Commands,
     ShellCommands,
     InsertNewline,
+    ToggleSubmissionMode,
     QueueMessageTab,
     FilePaths,
     PasteImage,
@@ -1088,6 +1134,7 @@ impl ShortcutDescriptor {
     fn overlay_entry(&self, state: ShortcutsState) -> Option<Line<'static>> {
         let key = match self.id {
             ShortcutId::InsertNewline => state.key_hints.insert_newline,
+            ShortcutId::ToggleSubmissionMode => state.key_hints.toggle_submission_mode,
             ShortcutId::QueueMessageTab => state.key_hints.queue,
             ShortcutId::ExternalEditor => state.key_hints.external_editor,
             ShortcutId::ClearComposer => self.binding_for(state).map(|binding| binding.key),
@@ -1155,6 +1202,15 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         ],
         prefix: "",
         label: " for newline",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::ToggleSubmissionMode,
+        bindings: &[ShortcutBinding {
+            key: key_hint::alt(KeyCode::Enter),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " toggle next steer/queue",
     },
     ShortcutDescriptor {
         id: ShortcutId::QueueMessageTab,
@@ -1322,7 +1378,7 @@ mod tests {
                 let area = Rect::new(0, 0, f.area().width, height);
                 let show_cycle_hint = !props.is_task_running;
                 let show_shortcuts_hint = match props.mode {
-                    FooterMode::ComposerEmpty => true,
+                    FooterMode::ComposerEmpty => !props.is_task_running,
                     FooterMode::ComposerHasDraft => false,
                     FooterMode::HistorySearch
                     | FooterMode::QuitShortcutReminder
@@ -1330,10 +1386,11 @@ mod tests {
                     | FooterMode::EscHint => false,
                 };
                 let show_queue_hint = match props.mode {
-                    FooterMode::ComposerHasDraft => props.is_task_running,
+                    FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft => {
+                        props.is_task_running
+                    }
                     FooterMode::HistorySearch
                     | FooterMode::QuitShortcutReminder
-                    | FooterMode::ComposerEmpty
                     | FooterMode::ShortcutOverlay
                     | FooterMode::EscHint => false,
                 };
@@ -1431,7 +1488,7 @@ mod tests {
                             show_cycle_hint,
                             show_shortcuts_hint,
                             show_queue_hint,
-                            props.key_hints,
+                            props,
                         );
                         match summary_left {
                             SummaryLeft::Default => {
@@ -1563,10 +1620,12 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
+                in_flight_submission_mode: InFlightSubmissionMode::Steer,
                 collaboration_modes_enabled: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
+                status_line_submission_mode_after_span: None,
                 status_line_enabled: false,
                 key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
@@ -1580,10 +1639,12 @@ mod tests {
                 esc_backtrack_hint: true,
                 use_shift_enter_hint: true,
                 is_task_running: false,
+                in_flight_submission_mode: InFlightSubmissionMode::Steer,
                 collaboration_modes_enabled: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
+                status_line_submission_mode_after_span: None,
                 status_line_enabled: false,
                 key_hints: FooterKeyHints {
                     insert_newline: Some(key_hint::shift(KeyCode::Enter)),
@@ -1600,10 +1661,12 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
+                in_flight_submission_mode: InFlightSubmissionMode::Steer,
                 collaboration_modes_enabled: true,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
+                status_line_submission_mode_after_span: None,
                 status_line_enabled: false,
                 key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
@@ -1617,10 +1680,12 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
+                in_flight_submission_mode: InFlightSubmissionMode::Steer,
                 collaboration_modes_enabled: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
+                status_line_submission_mode_after_span: None,
                 status_line_enabled: false,
                 key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
@@ -1634,10 +1699,12 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: true,
+                in_flight_submission_mode: InFlightSubmissionMode::Steer,
                 collaboration_modes_enabled: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
+                status_line_submission_mode_after_span: None,
                 status_line_enabled: false,
                 key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
@@ -1651,10 +1718,12 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
+                in_flight_submission_mode: InFlightSubmissionMode::Steer,
                 collaboration_modes_enabled: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
+                status_line_submission_mode_after_span: None,
                 status_line_enabled: false,
                 key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
@@ -1668,10 +1737,12 @@ mod tests {
                 esc_backtrack_hint: true,
                 use_shift_enter_hint: false,
                 is_task_running: false,
+                in_flight_submission_mode: InFlightSubmissionMode::Steer,
                 collaboration_modes_enabled: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
+                status_line_submission_mode_after_span: None,
                 status_line_enabled: false,
                 key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
@@ -1685,10 +1756,33 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: true,
+                in_flight_submission_mode: InFlightSubmissionMode::Steer,
                 collaboration_modes_enabled: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
+                status_line_submission_mode_after_span: None,
+                status_line_enabled: false,
+                key_hints: FooterKeyHints::default_bindings(),
+                active_agent_label: None,
+            },
+            Some(72),
+            /*used_tokens*/ None,
+        );
+
+        snapshot_footer_with_context(
+            "footer_running_empty_next_queue_selected",
+            FooterProps {
+                mode: FooterMode::ComposerEmpty,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                is_task_running: true,
+                in_flight_submission_mode: InFlightSubmissionMode::Queue,
+                collaboration_modes_enabled: false,
+                is_wsl: false,
+                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+                status_line_value: None,
+                status_line_submission_mode_after_span: None,
                 status_line_enabled: false,
                 key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
@@ -1704,10 +1798,12 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
+                in_flight_submission_mode: InFlightSubmissionMode::Steer,
                 collaboration_modes_enabled: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
+                status_line_submission_mode_after_span: None,
                 status_line_enabled: false,
                 key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
@@ -1723,10 +1819,31 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: true,
+                in_flight_submission_mode: InFlightSubmissionMode::Steer,
                 collaboration_modes_enabled: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
+                status_line_submission_mode_after_span: None,
+                status_line_enabled: false,
+                key_hints: FooterKeyHints::default_bindings(),
+                active_agent_label: None,
+            },
+        );
+
+        snapshot_footer(
+            "footer_composer_has_draft_next_queue_selected",
+            FooterProps {
+                mode: FooterMode::ComposerHasDraft,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                is_task_running: true,
+                in_flight_submission_mode: InFlightSubmissionMode::Queue,
+                collaboration_modes_enabled: false,
+                is_wsl: false,
+                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+                status_line_value: None,
+                status_line_submission_mode_after_span: None,
                 status_line_enabled: false,
                 key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: None,
@@ -1738,10 +1855,12 @@ mod tests {
             esc_backtrack_hint: false,
             use_shift_enter_hint: false,
             is_task_running: false,
+            in_flight_submission_mode: InFlightSubmissionMode::Steer,
             collaboration_modes_enabled: true,
             is_wsl: false,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: None,
+            status_line_submission_mode_after_span: None,
             status_line_enabled: false,
             key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
@@ -1766,10 +1885,12 @@ mod tests {
             esc_backtrack_hint: false,
             use_shift_enter_hint: false,
             is_task_running: true,
+            in_flight_submission_mode: InFlightSubmissionMode::Steer,
             collaboration_modes_enabled: true,
             is_wsl: false,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: None,
+            status_line_submission_mode_after_span: None,
             status_line_enabled: false,
             key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
@@ -1787,10 +1908,12 @@ mod tests {
             esc_backtrack_hint: false,
             use_shift_enter_hint: false,
             is_task_running: false,
+            in_flight_submission_mode: InFlightSubmissionMode::Steer,
             collaboration_modes_enabled: false,
             is_wsl: false,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: Some(Line::from("Status line content".to_string())),
+            status_line_submission_mode_after_span: None,
             status_line_enabled: true,
             key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
@@ -1799,14 +1922,58 @@ mod tests {
         snapshot_footer("footer_status_line_overrides_shortcuts", props);
 
         let props = FooterProps {
-            mode: FooterMode::ComposerHasDraft,
+            mode: FooterMode::ComposerEmpty,
             esc_backtrack_hint: false,
             use_shift_enter_hint: false,
-            is_task_running: true,
+            is_task_running: false,
+            in_flight_submission_mode: InFlightSubmissionMode::Queue,
             collaboration_modes_enabled: false,
             is_wsl: false,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: Some(Line::from("Status line content".to_string())),
+            status_line_submission_mode_after_span: None,
+            status_line_enabled: true,
+            key_hints: FooterKeyHints::default_bindings(),
+            active_agent_label: None,
+        };
+
+        snapshot_footer("footer_status_line_next_queue_selected_idle", props);
+
+        let props = FooterProps {
+            mode: FooterMode::ComposerEmpty,
+            esc_backtrack_hint: false,
+            use_shift_enter_hint: false,
+            is_task_running: false,
+            in_flight_submission_mode: InFlightSubmissionMode::Queue,
+            collaboration_modes_enabled: false,
+            is_wsl: false,
+            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+            status_line_value: Some(Line::from(vec![
+                "model".cyan(),
+                " · ".dim(),
+                "feature/footer".magenta(),
+                " · ".dim(),
+                "cwd".green(),
+            ])),
+            status_line_submission_mode_after_span: Some(3),
+            status_line_enabled: true,
+            key_hints: FooterKeyHints::default_bindings(),
+            active_agent_label: None,
+        };
+
+        snapshot_footer("footer_status_line_submission_mode_after_branch", props);
+
+        let props = FooterProps {
+            mode: FooterMode::ComposerHasDraft,
+            esc_backtrack_hint: false,
+            use_shift_enter_hint: false,
+            is_task_running: true,
+            in_flight_submission_mode: InFlightSubmissionMode::Steer,
+            collaboration_modes_enabled: false,
+            is_wsl: false,
+            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+            status_line_value: Some(Line::from("Status line content".to_string())),
+            status_line_submission_mode_after_span: None,
             status_line_enabled: true,
             key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
@@ -1819,10 +1986,12 @@ mod tests {
             esc_backtrack_hint: false,
             use_shift_enter_hint: false,
             is_task_running: false,
+            in_flight_submission_mode: InFlightSubmissionMode::Steer,
             collaboration_modes_enabled: false,
             is_wsl: false,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: Some(Line::from("Status line content".to_string())),
+            status_line_submission_mode_after_span: None,
             status_line_enabled: true,
             key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
@@ -1835,10 +2004,12 @@ mod tests {
             esc_backtrack_hint: false,
             use_shift_enter_hint: false,
             is_task_running: false,
+            in_flight_submission_mode: InFlightSubmissionMode::Steer,
             collaboration_modes_enabled: true,
             is_wsl: false,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: None, // command timed out / empty
+            status_line_submission_mode_after_span: None,
             status_line_enabled: true,
             key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
@@ -1865,10 +2036,12 @@ mod tests {
             esc_backtrack_hint: false,
             use_shift_enter_hint: false,
             is_task_running: false,
+            in_flight_submission_mode: InFlightSubmissionMode::Steer,
             collaboration_modes_enabled: true,
             is_wsl: false,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: None,
+            status_line_submission_mode_after_span: None,
             status_line_enabled: false,
             key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
@@ -1887,10 +2060,12 @@ mod tests {
             esc_backtrack_hint: false,
             use_shift_enter_hint: false,
             is_task_running: false,
+            in_flight_submission_mode: InFlightSubmissionMode::Steer,
             collaboration_modes_enabled: false,
             is_wsl: false,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: None,
+            status_line_submission_mode_after_span: None,
             status_line_enabled: true,
             key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
@@ -1910,12 +2085,14 @@ mod tests {
             esc_backtrack_hint: false,
             use_shift_enter_hint: false,
             is_task_running: false,
+            in_flight_submission_mode: InFlightSubmissionMode::Steer,
             collaboration_modes_enabled: true,
             is_wsl: false,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: Some(Line::from(
                 "Status line content that should truncate before the mode indicator".to_string(),
             )),
+            status_line_submission_mode_after_span: None,
             status_line_enabled: true,
             key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,
@@ -1934,10 +2111,12 @@ mod tests {
             esc_backtrack_hint: false,
             use_shift_enter_hint: false,
             is_task_running: false,
+            in_flight_submission_mode: InFlightSubmissionMode::Steer,
             collaboration_modes_enabled: false,
             is_wsl: false,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: None,
+            status_line_submission_mode_after_span: None,
             status_line_enabled: false,
             key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: Some(Line::from("Robie [explorer]").dim()),
@@ -1950,10 +2129,12 @@ mod tests {
             esc_backtrack_hint: false,
             use_shift_enter_hint: false,
             is_task_running: false,
+            in_flight_submission_mode: InFlightSubmissionMode::Steer,
             collaboration_modes_enabled: false,
             is_wsl: false,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             status_line_value: Some(Line::from("Status line content".to_string())),
+            status_line_submission_mode_after_span: None,
             status_line_enabled: true,
             key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: Some(Line::from("Robie [explorer]").dim()),
@@ -1972,10 +2153,12 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
+                in_flight_submission_mode: InFlightSubmissionMode::Steer,
                 collaboration_modes_enabled: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 status_line_value: None,
+                status_line_submission_mode_after_span: None,
                 status_line_enabled: false,
                 key_hints: FooterKeyHints::default_bindings(),
                 active_agent_label: Some(Line::from(vec![
@@ -2002,6 +2185,7 @@ mod tests {
             esc_backtrack_hint: false,
             use_shift_enter_hint: false,
             is_task_running: false,
+            in_flight_submission_mode: InFlightSubmissionMode::Steer,
             collaboration_modes_enabled: true,
             is_wsl: false,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
@@ -2009,6 +2193,7 @@ mod tests {
                 "Status line content that is definitely too long to fit alongside the mode label"
                     .to_string(),
             )),
+            status_line_submission_mode_after_span: None,
             status_line_enabled: true,
             key_hints: FooterKeyHints::default_bindings(),
             active_agent_label: None,

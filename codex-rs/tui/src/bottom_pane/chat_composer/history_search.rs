@@ -14,7 +14,7 @@
 //!
 //! A search session starts idle with an empty footer query, so opening Ctrl+R never previews the
 //! latest history entry by itself. Typing a query restarts traversal from newest to oldest,
-//! repeated Ctrl+R/Up and Ctrl+S/Down move between unique matches, `Enter` accepts the current
+//! repeated search keys and Up/Down move between unique matches, `Enter` accepts the current
 //! preview as an editable draft, and `Esc` or Ctrl+C restores the exact draft that existed before
 //! search started.
 

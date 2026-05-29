@@ -2664,7 +2664,8 @@
               "history_search_previous": null,
               "queue": null,
               "submit": null,
-              "toggle_shortcuts": null
+              "toggle_shortcuts": null,
+              "toggle_submission_mode": null
             },
             "editor": {
               "delete_backward": null,
@@ -2689,14 +2690,19 @@
               "clear_terminal": null,
               "copy": null,
               "open_external_editor": null,
+              "open_model_picker": null,
+              "open_snippets": null,
+              "open_touched_paths": null,
               "open_transcript": null,
               "queue": null,
+              "redraw_full_scrollback": null,
               "reload_current_session": null,
               "submit": null,
               "toggle_condensed_transcript": null,
               "toggle_fast_mode": null,
               "toggle_raw_output": null,
               "toggle_shortcuts": null,
+              "toggle_submission_mode": null,
               "toggle_vim_mode": null
             },
             "list": {
@@ -3065,6 +3071,14 @@
             }
           ],
           "description": "Toggle the composer shortcut overlay."
+        },
+        "toggle_submission_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Toggle whether the next draft during a running task steers immediately or waits in queue."
         }
       },
       "type": "object"
@@ -3272,6 +3286,30 @@
           ],
           "description": "Open the external editor for the current draft."
         },
+        "open_model_picker": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Open the model picker."
+        },
+        "open_snippets": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Open the snippet picker for the last agent response."
+        },
+        "open_touched_paths": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Open recently touched agent paths."
+        },
         "open_transcript": {
           "allOf": [
             {
@@ -3287,6 +3325,14 @@
             }
           ],
           "description": "Queue the current composer draft while a task is running."
+        },
+        "redraw_full_scrollback": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Redraw the full retained backlog for the current native terminal scrollback view."
         },
         "reload_current_session": {
           "allOf": [
@@ -3335,6 +3381,14 @@
             }
           ],
           "description": "Toggle the composer shortcut overlay."
+        },
+        "toggle_submission_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Toggle whether the next draft during a running task steers immediately or waits in queue."
         },
         "toggle_vim_mode": {
           "allOf": [
@@ -3395,7 +3449,8 @@
             "history_search_previous": null,
             "queue": null,
             "submit": null,
-            "toggle_shortcuts": null
+            "toggle_shortcuts": null,
+            "toggle_submission_mode": null
           }
         },
         "editor": {
@@ -3434,14 +3489,19 @@
             "clear_terminal": null,
             "copy": null,
             "open_external_editor": null,
+            "open_model_picker": null,
+            "open_snippets": null,
+            "open_touched_paths": null,
             "open_transcript": null,
             "queue": null,
+            "redraw_full_scrollback": null,
             "reload_current_session": null,
             "submit": null,
             "toggle_condensed_transcript": null,
             "toggle_fast_mode": null,
             "toggle_raw_output": null,
             "toggle_shortcuts": null,
+            "toggle_submission_mode": null,
             "toggle_vim_mode": null
           }
         },

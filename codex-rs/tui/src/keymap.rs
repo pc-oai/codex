@@ -57,8 +57,16 @@ pub(crate) struct AppKeymap {
     pub(crate) open_transcript: Vec<KeyBinding>,
     /// Open external editor for the current draft.
     pub(crate) open_external_editor: Vec<KeyBinding>,
+    /// Open the snippet picker for the last agent response.
+    pub(crate) open_snippets: Vec<KeyBinding>,
+    /// Open recently touched agent paths.
+    pub(crate) open_touched_paths: Vec<KeyBinding>,
+    /// Open the model picker.
+    pub(crate) open_model_picker: Vec<KeyBinding>,
     /// Copy the last agent response to the clipboard.
     pub(crate) copy: Vec<KeyBinding>,
+    /// Redraw the full retained backlog for the current native terminal scrollback view.
+    pub(crate) redraw_full_scrollback: Vec<KeyBinding>,
     /// Clear the terminal UI.
     pub(crate) clear_terminal: Vec<KeyBinding>,
     /// Reload the current session and resume it in a fresh process.
@@ -108,6 +116,8 @@ pub(crate) struct ComposerKeymap {
     pub(crate) submit: Vec<KeyBinding>,
     /// Queue current draft while a task is running.
     pub(crate) queue: Vec<KeyBinding>,
+    /// Toggle whether the next draft during a running task steers or queues.
+    pub(crate) toggle_submission_mode: Vec<KeyBinding>,
     /// Toggle composer shortcut overlay.
     pub(crate) toggle_shortcuts: Vec<KeyBinding>,
     /// Open reverse history search or move to the previous match.
@@ -385,10 +395,30 @@ impl RuntimeKeymap {
                 &defaults.app.open_external_editor,
                 "tui.keymap.global.open_external_editor",
             )?,
+            open_snippets: resolve_bindings(
+                keymap.global.open_snippets.as_ref(),
+                &defaults.app.open_snippets,
+                "tui.keymap.global.open_snippets",
+            )?,
+            open_touched_paths: resolve_bindings(
+                keymap.global.open_touched_paths.as_ref(),
+                &defaults.app.open_touched_paths,
+                "tui.keymap.global.open_touched_paths",
+            )?,
+            open_model_picker: resolve_bindings(
+                keymap.global.open_model_picker.as_ref(),
+                &defaults.app.open_model_picker,
+                "tui.keymap.global.open_model_picker",
+            )?,
             copy: resolve_bindings(
                 keymap.global.copy.as_ref(),
                 &defaults.app.copy,
                 "tui.keymap.global.copy",
+            )?,
+            redraw_full_scrollback: resolve_bindings(
+                keymap.global.redraw_full_scrollback.as_ref(),
+                &defaults.app.redraw_full_scrollback,
+                "tui.keymap.global.redraw_full_scrollback",
             )?,
             clear_terminal: resolve_bindings(
                 keymap.global.clear_terminal.as_ref(),
@@ -463,6 +493,12 @@ impl RuntimeKeymap {
         let composer = ComposerKeymap {
             submit: resolve_with_global!(keymap, defaults, composer, submit),
             queue: resolve_with_global!(keymap, defaults, composer, queue),
+            toggle_submission_mode: resolve_with_global!(
+                keymap,
+                defaults,
+                composer,
+                toggle_submission_mode
+            ),
             toggle_shortcuts: resolve_with_global!(keymap, defaults, composer, toggle_shortcuts),
             history_search_previous: resolve_local!(
                 keymap,
@@ -586,7 +622,23 @@ impl RuntimeKeymap {
                 keymap.global.open_external_editor.as_ref(),
                 app.open_external_editor.as_slice(),
             ),
+            (
+                keymap.global.open_snippets.as_ref(),
+                app.open_snippets.as_slice(),
+            ),
+            (
+                keymap.global.open_touched_paths.as_ref(),
+                app.open_touched_paths.as_slice(),
+            ),
+            (
+                keymap.global.open_model_picker.as_ref(),
+                app.open_model_picker.as_slice(),
+            ),
             (keymap.global.copy.as_ref(), app.copy.as_slice()),
+            (
+                keymap.global.redraw_full_scrollback.as_ref(),
+                app.redraw_full_scrollback.as_slice(),
+            ),
             (
                 keymap.global.clear_terminal.as_ref(),
                 app.clear_terminal.as_slice(),
@@ -721,7 +773,11 @@ impl RuntimeKeymap {
             app: AppKeymap {
                 open_transcript: default_bindings![ctrl(KeyCode::Char('t'))],
                 open_external_editor: default_bindings![ctrl(KeyCode::Char('g'))],
+                open_snippets: default_bindings![ctrl(KeyCode::Char('s'))],
+                open_touched_paths: default_bindings![alt(KeyCode::Char('p'))],
+                open_model_picker: default_bindings![ctrl(KeyCode::Char('m'))],
                 copy: default_bindings![ctrl(KeyCode::Char('o'))],
+                redraw_full_scrollback: default_bindings![alt(KeyCode::Char('l'))],
                 clear_terminal: default_bindings![ctrl(KeyCode::Char('l'))],
                 reload_current_session: default_bindings![ctrl(KeyCode::Char('r'))],
                 toggle_condensed_transcript: default_bindings![alt(KeyCode::Char('c'))],
@@ -744,15 +800,12 @@ impl RuntimeKeymap {
                     shift(KeyCode::Left)
                 ],
                 discard_queued_message: default_bindings![ctrl(KeyCode::Char('x'))],
-                steer_queued_message: default_bindings![
-                    alt(KeyCode::Enter),
-                    alt(KeyCode::Down),
-                    shift(KeyCode::Right)
-                ],
+                steer_queued_message: default_bindings![alt(KeyCode::Down), shift(KeyCode::Right)],
             },
             composer: ComposerKeymap {
                 submit: default_bindings![plain(KeyCode::Enter)],
                 queue: default_bindings![plain(KeyCode::Tab)],
+                toggle_submission_mode: default_bindings![alt(KeyCode::Enter)],
                 toggle_shortcuts: default_bindings![
                     plain(KeyCode::Char('?')),
                     shift(KeyCode::Char('?'))
@@ -962,7 +1015,14 @@ impl RuntimeKeymap {
                     "open_external_editor",
                     self.app.open_external_editor.as_slice(),
                 ),
+                ("open_snippets", self.app.open_snippets.as_slice()),
+                ("open_touched_paths", self.app.open_touched_paths.as_slice()),
+                ("open_model_picker", self.app.open_model_picker.as_slice()),
                 ("copy", self.app.copy.as_slice()),
+                (
+                    "redraw_full_scrollback",
+                    self.app.redraw_full_scrollback.as_slice(),
+                ),
                 ("clear_terminal", self.app.clear_terminal.as_slice()),
                 (
                     "reload_current_session",
@@ -1005,6 +1065,10 @@ impl RuntimeKeymap {
                 ),
                 ("composer.submit", self.composer.submit.as_slice()),
                 ("composer.queue", self.composer.queue.as_slice()),
+                (
+                    "composer.toggle_submission_mode",
+                    self.composer.toggle_submission_mode.as_slice(),
+                ),
                 (
                     "composer.toggle_shortcuts",
                     self.composer.toggle_shortcuts.as_slice(),
@@ -1028,7 +1092,14 @@ impl RuntimeKeymap {
                     "open_external_editor",
                     self.app.open_external_editor.as_slice(),
                 ),
+                ("open_snippets", self.app.open_snippets.as_slice()),
+                ("open_touched_paths", self.app.open_touched_paths.as_slice()),
+                ("open_model_picker", self.app.open_model_picker.as_slice()),
                 ("copy", self.app.copy.as_slice()),
+                (
+                    "redraw_full_scrollback",
+                    self.app.redraw_full_scrollback.as_slice(),
+                ),
                 ("clear_terminal", self.app.clear_terminal.as_slice()),
                 (
                     "reload_current_session",
@@ -1071,6 +1142,10 @@ impl RuntimeKeymap {
                 ),
                 ("composer.submit", self.composer.submit.as_slice()),
                 ("composer.queue", self.composer.queue.as_slice()),
+                (
+                    "composer.toggle_submission_mode",
+                    self.composer.toggle_submission_mode.as_slice(),
+                ),
                 (
                     "composer.toggle_shortcuts",
                     self.composer.toggle_shortcuts.as_slice(),
@@ -1095,7 +1170,14 @@ impl RuntimeKeymap {
                     "open_external_editor",
                     self.app.open_external_editor.as_slice(),
                 ),
+                ("open_snippets", self.app.open_snippets.as_slice()),
+                ("open_touched_paths", self.app.open_touched_paths.as_slice()),
+                ("open_model_picker", self.app.open_model_picker.as_slice()),
                 ("copy", self.app.copy.as_slice()),
+                (
+                    "redraw_full_scrollback",
+                    self.app.redraw_full_scrollback.as_slice(),
+                ),
                 ("clear_terminal", self.app.clear_terminal.as_slice()),
                 (
                     "reload_current_session",
@@ -1155,7 +1237,14 @@ impl RuntimeKeymap {
                     "open_external_editor",
                     self.app.open_external_editor.as_slice(),
                 ),
+                ("open_snippets", self.app.open_snippets.as_slice()),
+                ("open_touched_paths", self.app.open_touched_paths.as_slice()),
+                ("open_model_picker", self.app.open_model_picker.as_slice()),
                 ("copy", self.app.copy.as_slice()),
+                (
+                    "redraw_full_scrollback",
+                    self.app.redraw_full_scrollback.as_slice(),
+                ),
                 ("clear_terminal", self.app.clear_terminal.as_slice()),
                 (
                     "reload_current_session",
@@ -1239,11 +1328,23 @@ impl RuntimeKeymap {
                 ("editor.kill_line_end", self.editor.kill_line_end.as_slice()),
                 ("editor.yank", self.editor.yank.as_slice()),
             ],
-            [(
-                "composer.submit",
-                "editor.insert_newline",
-                key_hint::plain(KeyCode::Enter),
-            )],
+            [
+                (
+                    "composer.submit",
+                    "editor.insert_newline",
+                    key_hint::plain(KeyCode::Enter),
+                ),
+                (
+                    "composer.toggle_submission_mode",
+                    "editor.insert_newline",
+                    key_hint::alt(KeyCode::Enter),
+                ),
+                (
+                    "open_model_picker",
+                    "editor.insert_newline",
+                    key_hint::ctrl(KeyCode::Char('m')),
+                ),
+            ],
         )?;
 
         validate_unique(
@@ -1592,7 +1693,6 @@ const MAIN_RESERVED_BINDINGS: &[(&str, KeyBinding)] = &[
         key_hint::shift(KeyCode::Tab),
     ),
     ("fixed.backtrack", key_hint::plain(KeyCode::Esc)),
-    ("fixed.rotate_agent", key_hint::ctrl(KeyCode::Char('s'))),
     (
         "fixed.open_agent_picker",
         key_hint::ctrl(KeyCode::Char('a')),
@@ -1600,6 +1700,24 @@ const MAIN_RESERVED_BINDINGS: &[(&str, KeyBinding)] = &[
     ("fixed.previous_agent", key_hint::alt(KeyCode::Char('['))),
     ("fixed.next_agent", key_hint::alt(KeyCode::Char(']'))),
     ("fixed.spawn_subagent", key_hint::alt(KeyCode::Char('\\'))),
+    (
+        "fixed.spawn_fresh_subagent",
+        KeyBinding::new(
+            KeyCode::Char('\\'),
+            KeyModifiers::ALT.union(KeyModifiers::SHIFT),
+        ),
+    ),
+    (
+        "fixed.spawn_fresh_subagent",
+        key_hint::alt(KeyCode::Char('|')),
+    ),
+    (
+        "fixed.spawn_fresh_subagent",
+        KeyBinding::new(
+            KeyCode::Char('|'),
+            KeyModifiers::ALT.union(KeyModifiers::SHIFT),
+        ),
+    ),
     ("fixed.slash_command", key_hint::plain(KeyCode::Char('/'))),
     ("fixed.shell_command", key_hint::plain(KeyCode::Char('!'))),
     ("fixed.file_paths", key_hint::plain(KeyCode::Char('@'))),
@@ -1938,6 +2056,33 @@ mod tests {
     }
 
     #[test]
+    fn default_open_snippets_binding_is_ctrl_s() {
+        let runtime = RuntimeKeymap::defaults();
+        assert_eq!(
+            runtime.app.open_snippets,
+            vec![key_hint::ctrl(KeyCode::Char('s'))]
+        );
+    }
+
+    #[test]
+    fn default_open_touched_paths_binding_is_alt_p() {
+        let runtime = RuntimeKeymap::defaults();
+        assert_eq!(
+            runtime.app.open_touched_paths,
+            vec![key_hint::alt(KeyCode::Char('p'))]
+        );
+    }
+
+    #[test]
+    fn default_redraw_full_scrollback_binding_is_alt_l() {
+        let runtime = RuntimeKeymap::defaults();
+        assert_eq!(
+            runtime.app.redraw_full_scrollback,
+            vec![key_hint::alt(KeyCode::Char('l'))]
+        );
+    }
+
+    #[test]
     fn defaults_include_reassignable_main_surface_actions() {
         let runtime = RuntimeKeymap::defaults();
 
@@ -1948,6 +2093,10 @@ mod tests {
         assert_eq!(
             runtime.app.reload_current_session,
             vec![key_hint::ctrl(KeyCode::Char('r'))]
+        );
+        assert_eq!(
+            runtime.app.open_model_picker,
+            vec![key_hint::ctrl(KeyCode::Char('m'))]
         );
         assert_eq!(runtime.app.toggle_fast_mode, Vec::new());
         assert_eq!(
@@ -1970,6 +2119,17 @@ mod tests {
                 key_hint::ctrl(KeyCode::Char('e')),
                 key_hint::shift(KeyCode::Left)
             ]
+        );
+        assert_eq!(
+            runtime.chat.steer_queued_message,
+            vec![
+                key_hint::alt(KeyCode::Down),
+                key_hint::shift(KeyCode::Right)
+            ]
+        );
+        assert_eq!(
+            runtime.composer.toggle_submission_mode,
+            vec![key_hint::alt(KeyCode::Enter)]
         );
         assert_eq!(
             runtime.composer.history_search_previous,
@@ -2333,14 +2493,6 @@ mod tests {
         keymap.composer.submit = Some(one("ctrl-v"));
 
         expect_conflict(&keymap, "composer.submit", "fixed.paste_image");
-    }
-
-    #[test]
-    fn rejects_main_bindings_that_collide_with_agent_rotation_shortcut() {
-        let mut keymap = TuiKeymap::default();
-        keymap.composer.submit = Some(one("ctrl-s"));
-
-        expect_conflict(&keymap, "composer.submit", "fixed.rotate_agent");
     }
 
     #[test]

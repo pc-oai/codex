@@ -16,6 +16,29 @@ This is not distributed Cargo. One command still runs on one machine. The win
 is that `rustc`, linking, test execution, filesystem churn, thermal load, and
 local security-tool overhead move off the laptop.
 
+## Local Disk Space
+
+Local worktrees still grow their own `codex-rs/target` directories. To clear
+inactive Cargo output while retaining linked worktrees and archived runnable
+builds under `target/local-builds`, use:
+
+```bash
+codex-local-prune --apply --min-age-hours 0 --target-free-gb 100
+```
+
+The utility skips a worktree while Cargo, rustc, Clippy, or sccache is using
+it. A LaunchAgent named `com.pc.codex-local-prune` runs it every 30 minutes:
+it normally prunes only targets untouched for 24 hours, but below 40 GiB free
+it may prune any inactive target until the laptop reaches 100 GiB free.
+
+Cargo does not currently garbage-collect workspace build artifacts in
+`target/`. Its documented
+[`[cache] auto-clean-frequency`](https://doc.rust-lang.org/cargo/reference/config.html#cacheauto-clean-frequency)
+setting manages downloaded registry and Git dependency data under
+`$CARGO_HOME`, not these build directories. A shared `build.target-dir` would
+reduce duplicate output but would bring back build locking between concurrent
+local Codex sessions, so it is intentionally not configured here.
+
 ## Current Remote
 
 - Host: `ec2-user@3.147.77.99`
@@ -25,7 +48,8 @@ local security-tool overhead move off the laptop.
 - Per-session lanes: `/Users/ec2-user/ci/builds/pc-codex-rust-m4pro/lanes/<lane>`
 
 The remote Mac is intentionally temporary infrastructure. If the host IP, key,
-or security group changes, update this file and `~/bin/pc/codex-mac`.
+or security group changes, update this file and
+`~/src/openai-scripts/codex-mac`.
 
 ## Use
 
@@ -41,6 +65,8 @@ codex-mac -- just fix -p codex-tui
 the mirror is idle, then runs the command from that frozen canonical mirror
 while using lane-specific Cargo directories. Pass `--sync-back` only when the
 remote command intentionally edits source and those edits should come back.
+Sync checks file contents and gives transferred files fresh remote timestamps,
+so Cargo cannot reuse output compiled from older mirror contents.
 
 For the fastest normal loop from the main Codex checkout, keep a foreground
 watcher running in another pane:
@@ -57,9 +83,13 @@ command so an immediate build after an edit does not race the watcher debounce.
 When Codex invokes shell commands, it injects `CODEX_THREAD_ID`. `codex-mac`
 uses that as the lane name, so concurrent Codex sessions get separate remote
 Cargo directories instead of serializing on one shared build directory.
-Commands in the same lane serialize locally; commands in different lanes can
-compile at the same time on the M4. The watcher waits while builds hold the
-canonical mirror frozen, then catches the mirror up when the build lock clears.
+Commands in the same lane serialize locally. Normal commands wait to sync this
+checkout before building, so they do not silently build an older frozen mirror
+while another lane is active. When several commands intentionally use an
+already-synced frozen snapshot, pass `--no-sync` after the first sync; those
+commands may compile at the same time on the M4. The watcher waits while builds
+hold the canonical mirror frozen, then catches the mirror up when the build
+lock clears.
 
 For manual use outside Codex, pass an explicit lane when you care about cache
 reuse or isolation:
@@ -67,6 +97,22 @@ reuse or isolation:
 ```bash
 codex-mac --lane tui-repair -- cargo check -p codex-tui -p codex-cli
 ```
+
+## Iteration Loop
+
+Prefer the remote Mac for build and test feedback during normal Codex Rust
+iteration:
+
+1. Edit source locally and run source-only local steps such as `just fmt` when
+   required.
+2. Run heavy checks, tests, and lint fixes through `codex-mac` while the change
+   is still moving.
+3. Use `scripts/local-build-codex` once at the end when the result is settled
+   and Phil needs a runnable local source build.
+
+Do not use the final local build as an iteration loop. It bumps
+`LOCAL_BUILD_NUMBER`, archives a local build slot, and can make later local TUI
+test runs rebuild or refresh snapshots that include the local build label.
 
 ## Boundaries
 
@@ -76,22 +122,35 @@ codex-mac --lane tui-repair -- cargo check -p codex-tui -p codex-cli
   `RUSTC_WRAPPER=/opt/homebrew/bin/sccache`, with a shared M4-local sccache
   directory under `/Users/ec2-user/ci/builds/pc-codex-rust-m4pro/sccache`.
   Override those env vars explicitly when a session needs different behavior.
-- New lanes APFS-clone their Cargo dirs from the shared seed under
-  `/Users/ec2-user/ci/builds/pc-codex-rust-m4pro/seed`, then merge their Cargo
-  dirs back after the command. This is the primary cross-lane warm-cache path;
-  do not rely on sccache alone to share Rust artifacts across different lane
-  paths.
+- Each lane keeps its own persistent Cargo target directory, and uses Cargo's
+  standard target-contained build output rather than overriding
+  `CARGO_BUILD_BUILD_DIR`.
+  Build-script output can record absolute target paths, so cloning compiled
+  output across lanes can produce invalid linker paths. New helper versions
+  clear an older seeded lane once before reusing it in this isolated layout.
+- The legacy shared seed under
+  `/Users/ec2-user/ci/builds/pc-codex-rust-m4pro/seed` is not consumed or
+  updated by normal builds. Cross-lane reuse is limited to sccache until a
+  path-safe artifact scheme exists.
 - Useful operator commands:
 
   ```bash
   codex-mac --status
   codex-mac --restart-sccache
   codex-mac --prune-lanes 2
-  ssh -t -i ~/.ssh/id_ed25519 ec2-user@3.147.77.99 htop
+  tmux attach -t codex-mac-prune
+  codex-mac-htop
   ```
 - Keep `scripts/local-build-codex` local unless a session is explicitly working
   on a remote runnable-binary flow. That script mutates
   `codex-rs/tui/src/version.rs` and archives local build slots.
+- `codex-mac --sync-back` does not pull built artifacts today. Its source rsync
+  excludes `codex-rs/target/`, so a remote `target/debug/codex` or remote
+  `target/local-builds` directory will stay on the M4.
+- A better remote runnable-binary flow would build the macOS artifact on the M4,
+  copy that binary into the local `target/local-builds` archive, and sync the
+  matching `LOCAL_BUILD_NUMBER` source change back as one explicit operation.
+  Until that exists, keep the one final runnable-binary build local.
 - Do not assume remote builds are automatically faster for every command. The
   confirmed clean `scripts/local-build-codex` benchmark on 2026-05-21 was:
   local Mac `199.29s`, AWS M4 Pro `163.49s` after Rust toolchain warm-up.
@@ -177,6 +236,26 @@ codex-mac --lane tui-repair -- cargo check -p codex-tui -p codex-cli
 - 2026-05-21: Installed `htop 3.5.1` on the M4. Use
   `ssh -t -i ~/.ssh/id_ed25519 ec2-user@3.147.77.99 htop`; Homebrew notes that
   `sudo htop` is needed there to see every process.
+- 2026-05-22: Added Homebrew to the M4 user's non-interactive zsh path in
+  `~/.zshenv` and installed Ghostty's `xterm-ghostty` terminfo entry there.
+  Added `codex-mac-htop`, which uses forced SSH terminal allocation (`-tt`) so
+  it also works in fish retry loops where bare `ssh ... htop` produces
+  `TERM=unknown`.
+- 2026-05-22: Remote lane storage reached `1.2T`. `codex-mac --prune-lanes 1
+  --prune-target-free-gb 300` now skips active lanes, protects lanes newer than
+  the requested age when possible, then removes oldest inactive lanes until
+  the M4 reaches the free-space target. A `codex-mac-prune` tmux session runs
+  that command every 30 minutes.
+- 2026-05-22: Loaded local LaunchAgent `com.pc.codex-local-prune` with a
+  30-minute interval. A one-off `codex-local-prune --apply --min-age-hours 0
+  --target-free-gb 100` cleanup skipped the actively compiling main target,
+  removed three inactive target caches, and raised available local disk space
+  from `21.6 GiB` to `69.9 GiB` while retaining archived local builds.
+- 2026-05-22: For Codex Rust iteration, keep heavy build and test feedback on
+  `codex-mac` and reserve `scripts/local-build-codex` for the final runnable
+  local binary. The installed helper currently excludes `codex-rs/target/`
+  during sync-back, so a remote final-binary path still needs an explicit
+  artifact pull-down flow.
 - 2026-05-21: `codex-mac --lane fork-audit-clean --no-sync -- env -u
   CARGO_BUILD_BUILD_DIR cargo test -p codex-exec --no-fail-fast` passed after
   the default remote command failed only in integration cases that launch
@@ -204,3 +283,47 @@ codex-mac --lane tui-repair -- cargo check -p codex-tui -p codex-cli
   `RUSTC_WRAPPER=sccache` even though no local `sccache` executable was
   available. Building from `codex-startup-edit-proof-5a7c` with that wrapper
   unset produced archived clean build `v66` in `6m54s`.
+- 2026-05-26: During queued-follow-up footer work, local `cargo test` waited
+  behind Zed rust-analyzer all-targets checks in the shared local target; move
+  focused Rust validation to `codex-mac` immediately when this contention is
+  visible. A default remote lane then failed first with stale
+  `ThreadSpawnHistory` protocol artifacts and again while linking with stale
+  `fork-edit-preview` library paths plus missing `clang_rt.osx`; retry this
+  class of failure with a fresh isolated remote lane and report recurrence. A
+  fresh lane passed `bottom_pane::footer::tests::footer_snapshots` after its
+  cold build, but a separately invoked follow-up test in the same requested
+  lane rebuilt broadly; process evidence showed the first command set
+  `CARGO_BUILD_BUILD_DIR` and the follow-up did not, while other sessions were
+  also syncing the canonical mirror. Combine related filters into one remote
+  command or use a dedicated source mirror for stable multi-test evidence, and
+  inspect the helper's lane/build-dir handling if repeat warm reuse is needed.
+  Once that lane was on its stable target layout, a third focused TUI test
+  reused the cache and completed in `0.50s`. Remote `just fix -p codex-tui`
+  initially failed because `/opt/homebrew/bin/just` was not installed on the
+  M4; installing Homebrew `just` (`1.51.0`) restored the prescribed lint
+  command path.
+- 2026-05-26: `codex-mac --lane alt-l-native-scrollback-tui -- cargo test -p
+  codex-tui redraw_full_scrollback` linked against a stale absolute output
+  path from lane `fork-edit-preview` and failed to find `clang_rt.osx`.
+  `codex-mac` now keeps Cargo output lane-local, resets lanes once when
+  migrating away from the shared seed layout, and no longer publishes failed
+  or successful lane output into that unsafe shared seed. It also stops
+  setting `CARGO_BUILD_BUILD_DIR`, which previously made tests that launch
+  first-party binaries look in a directory where Cargo did not put them.
+- 2026-05-26: A follow-up `codex-mac --lane alt-l-native-scrollback-lib --
+  cargo test -p codex-tui --lib keymap_setup::tests` ran against a partially
+  stale canonical mirror while another lane was active: the feature code was
+  present but the latest test/snapshot edits were missing. Normal invocations
+  now wait for an exclusive source sync before building; `--no-sync` is the
+  explicit opt-in for concurrent builds of a deliberately frozen snapshot.
+- 2026-05-26: After the mirror-sync fix, that same keymap test read updated
+  snapshots but reused a compiled test binary whose source expectation was
+  stale. `rsync -a` had preserved a source timestamp older than the binary
+  built during the prior mixed run, so Cargo did not rebuild it. Source syncs
+  now use checksums and do not preserve file modification times, ensuring
+  transferred source changes invalidate Cargo output.
+- 2026-05-26: While validating queue-only footer indication, a later
+  `codex-mac` invocation could not start because direct SSH to the M4 host
+  `3.147.77.99:22` timed out. Focused local snapshot tests had already passed;
+  use local verification only as a declared fallback during this outage and
+  re-check M4 reachability before assuming a builder-capacity shortfall.

@@ -112,7 +112,7 @@ pub(crate) enum TalonCommand {
         #[serde(default)]
         effort: Option<ReasoningEffort>,
     },
-    /// Restart Codex only when no turn is currently running.
+    /// Restart Codex only when the loaded session tree has no turn in progress.
     ReloadCurrentSessionIfIdle,
     /// Restart Codex and resume the current session.
     ReloadCurrentSession,

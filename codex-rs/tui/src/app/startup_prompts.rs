@@ -147,7 +147,7 @@ pub(super) fn apply_accepted_model_migration(
     target_default_effort: ReasoningEffortConfig,
 ) {
     app_event_tx.send(AppEvent::PersistModelMigrationPromptAcknowledged {
-        from_model,
+        from_model: from_model.clone(),
         to_model: target_model.clone(),
     });
 
@@ -156,6 +156,7 @@ pub(super) fn apply_accepted_model_migration(
     app_event_tx.send(AppEvent::UpdateModel(target_model.clone()));
     app_event_tx.send(AppEvent::UpdateReasoningEffort(Some(target_default_effort)));
     app_event_tx.send(AppEvent::PersistModelSelection {
+        previous_model: from_model,
         model: target_model,
         effort: Some(target_default_effort),
     });

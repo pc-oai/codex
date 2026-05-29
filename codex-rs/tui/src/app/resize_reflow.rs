@@ -125,11 +125,11 @@ impl App {
         }
     }
 
-    /// Start retaining a thread-switch transcript replay without rendering each historical cell.
+    /// Start retaining a thread-switch transcript replay without writing each historical cell.
     ///
-    /// Thread switches already rebuild `transcript_cells` from source. When a row cap exists, we can
-    /// defer terminal writes until the replay is complete and reuse the resize-reflow tail renderer
-    /// so only the rows the terminal would retain are formatted and inserted.
+    /// Thread switches already rebuild `transcript_cells` from source. Batching terminal writes is
+    /// worthwhile even without resize reflow; when resize reflow supplies a row cap, this also uses
+    /// the tail renderer so only the rows the terminal would retain are formatted and inserted.
     pub(super) fn begin_thread_switch_history_replay_buffer(&mut self) {
         if self.overlay.is_none() {
             self.initial_history_replay_buffer = Some(InitialHistoryReplayBuffer {
@@ -186,7 +186,11 @@ impl App {
             return;
         }
 
-        let max_rows = self.resize_reflow_max_rows();
+        let max_rows = if self.terminal_resize_reflow_enabled() {
+            self.resize_reflow_max_rows()
+        } else {
+            None
+        };
         if let Some(buffer) = &mut self.initial_history_replay_buffer {
             if let Some(max_rows) = max_rows {
                 Self::buffer_initial_history_replay_display_lines(buffer, display, max_rows);
@@ -449,6 +453,30 @@ impl App {
         }
 
         Ok(terminal_width)
+    }
+
+    /// Rebuild the current native terminal scrollback view from all retained transcript cells,
+    /// without the automatic resize row cap.
+    pub(super) fn redraw_full_scrollback(&mut self, tui: &mut tui::Tui) -> Result<bool> {
+        if self.transcript_cells.is_empty() {
+            return Ok(false);
+        }
+
+        let terminal_width = tui.terminal.size()?.width;
+        let width = self.chat_widget.history_wrap_width(terminal_width);
+        let lines = self.render_transcript_lines_for_scrollback_replay(width);
+
+        tui.clear_pending_history_lines();
+        self.clear_terminal_for_resize_replay(tui)?;
+        self.deferred_history_lines.clear();
+        self.has_emitted_history_lines = !lines.is_empty();
+        if !lines.is_empty() {
+            tui.insert_history_lines_with_wrap_policy(lines, self.history_line_wrap_policy());
+        }
+
+        self.transcript_reflow.clear_pending_reflow();
+        self.transcript_reflow.mark_reflowed_width(terminal_width);
+        Ok(true)
     }
 
     /// Render transcript cells for the current resize rebuild.

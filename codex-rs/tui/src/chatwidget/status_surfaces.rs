@@ -168,9 +168,12 @@ impl ChatWidget {
         let local_build_label = local_build_label();
         let enabled = !selections.status_line_items.is_empty()
             || mcp_startup_progress.is_some()
+            || self.agent_switch_pending
             || local_build_label.is_some();
         self.bottom_pane.set_status_line_enabled(enabled);
         if !enabled {
+            self.bottom_pane
+                .set_status_line_submission_mode_after_span(None);
             self.set_status_line(/*status_line*/ None);
             self.set_status_line_right(/*status_line*/ None);
             self.set_status_line_hyperlink(/*url*/ None);
@@ -200,7 +203,17 @@ impl ChatWidget {
         if let Some(value) = mcp_startup_progress {
             right_segments.push((StatusLineItem::TaskProgress, value, /*muted*/ false));
         }
+        if let Some(value) = self.agent_switch_status_line_label() {
+            left_segments.clear();
+            left_segments.push((StatusLineItem::TaskProgress, value, /*muted*/ false));
+        }
 
+        let submission_mode_after_span = left_segments
+            .iter()
+            .position(|(item, _, _)| *item == StatusLineItem::GitBranch)
+            .map(|position| position * 2 + 1);
+        self.bottom_pane
+            .set_status_line_submission_mode_after_span(submission_mode_after_span);
         self.set_status_line(status_line_from_segments_with_muting(
             left_segments,
             self.config.tui_status_line_use_colors,
@@ -770,6 +783,14 @@ impl ChatWidget {
             .filter(|state| !matches!(state, McpStartupStatus::Starting))
             .count();
         Some(format!("MCP: {completed}/{total}"))
+    }
+
+    fn agent_switch_status_line_label(&self) -> Option<String> {
+        if self.agent_switch_pending {
+            Some("Switching agent...".to_string())
+        } else {
+            None
+        }
     }
 
     fn status_line_pull_request_url(&self) -> Option<String> {

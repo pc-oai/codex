@@ -346,20 +346,30 @@ impl App {
         self.active_thread_id = Some(thread_id);
         self.active_thread_rx = Some(receiver);
 
+        let retains_workspace_metadata = snapshot.session.as_ref().is_some_and(|session| {
+            session.cwd.as_path() == self.chat_widget.config_ref().cwd.as_path()
+        });
         let init = self.chatwidget_init_for_forked_or_resumed_thread(
             tui,
             self.config.clone(),
             /*initial_user_message*/ None,
         );
-        self.replace_chat_widget(ChatWidget::new_with_app_event(init))
-            .await;
+        let mut chat_widget = ChatWidget::new_with_app_event(init);
+        if retains_workspace_metadata {
+            chat_widget.inherit_workspace_metadata_from(&self.chat_widget);
+        }
+        self.replace_chat_widget(chat_widget).await;
         if transferred_terminal_progress {
             self.chat_widget
                 .inherit_managed_terminal_progress(transferred_terminal_progress);
         }
 
         self.reset_for_thread_switch(tui)?;
-        self.replay_thread_snapshot(snapshot, !is_replay_only);
+        if retains_workspace_metadata {
+            self.replay_thread_snapshot_retaining_workspace_metadata(snapshot, !is_replay_only);
+        } else {
+            self.replay_thread_snapshot(snapshot, !is_replay_only);
+        }
         if is_replay_only {
             let message = if attached_replay_only {
                 format!(
@@ -762,6 +772,21 @@ impl App {
         );
         self.chat_widget.set_active_agent_label(label);
         self.sync_side_thread_ui();
+    }
+
+    /// Whether an automatic reload would interrupt work in any loaded thread of this TUI.
+    pub(super) async fn agent_tree_is_busy(&self) -> bool {
+        if self.chat_widget.is_task_running() {
+            return true;
+        }
+
+        for channel in self.thread_event_channels.values() {
+            if channel.store.lock().await.active_turn_id().is_some() {
+                return true;
+            }
+        }
+
+        false
     }
 
     async fn working_subagent_count(&self) -> usize {

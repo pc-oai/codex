@@ -408,6 +408,14 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn thread_close(
+        &self,
+        params: ThreadCloseParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let response = self.thread_close_response_inner(params).await?;
+        Ok(Some(response.into()))
+    }
+
     pub(crate) async fn thread_resume(
         &self,
         request_id: ConnectionRequestId,
@@ -777,6 +785,19 @@ impl ThreadRequestProcessor {
             ThreadUnsubscribeStatus::NotSubscribed
         };
         Ok(ThreadUnsubscribeResponse { status })
+    }
+
+    async fn thread_close_response_inner(
+        &self,
+        params: ThreadCloseParams,
+    ) -> Result<ThreadCloseResponse, JSONRPCErrorError> {
+        let thread_id = ThreadId::from_string(&params.thread_id)
+            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
+        self.thread_manager
+            .close_thread_subagent(thread_id)
+            .await
+            .map_err(|err| core_thread_write_error("close subagent", err))?;
+        Ok(ThreadCloseResponse {})
     }
 
     async fn prepare_thread_for_archive(&self, thread_id: ThreadId) {
@@ -1268,6 +1289,11 @@ impl ThreadRequestProcessor {
         app_server_client_version: Option<String>,
     ) -> Result<(ThreadSpawnResponse, ThreadStartedNotification), JSONRPCErrorError> {
         let (parent_thread_id, parent_thread) = self.load_thread(&params.thread_id).await?;
+        let history = match params.history.unwrap_or(ApiThreadSpawnHistory::FullHistory) {
+            ApiThreadSpawnHistory::Fresh => ThreadSpawnHistory::Fresh,
+            ApiThreadSpawnHistory::FullHistory => ThreadSpawnHistory::FullHistory,
+        };
+        let copies_parent_history = history == ThreadSpawnHistory::FullHistory;
         let task_name = params.task_name.unwrap_or_else(|| {
             format!(
                 "user_subagent_{}",
@@ -1282,7 +1308,7 @@ impl ThreadRequestProcessor {
         let starts_turn = !initial_input.is_empty();
         let (thread_id, child_thread) = self
             .thread_manager
-            .spawn_thread_subagent(parent_thread_id, task_name, initial_input)
+            .spawn_thread_subagent(parent_thread_id, task_name, initial_input, history)
             .await
             .map_err(|err| core_thread_write_error("spawn subagent", err))?;
 
@@ -1295,8 +1321,29 @@ impl ThreadRequestProcessor {
         )
         .await?;
         let config_snapshot = child_thread.config_snapshot().await;
-        let mut thread =
-            build_thread_from_loaded_snapshot(thread_id, &config_snapshot, child_thread.as_ref());
+        child_thread.ensure_rollout_materialized().await;
+        child_thread.flush_rollout().await.map_err(|err| {
+            internal_error(format!(
+                "failed to flush spawned subagent {thread_id} before history replay: {err}"
+            ))
+        })?;
+        let persisted_thread = self
+            .load_persisted_thread_for_read(thread_id, /*include_turns*/ false)
+            .await
+            .map_err(thread_read_view_error)?;
+        let mut thread = self
+            .load_live_thread_view(
+                thread_id,
+                /*include_turns*/ true,
+                child_thread.as_ref(),
+                persisted_thread,
+            )
+            .await
+            .map_err(thread_read_view_error)?;
+        if copies_parent_history && thread.forked_from_id.is_none() {
+            thread.forked_from_id = Some(parent_thread_id.to_string());
+        }
+        thread.thread_source = config_snapshot.thread_source.map(Into::into);
 
         log_listener_attach_result(
             self.ensure_conversation_listener(

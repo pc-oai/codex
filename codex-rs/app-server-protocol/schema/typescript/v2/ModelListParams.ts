@@ -14,4 +14,8 @@ limit?: number | null,
 /**
  * When true, include models that are hidden from the default picker list.
  */
-includeHidden?: boolean | null, };
+includeHidden?: boolean | null,
+/**
+ * When true, refresh the remote model catalog instead of reusing a fresh cache entry.
+ */
+forceRefresh?: boolean | null, };

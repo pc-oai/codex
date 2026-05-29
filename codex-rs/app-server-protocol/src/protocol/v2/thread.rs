@@ -227,11 +227,25 @@ pub struct ThreadStartResponse {
 pub struct ThreadSpawnParams {
     pub thread_id: String,
     pub input: Vec<super::UserInput>,
+    /// Parent transcript history to include in the child thread.
+    ///
+    /// Omitted copies completed parent turns and excludes any turn still in progress.
+    #[ts(optional = nullable)]
+    pub history: Option<ThreadSpawnHistory>,
     /// Optional relative task name for the child agent path.
     ///
     /// Omitted lets the server assign a unique path segment.
     #[ts(optional = nullable)]
     pub task_name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ThreadSpawnHistory {
+    Fresh,
+    /// Copy committed parent turns and omit any currently in-progress parent turn.
+    FullHistory,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -523,6 +537,19 @@ pub struct ThreadArchiveParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadArchiveResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// Close a spawned child agent thread and its live descendants.
+pub struct ThreadCloseParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadCloseResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

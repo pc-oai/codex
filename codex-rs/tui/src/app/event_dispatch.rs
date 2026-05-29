@@ -8,6 +8,29 @@ use super::*;
 
 const SHUTDOWN_FIRST_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
 
+fn model_selection_message(
+    previous_model: &str,
+    model: &str,
+    effort: Option<ReasoningEffortConfig>,
+    profile: Option<&str>,
+) -> String {
+    let mut message = if previous_model == model {
+        format!("Model changed to {model}")
+    } else {
+        format!("Model changed from {previous_model} to {model}")
+    };
+    if let Some(label) = App::reasoning_label_for(model, effort) {
+        message.push(' ');
+        message.push_str(label);
+    }
+    if let Some(profile) = profile {
+        message.push_str(" for ");
+        message.push_str(profile);
+        message.push_str(" profile");
+    }
+    message
+}
+
 impl App {
     pub(super) async fn handle_event(
         &mut self,
@@ -335,6 +358,16 @@ impl App {
             AppEvent::CopyLastRequest => {
                 let request = self.latest_user_request_text();
                 self.chat_widget.copy_last_user_request_text(request);
+            }
+            AppEvent::CopySnippet(snippet) => {
+                self.chat_widget.copy_snippet_to_clipboard(snippet);
+            }
+            AppEvent::OpenSnippetMenuFromResponse(response_offset) => {
+                self.chat_widget
+                    .open_snippet_menu_from_response(response_offset);
+            }
+            AppEvent::OpenTouchedPathInEditor { path } => {
+                self.launch_touched_path_editor(tui, path).await;
             }
             AppEvent::ToggleCondensedTranscriptView => {
                 self.toggle_condensed_transcript_view(tui)?;
@@ -824,6 +857,17 @@ impl App {
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);
             }
+            AppEvent::RefreshModelCatalog => {
+                self.refresh_model_catalog(app_server);
+            }
+            AppEvent::ModelCatalogLoaded { result } => match result {
+                Ok(models) => {
+                    self.chat_widget.replace_model_catalog(models);
+                }
+                Err(err) => {
+                    tracing::warn!("model/list failed during TUI model catalog refresh: {err}");
+                }
+            },
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
             }
@@ -854,6 +898,9 @@ impl App {
             }
             AppEvent::OpenAllModelsPopup { models } => {
                 self.chat_widget.open_all_models_popup(models);
+            }
+            AppEvent::OpenCustomModelPrompt => {
+                self.chat_widget.open_custom_model_prompt();
             }
             AppEvent::OpenFullAccessConfirmation {
                 preset,
@@ -1255,7 +1302,11 @@ impl App {
                     let _ = (preset, mode);
                 }
             }
-            AppEvent::PersistModelSelection { model, effort } => {
+            AppEvent::PersistModelSelection {
+                previous_model,
+                model,
+                effort,
+            } => {
                 let profile = self.active_profile.as_deref();
                 match crate::config_update::write_config_batch(
                     app_server.request_handle(),
@@ -1272,16 +1323,8 @@ impl App {
                             .map(|selected_effort| selected_effort.to_string())
                             .unwrap_or_else(|| "default".to_string());
                         tracing::info!("Selected model: {model}, Selected effort: {effort_label}");
-                        let mut message = format!("Model changed to {model}");
-                        if let Some(label) = Self::reasoning_label_for(&model, effort) {
-                            message.push(' ');
-                            message.push_str(label);
-                        }
-                        if let Some(profile) = profile {
-                            message.push_str(" for ");
-                            message.push_str(profile);
-                            message.push_str(" profile");
-                        }
+                        let message =
+                            model_selection_message(&previous_model, &model, effort, profile);
                         self.chat_widget.add_info_message(message, /*hint*/ None);
                     }
                     Err(err) => {
@@ -1742,6 +1785,7 @@ impl App {
             AppEvent::StartSubagent {
                 parent_thread_id,
                 prompt,
+                history,
                 switch_to_child,
             } => {
                 self.handle_start_subagent(
@@ -1749,6 +1793,7 @@ impl App {
                     app_server,
                     parent_thread_id,
                     prompt,
+                    history,
                     switch_to_child,
                 )
                 .await;
@@ -2332,5 +2377,23 @@ impl App {
             .filter(|message| !message.is_empty())
             .take(limit)
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_selection_message_names_model_transition() {
+        assert_eq!(
+            model_selection_message(
+                "gpt-5.5-oai",
+                "gengar-collaborator",
+                Some(ReasoningEffortConfig::Medium),
+                /*profile*/ None,
+            ),
+            "Model changed from gpt-5.5-oai to gengar-collaborator medium"
+        );
     }
 }

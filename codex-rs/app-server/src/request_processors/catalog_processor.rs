@@ -238,8 +238,19 @@ impl CatalogRequestProcessor {
             limit,
             cursor,
             include_hidden,
+            force_refresh,
         } = params;
-        let models = supported_models(thread_manager, include_hidden.unwrap_or(false)).await;
+        let refresh_strategy = if force_refresh.unwrap_or(false) {
+            codex_models_manager::manager::RefreshStrategy::Online
+        } else {
+            codex_models_manager::manager::RefreshStrategy::OnlineIfUncached
+        };
+        let models = supported_models(
+            thread_manager,
+            include_hidden.unwrap_or(false),
+            refresh_strategy,
+        )
+        .await;
         let total = models.len();
 
         if total == 0 {

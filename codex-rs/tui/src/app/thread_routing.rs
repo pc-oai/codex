@@ -930,21 +930,34 @@ impl App {
         session
             .set_cwd_retargeting_implicit_runtime_workspace_root(notification.thread.cwd.clone());
         let rollout_path = notification.thread.path.clone();
+        let is_thread_spawn = matches!(
+            &notification.thread.source,
+            codex_app_server_protocol::SessionSource::SubAgent(
+                codex_protocol::protocol::SubAgentSource::ThreadSpawn { .. }
+            )
+        );
+        let mut keep_rollout_path = true;
         if let Some(model) =
             read_session_model(self.state_db.as_deref(), thread_id, rollout_path.as_deref()).await
         {
             session.model = model;
+        } else if is_thread_spawn && rollout_path.is_some() {
+            // Child threads normally inherit their parent's model. Keep that
+            // visible while model persistence catches up, but force live refresh
+            // before replay so child model overrides still win.
+            keep_rollout_path = false;
         } else if rollout_path.is_some() {
             session.model.clear();
         }
         session.message_history = None;
-        session.rollout_path = rollout_path;
+        session.rollout_path = keep_rollout_path.then_some(rollout_path).flatten();
         self.upsert_agent_picker_thread(
             thread_id,
             notification.thread.agent_nickname.clone(),
             notification.thread.agent_role.clone(),
             /*is_closed*/ false,
         );
+        self.refresh_agent_activity_label().await;
         Some(session)
     }
 
@@ -1252,8 +1265,35 @@ impl App {
         snapshot: ThreadEventSnapshot,
         resume_restored_queue: bool,
     ) {
-        let should_buffer_replay = self.terminal_resize_reflow_enabled()
-            && (!snapshot.turns.is_empty() || !snapshot.events.is_empty());
+        self.replay_thread_snapshot_inner(
+            snapshot,
+            resume_restored_queue,
+            /*retain_workspace_metadata*/ false,
+        );
+    }
+
+    pub(super) fn replay_thread_snapshot_retaining_workspace_metadata(
+        &mut self,
+        snapshot: ThreadEventSnapshot,
+        resume_restored_queue: bool,
+    ) {
+        self.replay_thread_snapshot_inner(
+            snapshot,
+            resume_restored_queue,
+            /*retain_workspace_metadata*/ true,
+        );
+    }
+
+    fn replay_thread_snapshot_inner(
+        &mut self,
+        snapshot: ThreadEventSnapshot,
+        resume_restored_queue: bool,
+        retain_workspace_metadata: bool,
+    ) {
+        // A thread switch rebuilds history from scratch. Buffering prevents a slow terminal
+        // write for every replayed cell even when resize reflow is not enabled; row trimming
+        // remains controlled by the resize-reflow configuration.
+        let should_buffer_replay = !snapshot.turns.is_empty() || !snapshot.events.is_empty();
         if should_buffer_replay {
             self.app_event_tx
                 .send(AppEvent::BeginThreadSwitchHistoryReplayBuffer);
@@ -1264,7 +1304,15 @@ impl App {
             if self.side_threads.contains_key(&session.thread_id) {
                 self.chat_widget.handle_side_thread_session(session);
             } else if suppress_replay_notices {
-                self.chat_widget.handle_thread_session_quiet(session);
+                if retain_workspace_metadata {
+                    self.chat_widget
+                        .handle_thread_session_quiet_retaining_workspace_metadata(session);
+                } else {
+                    self.chat_widget.handle_thread_session_quiet(session);
+                }
+            } else if retain_workspace_metadata {
+                self.chat_widget
+                    .handle_thread_session_retaining_workspace_metadata(session);
             } else {
                 self.chat_widget.handle_thread_session(session);
             }
@@ -1381,6 +1429,19 @@ impl App {
             &event,
             ThreadBufferedEvent::Notification(ServerNotification::TurnCompleted(_))
         );
+        // A combined edit can receive its live user-message echo before rollback completes.
+        // Confirmation owns that rendered row; rendering this echo would leave a stale duplicate
+        // in terminal scrollback after the transcript is rolled back.
+        let suppress_pending_edit_user_message = self.pending_combined_edit_rollback_active()
+            && matches!(
+                &event,
+                ThreadBufferedEvent::Notification(ServerNotification::ItemCompleted(
+                    codex_app_server_protocol::ItemCompletedNotification {
+                        item: ThreadItem::UserMessage { .. },
+                        ..
+                    }
+                ))
+            );
         if let ThreadBufferedEvent::Notification(ServerNotification::ThreadRolledBack(notification)) =
             &event
             && self.pending_combined_edit_rollback_active()
@@ -1399,8 +1460,10 @@ impl App {
         match event {
             ThreadBufferedEvent::Notification(notification) => {
                 self.cache_collab_receiver_threads_for_notification(&notification);
-                self.chat_widget
-                    .handle_server_notification(notification, /*replay_kind*/ None);
+                if !suppress_pending_edit_user_message {
+                    self.chat_widget
+                        .handle_server_notification(notification, /*replay_kind*/ None);
+                }
             }
             ThreadBufferedEvent::Request(request) => {
                 if self

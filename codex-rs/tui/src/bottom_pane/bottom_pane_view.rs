@@ -55,6 +55,11 @@ pub(crate) trait BottomPaneView: Renderable {
         None
     }
 
+    /// Active search query for list-based views that refresh while the user is filtering.
+    fn search_query(&self) -> Option<&str> {
+        None
+    }
+
     /// Handle Ctrl-C while this view is active.
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         CancellationEvent::NotHandled

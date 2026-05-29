@@ -16,6 +16,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -94,16 +95,19 @@ pub(crate) fn next_agent_shortcut() -> crate::key_hint::KeyBinding {
     crate::key_hint::alt(KeyCode::Char(']'))
 }
 
-pub(crate) fn rotate_agent_shortcut() -> crate::key_hint::KeyBinding {
-    crate::key_hint::ctrl(KeyCode::Char('s'))
-}
-
 pub(crate) fn open_agent_picker_shortcut() -> crate::key_hint::KeyBinding {
     crate::key_hint::ctrl(KeyCode::Char('a'))
 }
 
 pub(crate) fn spawn_subagent_shortcut() -> crate::key_hint::KeyBinding {
     crate::key_hint::alt(KeyCode::Char('\\'))
+}
+
+pub(crate) fn fresh_subagent_shortcut() -> crate::key_hint::KeyBinding {
+    crate::key_hint::KeyBinding::new(
+        KeyCode::Char('\\'),
+        KeyModifiers::ALT.union(KeyModifiers::SHIFT),
+    )
 }
 
 pub(crate) fn previous_agent_shortcut_matches(key_event: KeyEvent) -> bool {
@@ -114,16 +118,22 @@ pub(crate) fn next_agent_shortcut_matches(key_event: KeyEvent) -> bool {
     next_agent_shortcut().is_press(key_event)
 }
 
-pub(crate) fn rotate_agent_shortcut_matches(key_event: KeyEvent) -> bool {
-    rotate_agent_shortcut().is_press(key_event)
-}
-
 pub(crate) fn open_agent_picker_shortcut_matches(key_event: KeyEvent) -> bool {
     open_agent_picker_shortcut().is_press(key_event)
 }
 
 pub(crate) fn spawn_subagent_shortcut_matches(key_event: KeyEvent) -> bool {
     spawn_subagent_shortcut().is_press(key_event)
+}
+
+pub(crate) fn fresh_subagent_shortcut_matches(key_event: KeyEvent) -> bool {
+    fresh_subagent_shortcut().is_press(key_event)
+        || crate::key_hint::alt(KeyCode::Char('|')).is_press(key_event)
+        || crate::key_hint::KeyBinding::new(
+            KeyCode::Char('|'),
+            KeyModifiers::ALT.union(KeyModifiers::SHIFT),
+        )
+        .is_press(key_event)
 }
 
 pub(crate) fn spawn_request_summary(item: &ThreadItem) -> Option<SpawnRequestSummary> {
@@ -694,10 +704,6 @@ mod tests {
             KeyCode::Char(']'),
             KeyModifiers::ALT
         ),));
-        assert!(rotate_agent_shortcut_matches(KeyEvent::new(
-            KeyCode::Char('s'),
-            KeyModifiers::CONTROL,
-        )));
         assert!(open_agent_picker_shortcut_matches(KeyEvent::new(
             KeyCode::Char('a'),
             KeyModifiers::CONTROL,
@@ -705,6 +711,18 @@ mod tests {
         assert!(spawn_subagent_shortcut_matches(KeyEvent::new(
             KeyCode::Char('\\'),
             KeyModifiers::ALT,
+        )));
+        assert!(fresh_subagent_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('\\'),
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+        )));
+        assert!(fresh_subagent_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('|'),
+            KeyModifiers::ALT,
+        )));
+        assert!(fresh_subagent_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('|'),
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
         )));
         assert!(!previous_agent_shortcut_matches(KeyEvent::new(
             KeyCode::Left,
@@ -714,10 +732,6 @@ mod tests {
             KeyCode::Right,
             KeyModifiers::ALT
         ),));
-        assert!(!rotate_agent_shortcut_matches(KeyEvent::new(
-            KeyCode::Char('s'),
-            KeyModifiers::ALT,
-        )));
         assert!(!open_agent_picker_shortcut_matches(KeyEvent::new(
             KeyCode::Char('a'),
             KeyModifiers::ALT,
@@ -725,6 +739,10 @@ mod tests {
         assert!(!spawn_subagent_shortcut_matches(KeyEvent::new(
             KeyCode::Char('\\'),
             KeyModifiers::NONE,
+        )));
+        assert!(!fresh_subagent_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('\\'),
+            KeyModifiers::ALT,
         )));
     }
 

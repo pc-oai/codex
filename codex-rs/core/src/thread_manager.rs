@@ -1,5 +1,6 @@
 use crate::SkillsManager;
 use crate::agent::AgentControl;
+use crate::agent::control::SpawnAgentForkMode;
 use crate::agent::control::SpawnAgentOptions;
 use crate::agent::next_thread_spawn_depth;
 use crate::attestation::AttestationProvider;
@@ -115,6 +116,14 @@ pub struct NewThread {
     pub thread_id: ThreadId,
     pub thread: Arc<CodexThread>,
     pub session_configured: SessionConfiguredEvent,
+}
+
+/// Parent transcript history to seed into a thread-spawn child.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThreadSpawnHistory {
+    Fresh,
+    /// Copy all completed parent turns, excluding a parent turn still in progress.
+    FullHistory,
 }
 
 // TODO(ccunningham): Add an explicit non-interrupting live-turn snapshot once
@@ -647,6 +656,7 @@ impl ThreadManager {
         parent_thread_id: ThreadId,
         task_name: String,
         input: Vec<UserInput>,
+        history: ThreadSpawnHistory,
     ) -> CodexResult<(ThreadId, Arc<CodexThread>)> {
         let parent_thread = self.get_thread(parent_thread_id).await?;
         let parent_snapshot = parent_thread.config_snapshot().await;
@@ -688,6 +698,10 @@ impl ThreadManager {
             agent_role: None,
         });
 
+        let fork_mode = match history {
+            ThreadSpawnHistory::Fresh => None,
+            ThreadSpawnHistory::FullHistory => Some(SpawnAgentForkMode::StableHistory),
+        };
         let spawned = parent_thread
             .codex
             .session
@@ -703,11 +717,39 @@ impl ThreadManager {
                     input.into()
                 },
                 Some(session_source),
-                SpawnAgentOptions::default(),
+                SpawnAgentOptions {
+                    fork_parent_spawn_call_id: fork_mode
+                        .as_ref()
+                        .map(|_| "thread/spawn".to_string()),
+                    fork_mode,
+                    ..Default::default()
+                },
             )
             .await?;
         let child_thread = self.get_thread(spawned.thread_id).await?;
         Ok((spawned.thread_id, child_thread))
+    }
+
+    /// Close a spawned child agent and its live descendants.
+    pub async fn close_thread_subagent(&self, thread_id: ThreadId) -> CodexResult<()> {
+        let thread = self.get_thread(thread_id).await?;
+        let thread_snapshot = thread.config_snapshot().await;
+        if !matches!(
+            thread_snapshot.session_source,
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+        ) {
+            return Err(CodexErr::InvalidRequest(format!(
+                "thread {thread_id} is not a spawned child agent"
+            )));
+        }
+        thread
+            .codex
+            .session
+            .services
+            .agent_control
+            .close_agent(thread_id)
+            .await?;
+        Ok(())
     }
 
     pub async fn resume_thread_from_rollout(
@@ -1529,7 +1571,7 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
     }
 }
 
-fn fork_history_from_snapshot(
+pub(crate) fn fork_history_from_snapshot(
     snapshot: ForkSnapshot,
     history: InitialHistory,
     interrupted_marker: InterruptedTurnHistoryMarker,

@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests/slash_commands.rs
+assertion_line: 1449
+expression: popup
+---
+┌─────────────────────────┐
+│ cargo test -p codex-tui │
+│ tui/src/keymap.rs       │
+└─────────────────────────┘

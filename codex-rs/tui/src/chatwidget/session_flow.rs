@@ -2,12 +2,19 @@
 
 use super::*;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WorkspaceMetadataRefresh {
+    Refresh,
+    Retain,
+}
+
 impl ChatWidget {
     fn on_session_configured_with_display_and_fork_parent_title(
         &mut self,
         session: ThreadSessionState,
         display: SessionConfiguredDisplay,
         fork_parent_title: Option<String>,
+        workspace_metadata_refresh: WorkspaceMetadataRefresh,
     ) {
         self.transcript.reset_copy_history();
         let history_metadata = session.message_history.unwrap_or_default();
@@ -16,7 +23,9 @@ impl ChatWidget {
             history_metadata.log_id,
             history_metadata.entry_count,
         );
-        self.set_skills(/*skills*/ None);
+        if workspace_metadata_refresh == WorkspaceMetadataRefresh::Refresh {
+            self.set_skills(/*skills*/ None);
+        }
         self.session_network_proxy = session.network_proxy.clone();
         let previous_thread_id = self.thread_id;
         self.thread_id = Some(session.thread_id);
@@ -90,7 +99,9 @@ impl ChatWidget {
         self.sync_personality_command_enabled();
         self.sync_plugins_command_enabled();
         self.sync_goal_command_enabled();
-        self.refresh_plugin_mentions();
+        if workspace_metadata_refresh == WorkspaceMetadataRefresh::Refresh {
+            self.refresh_plugin_mentions();
+        }
         if display == SessionConfiguredDisplay::Normal {
             let startup_tooltip_override = self.startup_tooltip_override.take();
             let show_fast_status = self
@@ -107,9 +118,11 @@ impl ChatWidget {
             self.apply_session_info_cell(session_info_cell);
         }
         self.transcript.saw_copy_source_this_turn = false;
-        self.refresh_skills_for_current_cwd(/*force_reload*/ true);
-        if self.connectors_enabled() {
-            self.prefetch_connectors();
+        if workspace_metadata_refresh == WorkspaceMetadataRefresh::Refresh {
+            self.refresh_skills_for_current_cwd(/*force_reload*/ true);
+            if self.connectors_enabled() {
+                self.prefetch_connectors();
+            }
         }
         if let Some(user_message) = self.initial_user_message.take() {
             if self.suppress_initial_user_message_submit {
@@ -135,6 +148,21 @@ impl ChatWidget {
             session,
             SessionConfiguredDisplay::Normal,
             fork_parent_title,
+            WorkspaceMetadataRefresh::Refresh,
+        );
+    }
+
+    pub(crate) fn handle_thread_session_retaining_workspace_metadata(
+        &mut self,
+        session: ThreadSessionState,
+    ) {
+        self.instruction_source_paths = session.instruction_source_paths.clone();
+        let fork_parent_title = session.fork_parent_title.clone();
+        self.on_session_configured_with_display_and_fork_parent_title(
+            session,
+            SessionConfiguredDisplay::Normal,
+            fork_parent_title,
+            WorkspaceMetadataRefresh::Retain,
         );
     }
 
@@ -144,6 +172,20 @@ impl ChatWidget {
             session,
             SessionConfiguredDisplay::Quiet,
             /*fork_parent_title*/ None,
+            WorkspaceMetadataRefresh::Refresh,
+        );
+    }
+
+    pub(crate) fn handle_thread_session_quiet_retaining_workspace_metadata(
+        &mut self,
+        session: ThreadSessionState,
+    ) {
+        self.instruction_source_paths = session.instruction_source_paths.clone();
+        self.on_session_configured_with_display_and_fork_parent_title(
+            session,
+            SessionConfiguredDisplay::Quiet,
+            /*fork_parent_title*/ None,
+            WorkspaceMetadataRefresh::Retain,
         );
     }
 
@@ -154,7 +196,27 @@ impl ChatWidget {
             session,
             SessionConfiguredDisplay::SideConversation,
             fork_parent_title,
+            WorkspaceMetadataRefresh::Refresh,
         );
+    }
+
+    pub(crate) fn inherit_workspace_metadata_from(&mut self, previous: &Self) {
+        debug_assert_eq!(self.config.cwd, previous.config.cwd);
+        self.skills_all = previous.skills_all.clone();
+        self.set_skills(previous.bottom_pane.skills().cloned());
+        self.connectors = previous.connectors.clone();
+        let connectors_snapshot = previous.connectors.partial_snapshot.clone().or_else(|| {
+            if let connectors::ConnectorsCacheState::Ready(snapshot) = &previous.connectors.cache {
+                Some(snapshot.clone())
+            } else {
+                None
+            }
+        });
+        self.bottom_pane
+            .set_connectors_snapshot(connectors_snapshot);
+        self.plugins_cache = previous.plugins_cache.clone();
+        self.plugins_fetch_state = previous.plugins_fetch_state.clone();
+        self.on_plugin_mentions_loaded(previous.bottom_pane.plugins().cloned());
     }
 
     pub(super) fn emit_forked_thread_event(

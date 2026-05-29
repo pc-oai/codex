@@ -2197,6 +2197,112 @@ async fn model_selection_popup_snapshot() {
 }
 
 #[tokio::test]
+async fn opening_model_popup_requests_background_catalog_refresh() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.open_model_popup();
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::RefreshModelCatalog));
+}
+
+#[tokio::test]
+async fn model_picker_shortcut_opens_custom_model_prompt() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.open_model_popup();
+    assert_matches!(rx.try_recv(), Ok(AppEvent::RefreshModelCatalog));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::ALT));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenCustomModelPrompt));
+}
+
+#[tokio::test]
+async fn model_picker_filters_as_the_user_types() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.open_model_popup();
+
+    for ch in "mini".chars() {
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(
+        popup.contains("gpt-5.4-mini"),
+        "expected mini model: {popup}"
+    );
+    assert!(
+        !popup.contains("gpt-5.2 (current)"),
+        "expected filter to hide unmatched current model: {popup}"
+    );
+}
+
+#[tokio::test]
+async fn model_catalog_refresh_keeps_active_model_picker_filter() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.open_model_popup();
+
+    for ch in "mini".chars() {
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    let models = chat
+        .model_catalog
+        .try_list_models()
+        .expect("test model catalog should load");
+
+    chat.replace_model_catalog(models);
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(
+        popup.contains("gpt-5.4-mini"),
+        "expected mini model: {popup}"
+    );
+    assert!(
+        !popup.contains("gpt-5.2 (current)"),
+        "expected refresh to preserve the model filter: {popup}"
+    );
+}
+
+#[tokio::test]
+async fn custom_model_prompt_selects_typed_model_with_default_effort() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+
+    chat.open_custom_model_prompt();
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Enter model ID"));
+
+    chat.handle_paste("unlisted-model".to_string());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(
+            |event| matches!(event, AppEvent::UpdateModel(model) if model == "unlisted-model")
+        ),
+        "expected typed model update; events: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::UpdateReasoningEffort(None))),
+        "expected typed model to use default reasoning; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistModelSelection {
+                previous_model,
+                model,
+                effort: None,
+            } if previous_model == "gpt-5.2" && model == "unlisted-model"
+        )),
+        "expected typed model persistence; events: {events:?}"
+    );
+}
+
+#[tokio::test]
 async fn personality_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     chat.thread_id = Some(ThreadId::new());
@@ -2361,6 +2467,87 @@ async fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("model_reasoning_selection_popup_extra_high_warning", popup);
+}
+
+#[tokio::test]
+async fn switching_models_prefers_the_current_supported_reasoning_effort() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
+
+    let preset = get_available_model(&chat, "gpt-5.4");
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!(
+        "model_reasoning_selection_popup_preserves_supported_effort_when_switching_models",
+        popup
+    );
+    assert!(
+        popup.contains("› 4. Extra high"),
+        "expected the supported current effort to be selected: {popup}"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateReasoningEffort(Some(ReasoningEffortConfig::XHigh))
+        )),
+        "expected the carried effort to be applied; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn switching_models_uses_the_target_default_when_current_effort_is_unsupported() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
+
+    let mut preset = get_available_model(&chat, "gpt-5.4");
+    preset
+        .supported_reasoning_efforts
+        .retain(|option| option.effort != ReasoningEffortConfig::XHigh);
+    chat.open_reasoning_popup(preset);
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(
+        popup.contains("› 2. Medium (default)"),
+        "expected the target default to stay selected: {popup}"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateReasoningEffort(Some(ReasoningEffortConfig::Medium))
+        )),
+        "expected the target default effort to be applied; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn quick_model_selection_carries_a_supported_current_reasoning_effort() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
+
+    let mut preset = get_available_model(&chat, "gpt-5.4");
+    preset.model = "codex-auto-fast".to_string();
+    preset.id = preset.model.clone();
+    chat.open_model_popup_with_presets(vec![preset]);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateReasoningEffort(Some(ReasoningEffortConfig::XHigh))
+        )),
+        "expected the quick selection to carry the supported effort; events: {events:?}"
+    );
 }
 
 #[tokio::test]

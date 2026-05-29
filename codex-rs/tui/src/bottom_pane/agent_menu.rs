@@ -10,7 +10,6 @@ use crate::bottom_pane::scroll_state::ScrollState;
 use crate::bottom_pane::selection_popup_common::GenericDisplayRow;
 use crate::bottom_pane::selection_popup_common::render_rows_single_line;
 use crate::multi_agents::agent_picker_status_dot_spans;
-use crate::style::edited_user_message_style;
 use crate::style::user_message_style;
 use codex_protocol::ThreadId;
 use crossterm::event::KeyCode;
@@ -22,6 +21,7 @@ use ratatui::widgets::Block;
 use ratatui::widgets::Borders;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Widget;
+use std::path::PathBuf;
 
 const AGENT_MENU_MIN_WIDTH: u16 = 22;
 const AGENT_MENU_BORDER_HEIGHT: u16 = 2;
@@ -35,9 +35,29 @@ pub(crate) struct AgentMenuItem {
 }
 
 pub(crate) struct AgentMenu {
-    items: Vec<AgentMenuItem>,
+    items: Vec<MenuItem>,
     state: ScrollState,
     app_event_tx: AppEventSender,
+    empty_label: &'static str,
+    snippet_response_offset: Option<usize>,
+}
+
+struct MenuItem {
+    label: String,
+    kind: MenuItemKind,
+}
+
+enum MenuItemKind {
+    Agent {
+        thread_id: ThreadId,
+        is_closed: bool,
+    },
+    Snippet {
+        text: String,
+    },
+    TouchedPath {
+        path: PathBuf,
+    },
 }
 
 impl AgentMenu {
@@ -46,11 +66,22 @@ impl AgentMenu {
         selected_thread_id: Option<ThreadId>,
         app_event_tx: AppEventSender,
     ) -> Self {
+        let items = items
+            .into_iter()
+            .map(|item| MenuItem {
+                label: item.label,
+                kind: MenuItemKind::Agent {
+                    thread_id: item.thread_id,
+                    is_closed: item.is_closed,
+                },
+            })
+            .collect::<Vec<_>>();
         let mut state = ScrollState::new();
         state.selected_idx = selected_thread_id.and_then(|selected_thread_id| {
-            items
-                .iter()
-                .position(|item| item.thread_id == selected_thread_id)
+            items.iter().position(|item| match &item.kind {
+                MenuItemKind::Agent { thread_id, .. } => *thread_id == selected_thread_id,
+                MenuItemKind::Snippet { .. } | MenuItemKind::TouchedPath { .. } => false,
+            })
         });
         state.clamp_selection(items.len());
         state.ensure_visible(items.len(), items.len().max(1));
@@ -58,6 +89,60 @@ impl AgentMenu {
             items,
             state,
             app_event_tx,
+            empty_label: "No agents",
+            snippet_response_offset: None,
+        }
+    }
+
+    pub(crate) fn new_snippets(
+        snippets: Vec<String>,
+        response_offset: usize,
+        app_event_tx: AppEventSender,
+    ) -> Self {
+        let items = snippets
+            .into_iter()
+            .map(|text| MenuItem {
+                label: text.clone(),
+                kind: MenuItemKind::Snippet { text },
+            })
+            .collect::<Vec<_>>();
+        let mut state = ScrollState::new();
+        state.clamp_selection(items.len());
+        state.ensure_visible(items.len(), items.len().max(1));
+        Self {
+            items,
+            state,
+            app_event_tx,
+            empty_label: "No snippets",
+            snippet_response_offset: Some(response_offset),
+        }
+    }
+
+    pub(crate) fn next_snippet_response_offset(&self) -> Option<usize> {
+        self.snippet_response_offset
+            .map(|response_offset| response_offset.saturating_add(1))
+    }
+
+    pub(crate) fn new_touched_paths(
+        paths: Vec<(String, PathBuf)>,
+        app_event_tx: AppEventSender,
+    ) -> Self {
+        let items = paths
+            .into_iter()
+            .map(|(label, path)| MenuItem {
+                label,
+                kind: MenuItemKind::TouchedPath { path },
+            })
+            .collect::<Vec<_>>();
+        let mut state = ScrollState::new();
+        state.clamp_selection(items.len());
+        state.ensure_visible(items.len(), items.len().max(1));
+        Self {
+            items,
+            state,
+            app_event_tx,
+            empty_label: "No touched paths",
+            snippet_response_offset: None,
         }
     }
 
@@ -82,8 +167,19 @@ impl AgentMenu {
             }
             KeyCode::Enter => {
                 if let Some(item) = self.selected_item() {
-                    self.app_event_tx
-                        .send(AppEvent::SelectAgentThread(item.thread_id));
+                    match &item.kind {
+                        MenuItemKind::Agent { thread_id, .. } => {
+                            self.app_event_tx
+                                .send(AppEvent::SelectAgentThread(*thread_id));
+                        }
+                        MenuItemKind::Snippet { text } => {
+                            self.app_event_tx.send(AppEvent::CopySnippet(text.clone()));
+                        }
+                        MenuItemKind::TouchedPath { path } => {
+                            self.app_event_tx
+                                .send(AppEvent::OpenTouchedPathInEditor { path: path.clone() });
+                        }
+                    }
                 }
                 true
             }
@@ -108,7 +204,6 @@ impl AgentMenu {
             surface_inner.height,
         );
         surface.render(menu_area, buf);
-        self.render_alternating_row_surfaces(surface_inner, buf);
         let rows = self.rows();
         render_rows_single_line(
             inner,
@@ -116,7 +211,7 @@ impl AgentMenu {
             &rows,
             &self.state,
             self.items.len().max(1),
-            "No agents",
+            self.empty_label,
         );
     }
 
@@ -124,51 +219,7 @@ impl AgentMenu {
         self.menu_height().saturating_add(AGENT_MENU_FOOTER_GAP)
     }
 
-    fn render_alternating_row_surfaces(&self, area: Rect, buf: &mut Buffer) {
-        let visible_items = self.items.len().min(area.height as usize);
-        let start_idx = self.visible_start_idx(visible_items);
-        for (visible_offset, item_idx) in (start_idx..self.items.len())
-            .take(visible_items)
-            .enumerate()
-        {
-            if item_idx % 2 == 0 {
-                continue;
-            }
-            Block::default().style(edited_user_message_style()).render(
-                Rect::new(
-                    area.x,
-                    area.y.saturating_add(visible_offset as u16),
-                    area.width,
-                    1,
-                ),
-                buf,
-            );
-        }
-    }
-
-    fn visible_start_idx(&self, visible_items: usize) -> usize {
-        if self.items.is_empty() {
-            return 0;
-        }
-
-        let mut start_idx = self
-            .state
-            .scroll_top
-            .min(self.items.len().saturating_sub(1));
-        if let Some(selected_idx) = self.state.selected_idx {
-            if selected_idx < start_idx {
-                start_idx = selected_idx;
-            } else if visible_items > 0 {
-                let bottom = start_idx + visible_items - 1;
-                if selected_idx > bottom {
-                    start_idx = selected_idx + 1 - visible_items;
-                }
-            }
-        }
-        start_idx
-    }
-
-    fn selected_item(&self) -> Option<&AgentMenuItem> {
+    fn selected_item(&self) -> Option<&MenuItem> {
         self.state
             .selected_idx
             .and_then(|selected_idx| self.items.get(selected_idx))
@@ -177,10 +228,18 @@ impl AgentMenu {
     fn rows(&self) -> Vec<GenericDisplayRow> {
         self.items
             .iter()
-            .map(|item| GenericDisplayRow {
-                name: item.label.clone(),
-                name_prefix_spans: agent_picker_status_dot_spans(item.is_closed),
-                ..Default::default()
+            .map(|item| {
+                let name_prefix_spans = match &item.kind {
+                    MenuItemKind::Agent { is_closed, .. } => {
+                        agent_picker_status_dot_spans(*is_closed)
+                    }
+                    MenuItemKind::Snippet { .. } | MenuItemKind::TouchedPath { .. } => Vec::new(),
+                };
+                GenericDisplayRow {
+                    name: item.label.clone(),
+                    name_prefix_spans,
+                    ..Default::default()
+                }
             })
             .collect()
     }
@@ -193,7 +252,13 @@ impl AgentMenu {
         let content_width = self
             .items
             .iter()
-            .map(|item| item.label.chars().count() as u16 + /*status dot*/ 2)
+            .map(|item| {
+                let prefix_width = match &item.kind {
+                    MenuItemKind::Agent { .. } => 2,
+                    MenuItemKind::Snippet { .. } | MenuItemKind::TouchedPath { .. } => 0,
+                };
+                item.label.chars().count() as u16 + prefix_width
+            })
             .max()
             .unwrap_or(0);
         let width = content_width

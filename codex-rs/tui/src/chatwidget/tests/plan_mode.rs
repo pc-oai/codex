@@ -507,8 +507,11 @@ async fn plan_reasoning_scope_popup_all_modes_persists_global_and_plan_override(
     assert!(
         events.iter().any(|event| matches!(
             event,
-            AppEvent::PersistModelSelection { model, effort: Some(ReasoningEffortConfig::High) }
-                if model == "gpt-5.4"
+            AppEvent::PersistModelSelection {
+                model,
+                effort: Some(ReasoningEffortConfig::High),
+                ..
+            } if model == "gpt-5.4"
         )),
         "expected global model reasoning selection persistence; events: {events:?}"
     );
@@ -1326,7 +1329,7 @@ async fn mode_switch_surfaces_model_change_notification_when_effective_model_cha
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        plan_messages.contains("Model changed to gpt-5.4-mini medium for Plan mode."),
+        plan_messages.contains("Model changed from gpt-5 to gpt-5.4-mini medium for Plan mode."),
         "expected Plan-mode model switch notice, got: {plan_messages:?}"
     );
 
@@ -1340,7 +1343,7 @@ async fn mode_switch_surfaces_model_change_notification_when_effective_model_cha
         .collect::<Vec<_>>()
         .join("\n");
     let expected_default_message =
-        format!("Model changed to {default_model} default for Default mode.");
+        format!("Model changed from gpt-5.4-mini to {default_model} default for Default mode.");
     assert!(
         default_messages.contains(&expected_default_message),
         "expected Default-mode model switch notice, got: {default_messages:?}"

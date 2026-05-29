@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: rendered
+---
+"                                                                                "
+"• Working (0s • esc to interrupt)                                               "
+"                                                                                "
+"                                                                                "
+"› Ask Codex to do anything                                                      "
+"                                                                                "
+"  Redrew full scrollback.                                                 vNN  "

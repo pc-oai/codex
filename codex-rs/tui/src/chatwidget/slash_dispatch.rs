@@ -413,6 +413,12 @@ impl ChatWidget {
             SlashCommand::Copy => {
                 self.copy_last_agent_markdown();
             }
+            SlashCommand::Snippets => {
+                self.open_snippet_picker();
+            }
+            SlashCommand::Paths => {
+                self.open_touched_path_menu();
+            }
             SlashCommand::CopyLastRequest => {
                 self.app_event_tx.send(AppEvent::CopyLastRequest);
             }
@@ -861,6 +867,7 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::StartSubagent {
                     parent_thread_id,
                     prompt: Some(args),
+                    history: codex_app_server_protocol::ThreadSpawnHistory::FullHistory,
                     switch_to_child: false,
                 });
                 if source == SlashCommandDispatchSource::Live {
@@ -1043,6 +1050,8 @@ impl ChatWidget {
             | SlashCommand::Rollout
             | SlashCommand::Id
             | SlashCommand::Copy
+            | SlashCommand::Snippets
+            | SlashCommand::Paths
             | SlashCommand::CopyLastRequest
             | SlashCommand::Raw
             | SlashCommand::Vim

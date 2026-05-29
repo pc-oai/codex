@@ -168,6 +168,7 @@ pub(crate) struct SelectionViewParams {
     pub tabs: Vec<SelectionTab>,
     pub initial_tab_id: Option<String>,
     pub is_searchable: bool,
+    pub initial_search_query: Option<String>,
     pub search_placeholder: Option<String>,
     pub col_width_mode: ColumnWidthMode,
     pub row_display: SelectionRowDisplay,
@@ -216,6 +217,7 @@ impl Default for SelectionViewParams {
             tabs: Vec::new(),
             initial_tab_id: None,
             is_searchable: false,
+            initial_search_query: None,
             search_placeholder: None,
             col_width_mode: ColumnWidthMode::AutoVisible,
             row_display: SelectionRowDisplay::Wrapped,
@@ -322,7 +324,7 @@ impl ListSelectionView {
             dismiss_after_child_accept: false,
             app_event_tx,
             is_searchable: params.is_searchable,
-            search_query: String::new(),
+            search_query: params.initial_search_query.unwrap_or_default(),
             search_placeholder: if params.is_searchable {
                 params.search_placeholder
             } else {
@@ -736,31 +738,51 @@ impl ListSelectionView {
             .state
             .selected_idx
             .and_then(|idx| self.filtered_indices.get(idx).copied());
-        let selected_is_enabled = selected_actual_idx
-            .and_then(|actual_idx| self.active_items().get(actual_idx))
-            .is_some_and(|item| item.disabled_reason.is_none() && !item.is_disabled);
-        if selected_is_enabled {
-            self.last_selected_actual_idx = selected_actual_idx;
-            let Some(actual_idx) = selected_actual_idx else {
-                return;
-            };
-            let Some(item) = self.active_items().get(actual_idx) else {
-                return;
-            };
-            for act in &item.actions {
-                act(&self.app_event_tx);
-            }
-            if item.dismiss_on_select {
-                self.completion = Some(ViewCompletion::Accepted);
-            } else if item.dismiss_parent_on_child_accept {
-                self.dismiss_after_child_accept = true;
-            }
+        if let Some(actual_idx) = selected_actual_idx
+            && self.accept_item(actual_idx)
+        {
         } else if selected_actual_idx.is_none() {
             if let Some(cb) = &self.on_cancel {
                 cb(&self.app_event_tx);
             }
             self.completion = Some(ViewCompletion::Cancelled);
         }
+    }
+
+    fn accept_item(&mut self, actual_idx: usize) -> bool {
+        if !self
+            .active_items()
+            .get(actual_idx)
+            .is_some_and(Self::item_is_enabled)
+        {
+            return false;
+        }
+        self.last_selected_actual_idx = Some(actual_idx);
+        let Some(item) = self.active_items().get(actual_idx) else {
+            return false;
+        };
+        for act in &item.actions {
+            act(&self.app_event_tx);
+        }
+        if item.dismiss_on_select {
+            self.completion = Some(ViewCompletion::Accepted);
+        } else if item.dismiss_parent_on_child_accept {
+            self.dismiss_after_child_accept = true;
+        }
+        true
+    }
+
+    fn accept_display_shortcut(&mut self, key_event: KeyEvent) -> bool {
+        if self.is_searchable && is_plain_text_key_event(key_event) {
+            return false;
+        }
+        let Some(actual_idx) = self.active_items().iter().position(|item| {
+            item.display_shortcut
+                .is_some_and(|shortcut| shortcut.is_press(key_event))
+        }) else {
+            return false;
+        };
+        self.accept_item(actual_idx)
     }
 
     #[cfg(test)]
@@ -971,6 +993,7 @@ impl BottomPaneView for ListSelectionView {
                 self.on_ctrl_c();
             }
             _ if self.keymap.accept.is_pressed(key_event) => self.accept(),
+            _ if self.accept_display_shortcut(key_event) => {}
             KeyEvent {
                 code: KeyCode::Char(c),
                 ..
@@ -994,15 +1017,6 @@ impl BottomPaneView for ListSelectionView {
                 && !modifiers.contains(KeyModifiers::CONTROL)
                 && !modifiers.contains(KeyModifiers::ALT) =>
             {
-                if let Some(idx) = self.items.iter().position(|item| {
-                    item.display_shortcut
-                        .is_some_and(|shortcut| shortcut.is_press(key_event))
-                        && Self::item_is_enabled(item)
-                }) {
-                    self.state.selected_idx = Some(idx);
-                    self.accept();
-                    return;
-                }
                 if let Some(idx) = c
                     .to_digit(10)
                     .map(|d| d as usize)
@@ -1042,6 +1056,10 @@ impl BottomPaneView for ListSelectionView {
 
     fn active_tab_id(&self) -> Option<&str> {
         ListSelectionView::active_tab_id(self)
+    }
+
+    fn search_query(&self) -> Option<&str> {
+        self.is_searchable.then_some(self.search_query.as_str())
     }
 
     fn prefer_esc_to_handle_key_event(&self) -> bool {

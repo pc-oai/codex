@@ -361,6 +361,8 @@ mod hooks;
 mod interaction;
 mod skills;
 mod slash_dispatch;
+mod snippets;
+mod touched_paths;
 use self::skills::collect_tool_mentions;
 use self::skills::find_app_mentions;
 use self::skills::find_skill_mentions_with_tool_mentions;
@@ -585,6 +587,10 @@ pub(crate) struct ChatWidget {
     mcp_startup_pending_next_round: HashMap<String, McpStartupStatus>,
     /// Tracks whether the buffered next round has seen any `Starting` update yet.
     mcp_startup_pending_next_round_saw_starting: bool,
+    /// Whether user-triggered subagent creation is waiting on app-server.
+    subagent_spawn_pending: bool,
+    /// Whether agent navigation is waiting on target lookup or thread attach.
+    agent_switch_pending: bool,
     connectors: ConnectorsState,
     ide_context: IdeContextState,
     plugins_cache: PluginsCacheState,

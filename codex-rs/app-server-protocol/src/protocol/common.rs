@@ -470,6 +470,11 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadArchiveResponse,
     },
+    ThreadClose => "thread/close" {
+        params: v2::ThreadCloseParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadCloseResponse,
+    },
     ThreadDelete => "thread/delete" {
         params: v2::ThreadDeleteParams,
         serialization: thread_id(params.thread_id),
@@ -2600,7 +2605,8 @@ mod tests {
                 "params": {
                     "limit": null,
                     "cursor": null,
-                    "includeHidden": null
+                    "includeHidden": null,
+                    "forceRefresh": null
                 }
             }),
             serde_json::to_value(&request)?,

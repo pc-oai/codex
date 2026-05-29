@@ -9,8 +9,11 @@ use crate::session::emit_subagent_session_started;
 use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::shell_snapshot::ShellSnapshot;
+use crate::tasks::InterruptedTurnHistoryMarker;
+use crate::thread_manager::ForkSnapshot;
 use crate::thread_manager::ResumeThreadWithHistoryOptions;
 use crate::thread_manager::ThreadManagerState;
+use crate::thread_manager::fork_history_from_snapshot;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
 use codex_features::Feature;
 use codex_protocol::AgentPath;
@@ -26,6 +29,8 @@ use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSource;
@@ -47,6 +52,8 @@ const ROOT_LAST_TASK_MESSAGE: &str = "Main thread";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SpawnAgentForkMode {
     FullHistory,
+    /// Copy committed parent history while omitting an in-progress parent turn.
+    StableHistory,
     LastNTurns(usize),
 }
 
@@ -397,25 +404,59 @@ impl AgentControl {
             parent_thread.flush_rollout().await?;
         }
 
-        let parent_history = state
+        let stored_parent_thread = state
             .read_stored_thread(ReadThreadParams {
                 thread_id: parent_thread_id,
                 include_archived: true,
                 include_history: true,
             })
-            .await?
-            .history
-            .ok_or_else(|| {
-                CodexErr::Fatal(format!(
-                    "parent thread history unavailable for fork: {parent_thread_id}"
-                ))
-            })?;
+            .await?;
+        let parent_history = stored_parent_thread.history.ok_or_else(|| {
+            CodexErr::Fatal(format!(
+                "parent thread history unavailable for fork: {parent_thread_id}"
+            ))
+        })?;
 
         let mut forked_rollout_items = parent_history.items;
-        if let SpawnAgentForkMode::LastNTurns(last_n_turns) = fork_mode {
-            forked_rollout_items =
-                truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
+        if !forked_rollout_items
+            .iter()
+            .any(|item| matches!(item, RolloutItem::SessionMeta(_)))
+        {
+            forked_rollout_items.insert(
+                0,
+                RolloutItem::SessionMeta(SessionMetaLine {
+                    meta: SessionMeta {
+                        id: parent_thread_id,
+                        timestamp: stored_parent_thread.created_at.to_rfc3339(),
+                        cwd: stored_parent_thread.cwd,
+                        cli_version: stored_parent_thread.cli_version,
+                        source: stored_parent_thread.source,
+                        thread_source: stored_parent_thread.thread_source,
+                        model_provider: Some(stored_parent_thread.model_provider),
+                        ..Default::default()
+                    },
+                    git: None,
+                }),
+            );
         }
+        let preserve_reference_context_item = match fork_mode {
+            SpawnAgentForkMode::FullHistory => true,
+            SpawnAgentForkMode::StableHistory => {
+                let untrimmed_len = forked_rollout_items.len();
+                forked_rollout_items = fork_history_from_snapshot(
+                    ForkSnapshot::TruncateBeforeNthUserMessage(usize::MAX),
+                    InitialHistory::Forked(forked_rollout_items),
+                    InterruptedTurnHistoryMarker::Disabled,
+                )
+                .get_rollout_items();
+                forked_rollout_items.len() == untrimmed_len
+            }
+            SpawnAgentForkMode::LastNTurns(last_n_turns) => {
+                forked_rollout_items =
+                    truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
+                false
+            }
+        };
         let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
             if let Some(parent_thread) = parent_thread.as_ref() {
                 if parent_thread.enabled(Feature::MultiAgentV2) {
@@ -447,7 +488,6 @@ impl AgentControl {
             } else {
                 Vec::new()
             };
-        let preserve_reference_context_item = matches!(fork_mode, SpawnAgentForkMode::FullHistory);
         forked_rollout_items.retain(|item| {
             keep_forked_rollout_item(item, preserve_reference_context_item)
                 && !matches!(

@@ -1,4 +1,5 @@
 use crossterm::event::KeyCode;
+use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
@@ -36,6 +37,34 @@ pub(crate) struct PendingInputPreview {
 }
 
 const PREVIEW_LINE_LIMIT: usize = 3;
+
+fn compact_binding_label(binding: key_hint::KeyBinding) -> String {
+    let (key, modifiers) = binding.parts();
+    let mut label = String::new();
+    if modifiers.contains(KeyModifiers::CONTROL) {
+        label.push('^');
+    }
+    if modifiers.contains(KeyModifiers::SHIFT) {
+        label.push('⇧');
+    }
+    if modifiers.contains(KeyModifiers::ALT) {
+        label.push('⌥');
+    }
+    let key = match key {
+        KeyCode::Char(ch) if modifiers.contains(KeyModifiers::CONTROL) => {
+            ch.to_ascii_uppercase().to_string()
+        }
+        KeyCode::Char(ch) => ch.to_string(),
+        KeyCode::Up => "↑".to_string(),
+        KeyCode::Down => "↓".to_string(),
+        KeyCode::Left => "←".to_string(),
+        KeyCode::Right => "→".to_string(),
+        KeyCode::Enter => "↵".to_string(),
+        _ => key.to_string().to_ascii_lowercase(),
+    };
+    label.push_str(&key);
+    label
+}
 
 impl PendingInputPreview {
     pub(crate) fn new() -> Self {
@@ -166,35 +195,20 @@ impl PendingInputPreview {
         }
 
         if !self.queued_messages.is_empty() {
-            if let Some(edit_binding) = self.edit_binding {
-                lines.push(
-                    Line::from(vec![
-                        "    ".into(),
-                        edit_binding.into(),
-                        " edit last queued message".into(),
-                    ])
-                    .dim(),
-                );
+            let actions = [
+                self.edit_binding.map(|binding| (binding, "edit")),
+                self.discard_binding.map(|binding| (binding, "drop")),
+                self.steer_binding.map(|binding| (binding, "steer")),
+            ];
+            let mut spans = vec!["    ".into()];
+            for (idx, (binding, label)) in actions.into_iter().flatten().enumerate() {
+                if idx > 0 {
+                    spans.push(" · ".into());
+                }
+                spans.push(format!("{} {label}", compact_binding_label(binding)).into());
             }
-            if let Some(discard_binding) = self.discard_binding {
-                lines.push(
-                    Line::from(vec![
-                        "    ".into(),
-                        discard_binding.into(),
-                        " discard last queued message".into(),
-                    ])
-                    .dim(),
-                );
-            }
-            if let Some(steer_binding) = self.steer_binding {
-                lines.push(
-                    Line::from(vec![
-                        "    ".into(),
-                        steer_binding.into(),
-                        " steer last queued message now".into(),
-                    ])
-                    .dim(),
-                );
+            if spans.len() > 1 {
+                lines.push(Line::from(spans).dim());
             }
         }
 
@@ -232,7 +246,7 @@ mod tests {
     fn desired_height_one_message() {
         let mut queue = PendingInputPreview::new();
         queue.queued_messages.push("Hello, world!".to_string());
-        assert_eq!(queue.desired_height(/*width*/ 40), 5);
+        assert_eq!(queue.desired_height(/*width*/ 40), 3);
     }
 
     #[test]
@@ -335,8 +349,8 @@ mod tests {
         let width = 36;
         let height = queue.desired_height(width);
         assert_eq!(
-            height, 5,
-            "expected header, one message row, and three hint rows for URL-like token"
+            height, 3,
+            "expected header, one message row, and one controls row for URL-like token"
         );
 
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));

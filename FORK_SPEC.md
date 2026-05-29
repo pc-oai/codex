@@ -14,18 +14,23 @@ Update this list first when the fork's local key bindings change. Keep it short
 and easy to scan.
 
 - `Ctrl-R`: reload the current session in a fresh process.
+- `Ctrl-M`: open the model picker.
 - `Cmd-V` / `Ctrl-V`: paste clipboard images into the composer. In Ghostty,
   text `Cmd-V` remains normal terminal paste; image-only clipboards reach Codex.
 - `Ctrl-X`: clear the composer or discard the relevant queued draft.
 - `Ctrl-E`: open edit-last-message when the composer cursor is already at line
   end.
 - `Alt-Up` / `Alt-E`: open queued-message edit.
-- `Alt-Down` / `Alt-Enter`: steer the newest queued follow-up immediately.
+- `Alt-Enter`: toggle whether the next follow-up steers now or waits in queue;
+  it can be armed before a turn is running.
+- `Alt-Down` / `Shift-Right`: steer the newest queued follow-up immediately.
 - `Alt-R`: open manual rename for the current session.
 - `Ctrl-Shift-R`: request a fresh title suggestion for the current session.
 - `Ctrl-A`: open the compact agent menu when line-start movement has no more
   work to do.
-- `Ctrl-S`: rotate forward through agent threads.
+- `Ctrl-S`: open the recent-response snippet menu and advance it to older
+  responses while it is open.
+- `Alt-P`: open recently touched agent paths in a compact editor-opening menu.
 - Session pickers use `Ctrl-A` to switch between current-directory sessions
   and all directories when a cwd filter exists.
 - Session pickers use `Ctrl-T` to filter to custom-titled sessions, and
@@ -33,6 +38,9 @@ and easy to scan.
 - Session pickers keep `Ctrl-P` for opening the selected session transcript
   after `Ctrl-T` is reserved for title filtering.
 - `Alt-C`: toggle condensed transcript mode.
+- `Alt-L`: redraw the full retained backlog for the active native scrollback view
+  and briefly confirm the redraw in the footer.
+- Model pickers use `Alt-I` to enter a model ID that is not shown.
 - `Alt-[`: switch to the previous agent thread.
 - `Alt-]`: switch to the next agent thread.
 - `Alt-\`: spawn an idle child agent from an empty composer and switch to it.
@@ -66,6 +74,10 @@ Titles:
 - retitle shortcut (`Ctrl-Shift-R`)
 - emoji helper (`/emoji`)
 - thread-aware terminal title (session ID item uses the ID suffix)
+
+Models:
+- preserve the current reasoning level when changing to a model that supports
+  it; otherwise use the selected model's default
 
 Agents:
 - compact agent menu
@@ -245,6 +257,9 @@ properties, treat that as a fork regression even if the merged tree compiles.
 - Forks branch from a stable completed turn when the source is mid-turn.
 - `/reload` and the reload key path restart the current session in a fresh
   process without losing the intended working context.
+- Automatic stale-build reload requests through the session command socket run
+  only after every tracked thread in the loaded agent tree is idle; a completed
+  parent must not reload over a child that is still working.
 - Resumed limited-history threads rebuild persisted `exec_command` output into
   command history cells. Reloading a thread must not drop command output that
   still exists in saved response items.
@@ -274,16 +289,23 @@ properties, treat that as a fork regression even if the merged tree compiles.
   config is forward-compatible at load time so an older local binary ignores
   unknown future action names while generated schema stays strict for
   validation.
-- `Ctrl-R` and `Ctrl-S` stay reserved for reload and forward agent rotation.
-  Reverse-history search must not reclaim those two chords by default.
+- `Ctrl-R` stays reserved for reload. Reverse-history search must not reclaim
+  it by default.
 - Rename, retitle, queued-message edit, queued-message discard, queued-message
-  steer, and reverse-history bindings remain configurable local workflow
-  actions. The local defaults keep manual rename on `Alt-R`, retitle
-  suggestion on `Ctrl-Shift-R`, and immediate queued-message steer on both
-  `Alt-Down` and `Alt-Enter`.
+  steer, next-message steer/queue toggle, and reverse-history bindings remain
+  configurable local workflow actions. The local defaults keep manual rename on `Alt-R`, retitle
+  suggestion on `Ctrl-Shift-R`, immediate queued-message steer on `Alt-Down`
+  and `Shift-Right`, and the next-message toggle on `Alt-Enter`.
 - Live keymap edits update queued-input footer hints from the newly resolved
   bindings. A picker that changes the edit binding must not leave the queued
   preview advertising an older default.
+- The persistent footer status line shows compact `` only when the next
+  follow-up is set to queue; immediate send or steer is the unmarked default.
+  `Alt-Enter` can preselect that follow-up mode while idle, before or while
+  draft text is entered. When a Git branch is shown in the status line, the
+  queue indicator follows the branch; otherwise it remains at the front.
+  Queued-message previews keep edit, drop, and promote-to-steer controls on one
+  compact row.
 - Local slash helpers keep repeated dogfooding work close to the session:
   `/id`, `/copy-last-request`, `/delete`, `/effort`, `/reload`, and the
   lifecycle markers `/active`, `/park`, and `/done`.
@@ -307,6 +329,10 @@ properties, treat that as a fork regression even if the merged tree compiles.
 - The local TUI has a condensed message-only transcript mode for terminal
   scrollback. `Alt-C` switches between the full transcript and that compact
   view without dropping hidden tool-call history.
+- `Alt-L` redraws the full retained backlog for the active native scrollback
+  view, bypassing the automatic resize-reflow row cap for that manual redraw
+  and showing a highlighted `Redrew full scrollback.` footer confirmation for
+  two seconds.
 - The fork includes transcript browser prototypes for outline and tree-style
   exploration of saved conversations. Treat these binaries as local
   experiments unless they are intentionally promoted.
@@ -314,11 +340,12 @@ properties, treat that as a fork regression even if the merged tree compiles.
   active agent threads is quick and visible in the footer/main controls. The
   menu stays as a composer-preserving floating chooser, and `Ctrl-A` can open
   it from the composer when line-start movement has no more work to do.
+  Replayed transcript writes are batched during a switch even when terminal
+  resize-reflow experiments are disabled, and same-directory switches reuse
+  workspace mention metadata rather than fetching it again.
 - `Alt-[` and `Alt-]` rotate to the previous and next agent thread. These
   explicit bracket shortcuts are part of the local workflow and must not be
   replaced by `Alt-Left` / `Alt-Right` word-motion chords.
-- `Ctrl-S` rotates forward through the same agent cycle for the fast one-key
-  path.
 - Keyboard agent rotation flashes a short footer neighbor strip before the
   target thread takes over, so a fast switch still leaves visible context about
   where the cycle moved.
@@ -328,7 +355,9 @@ properties, treat that as a fork regression even if the merged tree compiles.
   `thread/spawn`. `/subagent <task>` starts a child without switching focus.
   Empty-composer `Alt-\` spawns an idle child and switches into it so the next
   draft belongs to that child. Spawned children inherit the parent runtime
-  context, stay in its agent tree, and become visible in the agent picker.
+  context, stay in its agent tree, and become visible in the agent picker. If
+  the parent is still working, the child copies only completed parent turns so
+  the in-progress request does not appear as child work.
 
 ### Local automation and runtime signals
 

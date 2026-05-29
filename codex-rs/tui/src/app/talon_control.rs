@@ -27,9 +27,11 @@ impl App {
             })
             .or(Some(preset.default_reasoning_effort));
 
+        let previous_model = self.chat_widget.current_model().to_string();
         self.chat_widget.set_model(&model);
         self.on_update_reasoning_effort(selected_effort);
         self.app_event_tx.send(AppEvent::PersistModelSelection {
+            previous_model,
             model,
             effort: selected_effort,
         });
@@ -76,7 +78,7 @@ impl App {
         let _ = crate::talon::write_state(paths, &self.talon_ambient_state());
     }
 
-    pub(super) fn handle_talon_request(
+    pub(super) async fn handle_talon_request(
         &mut self,
         tui: &mut tui::Tui,
         req: crate::talon::TalonRequest,
@@ -176,6 +178,9 @@ impl App {
                 ReloadCurrentSessionIfIdle => {
                     if self.chat_widget.is_task_running() {
                         applied.push("reload_current_session_if_idle_skipped_busy".to_string());
+                    } else if self.agent_tree_is_busy().await {
+                        applied
+                            .push("reload_current_session_if_idle_skipped_tree_busy".to_string());
                     } else {
                         self.app_event_tx.send(AppEvent::ReloadCurrentSession);
                         applied.push("reload_current_session_if_idle".to_string());

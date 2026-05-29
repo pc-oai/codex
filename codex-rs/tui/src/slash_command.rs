@@ -57,6 +57,8 @@ pub enum SlashCommand {
     #[strum(to_string = "id", serialize = "i")]
     Id,
     Copy,
+    Snippets,
+    Paths,
     CopyLastRequest,
     Raw,
     Diff,
@@ -122,6 +124,8 @@ impl SlashCommand {
             SlashCommand::Delete => "delete this chat and exit Codex",
             SlashCommand::Id => "copy the current thread ID",
             SlashCommand::Copy => "copy last response as markdown",
+            SlashCommand::Snippets => "copy a snippet from the last response",
+            SlashCommand::Paths => "open a recently touched agent path",
             SlashCommand::CopyLastRequest => "copy last user request",
             SlashCommand::Raw => "toggle raw scrollback mode for copy-friendly terminal selection",
             SlashCommand::Diff => "show git diff (including untracked files)",
@@ -221,6 +225,8 @@ impl SlashCommand {
             self,
             SlashCommand::Id
                 | SlashCommand::Copy
+                | SlashCommand::Snippets
+                | SlashCommand::Paths
                 | SlashCommand::CopyLastRequest
                 | SlashCommand::Raw
                 | SlashCommand::Diff
@@ -260,6 +266,8 @@ impl SlashCommand {
             SlashCommand::Diff
             | SlashCommand::Id
             | SlashCommand::Copy
+            | SlashCommand::Snippets
+            | SlashCommand::Paths
             | SlashCommand::CopyLastRequest
             | SlashCommand::Raw
             | SlashCommand::Rename
@@ -299,7 +307,9 @@ impl SlashCommand {
     fn is_visible(self) -> bool {
         match self {
             SlashCommand::SandboxReadRoot => cfg!(target_os = "windows"),
-            SlashCommand::Copy => !cfg!(target_os = "android"),
+            SlashCommand::Copy | SlashCommand::Snippets | SlashCommand::Paths => {
+                !cfg!(target_os = "android")
+            }
             SlashCommand::Rollout | SlashCommand::TestApproval => cfg!(debug_assertions),
             _ => true,
         }

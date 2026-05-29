@@ -2,12 +2,12 @@
 source: tui/src/keymap_setup.rs
 expression: snapshot
 ---
-tab: All (99 selectable)
-tab: Common (20 selectable)
+tab: All (104 selectable)
+tab: Common (25 selectable)
 tab: Customized (0) (0 selectable)
 tab: Unbound (3) (3 selectable)
-tab: App (15 selectable)
-tab: Composer (5 selectable)
+tab: App (19 selectable)
+tab: Composer (6 selectable)
 tab: Editor (17 selectable)
 tab: Vim (34 selectable)
 tab: Navigation (20 selectable)
@@ -15,13 +15,13 @@ tab: Approval (8 selectable)
 tab: Debug (1 selectable)
 Open Transcript | ctrl-t | Global open_transcript Open Transcript Open the transcript overlay. ctrl-t Default
 Open External Editor | ctrl-g | Global open_external_editor Open External Editor Open the current draft in an external editor. ctrl-g Default
+Open Snippets | ctrl-s | Global open_snippets Open Snippets Open snippets from the last agent response. ctrl-s Default
+Open Touched Paths | alt-p | Global open_touched_paths Open Touched Paths Open recently touched agent paths. alt-p Default
+Open Model Picker | ctrl-m | Global open_model_picker Open Model Picker Open the model picker. ctrl-m Default
 Copy | ctrl-o | Global copy Copy Copy the last agent response to the clipboard. ctrl-o Default
+Redraw Full Scrollback | alt-l | Global redraw_full_scrollback Redraw Full Scrollback Redraw the full retained backlog for the current native scrollback view. alt-l Default
 Clear Terminal | ctrl-l | Global clear_terminal Clear Terminal Clear the terminal UI. ctrl-l Default
 Reload Current Session | ctrl-r | Global reload_current_session Reload Current Session Reload the current session in a fresh process. ctrl-r Default
 Toggle Condensed Transcript | alt-c | Global toggle_condensed_transcript Toggle Condensed Transcript Toggle message-only main transcript view. alt-c Default
 Toggle Vim Mode | unbound | Global toggle_vim_mode Toggle Vim Mode Turn Vim composer mode on or off. unbound Default
 Toggle Raw Output | unbound | Global toggle_raw_output Toggle Raw Output Toggle raw scrollback mode. unbound Default
-Decrease Reasoning Effort | alt-, | Chat decrease_reasoning_effort Decrease Reasoning Effort Decrease reasoning effort. alt-, Default
-Increase Reasoning Effort | alt-. | Chat increase_reasoning_effort Increase Reasoning Effort Increase reasoning effort. alt-. Default
-Rename Current Session | alt-r | Chat rename_current_session Rename Current Session Open the manual rename prompt for the current session. alt-r Default
-Retitle Current Session | ctrl-shift-r | Chat retitle_current_session Retitle Current Session Generate a fresh title suggestion for the current session. ctrl-shift-r Default

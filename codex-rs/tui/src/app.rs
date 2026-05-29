@@ -54,9 +54,9 @@ use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
 use crate::model_migration::run_model_migration_prompt;
 use crate::multi_agents::format_agent_picker_item_name;
+use crate::multi_agents::fresh_subagent_shortcut_matches;
 use crate::multi_agents::next_agent_shortcut_matches;
 use crate::multi_agents::previous_agent_shortcut_matches;
-use crate::multi_agents::rotate_agent_shortcut_matches;
 use crate::multi_agents::spawn_subagent_shortcut_matches;
 use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
@@ -119,6 +119,7 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadMemoryMode;
 use codex_app_server_protocol::ThreadRollbackResponse;
+use codex_app_server_protocol::ThreadSpawnHistory;
 use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
@@ -411,6 +412,15 @@ fn take_reload_model_override(session_selection: &SessionSelection) -> Option<St
         }
     }
     model
+}
+
+fn config_for_reload_resume(config: &Config, reload_model_override: Option<&str>) -> Config {
+    let mut resume_config = config.clone();
+    if reload_model_override.is_some() {
+        resume_config.model = None;
+        resume_config.model_reasoning_effort = None;
+    }
+    resume_config
 }
 
 #[derive(Debug)]
@@ -818,6 +828,11 @@ impl App {
                 &initial_images,
             );
         let reload_model_override = take_reload_model_override(&session_selection);
+        let reload_reasoning_effort_override = reload_model_override
+            .as_ref()
+            .map(|_| config.model_reasoning_effort);
+        let reload_resume_config =
+            config_for_reload_resume(&config, reload_model_override.as_deref());
         let startup_tooltip_override =
             prepare_startup_tooltip_override(&mut config, &available_models, is_first_run).await;
         let mut spawn_initial_thread = false;
@@ -896,9 +911,10 @@ impl App {
             SessionSelection::Resume(target_session) => {
                 let resumed = app_server
                     .resume_thread_with_tree_restore(
-                        config.clone(),
+                        reload_resume_config.clone(),
                         target_session.thread_id,
                         should_resume_subagent_tree,
+                        reload_model_override.is_some(),
                     )
                     .await
                     .wrap_err_with(|| {
@@ -1092,11 +1108,14 @@ See the Codex keymap documentation for supported actions and examples."
             if should_resume_subagent_tree {
                 app.backfill_loaded_subagent_threads(&mut app_server).await;
             }
-            if let Some(reload_model_override) = reload_model_override
-                .as_deref()
-                .filter(|model| app.chat_widget.current_model() != *model)
-            {
-                app.chat_widget.set_model(reload_model_override);
+            if let Some(reload_model_override) = reload_model_override.as_deref() {
+                if app.chat_widget.current_model() != reload_model_override {
+                    app.chat_widget.set_model(reload_model_override);
+                }
+                if let Some(reload_reasoning_effort_override) = reload_reasoning_effort_override {
+                    app.chat_widget
+                        .set_reasoning_effort(reload_reasoning_effort_override);
+                }
             }
             if should_prompt_for_paused_goal_after_startup_resume {
                 app.maybe_prompt_resume_paused_goal_after_resume(&mut app_server, thread_id)
@@ -1303,7 +1322,7 @@ See the Codex keymap documentation for supported actions and examples."
                         }
                     } => {
                         if let Some(talon_request) = talon_request {
-                            let response = app.handle_talon_request(tui, talon_request.request);
+                            let response = app.handle_talon_request(tui, talon_request.request).await;
                             let _ = talon_request.response_tx.send(response);
                             if let Some(paths) = talon_paths.as_ref() {
                                 app.write_talon_ambient_state(paths);
@@ -1401,6 +1420,7 @@ See the Codex keymap documentation for supported actions and examples."
                 TuiEvent::Draw | TuiEvent::Resize => {
                     if self.backtrack_render_pending {
                         self.backtrack_render_pending = false;
+                        self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                         self.render_transcript_once(tui);
                     }
                     self.chat_widget.maybe_post_pending_notification(tui);

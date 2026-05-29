@@ -2,6 +2,9 @@
 
 use super::HistoryCell;
 use super::MAX_AGENT_COPY_HISTORY;
+use std::path::PathBuf;
+
+const MAX_RECENT_AGENT_TOUCHED_PATHS: usize = 64;
 
 #[derive(Debug)]
 pub(super) struct AgentTurnMarkdown {
@@ -20,6 +23,8 @@ pub(super) struct TranscriptState {
     /// Copyable agent responses keyed by the number of visible user turns at
     /// the time the response completed.
     pub(super) agent_turn_markdowns: Vec<AgentTurnMarkdown>,
+    /// Successful patch paths the agent touched recently, oldest first.
+    pub(super) recent_agent_touched_paths: Vec<PathBuf>,
     /// Number of user turns currently reflected in the visible transcript.
     pub(super) visible_user_turn_count: usize,
     /// True when rollback discarded the requested copy source because it was
@@ -87,6 +92,7 @@ impl TranscriptState {
     pub(super) fn reset_copy_history(&mut self) {
         self.last_agent_markdown = None;
         self.agent_turn_markdowns.clear();
+        self.recent_agent_touched_paths.clear();
         self.visible_user_turn_count = 0;
         self.copy_history_evicted_by_rollback = false;
         self.saw_copy_source_this_turn = false;
@@ -114,6 +120,21 @@ impl TranscriptState {
         self.latest_proposed_plan_markdown = None;
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
+    }
+
+    pub(super) fn record_agent_touched_paths(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
+        for path in paths {
+            self.recent_agent_touched_paths
+                .retain(|existing| existing != &path);
+            self.recent_agent_touched_paths.push(path);
+        }
+        let overflow = self
+            .recent_agent_touched_paths
+            .len()
+            .saturating_sub(MAX_RECENT_AGENT_TOUCHED_PATHS);
+        if overflow > 0 {
+            self.recent_agent_touched_paths.drain(..overflow);
+        }
     }
 }
 

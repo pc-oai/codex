@@ -2,13 +2,13 @@
 source: tui/src/bottom_pane/footer.rs
 expression: terminal.backend()
 ---
-"  / for commands                             ! for shell commands               "
-"  ctrl + j for newline                       tab to queue message               "
-"  @ for file paths                           ctrl + v to paste images           "
-"  ctrl + g to edit in external editor        ctrl + x to clear input            "
-"  esc esc to edit previous message           shift + ⌥ + r search history       "
-"  ctrl + c to exit                           ⌥ + , reasoning down               "
-"  ⌥ + . reasoning up                         shift + tab to change mode         "
-"  ctrl + t to view transcript                                                   "
+"  / for commands                      ! for shell commands                      "
+"  ctrl + j for newline                ⌥ + enter toggle next steer/queue         "
+"  tab to queue message                @ for file paths                          "
+"  ctrl + v to paste images            ctrl + g to edit in external editor       "
+"  ctrl + x to clear input             esc esc to edit previous message          "
+"  shift + ⌥ + r search history        ctrl + c to exit                          "
+"  ⌥ + , reasoning down                ⌥ + . reasoning up                        "
+"  shift + tab to change mode          ctrl + t to view transcript               "
 "                                                                                "
 "  customize shortcuts with /keymap                                              "

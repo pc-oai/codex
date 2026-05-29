@@ -6,12 +6,17 @@ use app_test_support::write_mock_responses_config_toml;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadCloseParams;
+use codex_app_server_protocol::ThreadCloseResponse;
+use codex_app_server_protocol::ThreadSpawnHistory;
 use codex_app_server_protocol::ThreadSpawnParams;
 use codex_app_server_protocol::ThreadSpawnResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
 use codex_protocol::protocol::SubAgentSource;
 use std::collections::BTreeMap;
@@ -51,6 +56,7 @@ async fn thread_spawn_creates_child_in_parent_session_tree() -> Result<()> {
         .send_thread_spawn_request(ThreadSpawnParams {
             thread_id: parent.id.clone(),
             task_name: Some("parser_check".to_string()),
+            history: None,
             input: vec![UserInput::Text {
                 text: "Check the parser tests.".to_string(),
                 text_elements: Vec::new(),
@@ -95,7 +101,9 @@ async fn thread_spawn_creates_child_in_parent_session_tree() -> Result<()> {
             break started;
         }
     };
-    assert_eq!(started.thread, child);
+    let mut started_response_thread = child.clone();
+    started_response_thread.turns.clear();
+    assert_eq!(started.thread, started_response_thread);
 
     Ok(())
 }
@@ -126,11 +134,33 @@ async fn thread_spawn_without_input_creates_idle_child() -> Result<()> {
     )
     .await??;
     let parent = to_response::<ThreadStartResponse>(parent_response)?.thread;
+    let parent_turn_request_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: parent.id.clone(),
+            input: vec![UserInput::Text {
+                text: "Seed parent context.".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let parent_turn_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(parent_turn_request_id)),
+    )
+    .await??;
+    let _: TurnStartResponse = to_response::<TurnStartResponse>(parent_turn_response)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
 
     let spawn_request_id = mcp
         .send_thread_spawn_request(ThreadSpawnParams {
-            thread_id: parent.id,
+            thread_id: parent.id.clone(),
             task_name: Some("idle_child".to_string()),
+            history: None,
             input: Vec::new(),
         })
         .await?;
@@ -142,6 +172,8 @@ async fn thread_spawn_without_input_creates_idle_child() -> Result<()> {
     let child = to_response::<ThreadSpawnResponse>(spawn_response)?.thread;
 
     assert_eq!(child.status, ThreadStatus::Idle);
+    assert_eq!(child.forked_from_id, Some(parent.id.clone()));
+    assert_eq!(child.turns.len(), 1, "expected copied parent history");
     assert!(matches!(
         child.source,
         codex_app_server_protocol::SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
@@ -149,6 +181,37 @@ async fn thread_spawn_without_input_creates_idle_child() -> Result<()> {
             ..
         }) if agent_path.as_str() == "/root/idle_child"
     ));
+
+    let fresh_spawn_request_id = mcp
+        .send_thread_spawn_request(ThreadSpawnParams {
+            thread_id: parent.id.clone(),
+            task_name: Some("fresh_child".to_string()),
+            history: Some(ThreadSpawnHistory::Fresh),
+            input: Vec::new(),
+        })
+        .await?;
+    let fresh_spawn_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(fresh_spawn_request_id)),
+    )
+    .await??;
+    let fresh_child = to_response::<ThreadSpawnResponse>(fresh_spawn_response)?.thread;
+
+    assert_eq!(fresh_child.status, ThreadStatus::Idle);
+    assert_eq!(fresh_child.forked_from_id, None);
+    assert!(fresh_child.turns.is_empty(), "expected fresh child history");
+
+    let close_request_id = mcp
+        .send_thread_close_request(ThreadCloseParams {
+            thread_id: fresh_child.id,
+        })
+        .await?;
+    let close_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(close_request_id)),
+    )
+    .await??;
+    let _: ThreadCloseResponse = to_response::<ThreadCloseResponse>(close_response)?;
 
     Ok(())
 }

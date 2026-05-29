@@ -3,7 +3,7 @@ source: tui/src/bottom_pane/pending_input_preview.rs
 expression: "format!(\"{buf:?}\")"
 ---
 Buffer {
-    area: Rect { x: 0, y: 0, width: 52, height: 13 },
+    area: Rect { x: 0, y: 0, width: 52, height: 11 },
     content: [
         "• Messages to be submitted after next tool call     ",
         "  (press esc to interrupt and send immediately)     ",
@@ -15,9 +15,7 @@ Buffer {
         "                                                    ",
         "• Queued follow-up inputs                           ",
         "  ↳ Queued follow-up question                       ",
-        "    ⌥ + ↑ edit last queued message                  ",
-        "    ctrl + x discard last queued message            ",
-        "    ⌥ + ↓ steer last queued message now             ",
+        "    ⌥↑ edit · ^X drop · ⌥↓ steer                    ",
     ],
     styles: [
         x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
@@ -38,10 +36,6 @@ Buffer {
         x: 4, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
         x: 29, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 0, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
-        x: 34, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 0, y: 11, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
-        x: 40, y: 11, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 0, y: 12, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
-        x: 39, y: 12, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 32, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
     ]
 }

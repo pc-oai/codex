@@ -5,6 +5,9 @@
 
 use super::*;
 
+const MODEL_PICKER_VIEW_ID: &str = "model-picker";
+const ALL_MODELS_PICKER_VIEW_ID: &str = "all-models-picker";
+
 impl ChatWidget {
     /// Open a popup to choose a quick auto model. Selecting "All models"
     /// opens the full picker with every available preset.
@@ -17,6 +20,7 @@ impl ChatWidget {
             return;
         }
 
+        self.app_event_tx.send(AppEvent::RefreshModelCatalog);
         let presets: Vec<ModelPreset> = match self.model_catalog.try_list_models() {
             Ok(models) => models,
             Err(_) => {
@@ -105,6 +109,17 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_model_popup_with_presets(&mut self, presets: Vec<ModelPreset>) {
+        match self.model_popup_params(presets, /*initial_search_query*/ None) {
+            Ok(params) => self.bottom_pane.show_selection_view(params),
+            Err(other_presets) => self.open_all_models_popup(other_presets),
+        }
+    }
+
+    fn model_popup_params(
+        &self,
+        presets: Vec<ModelPreset>,
+        initial_search_query: Option<String>,
+    ) -> Result<SelectionViewParams, Vec<ModelPreset>> {
         let presets: Vec<ModelPreset> = presets
             .into_iter()
             .filter(|preset| preset.show_in_picker)
@@ -122,29 +137,32 @@ impl ChatWidget {
             .partition(|preset| Self::is_auto_model(&preset.model));
 
         if auto_presets.is_empty() {
-            self.open_all_models_popup(other_presets);
-            return;
+            return Err(other_presets);
         }
 
         auto_presets.sort_by_key(|preset| Self::auto_model_order(&preset.model));
+        let previous_model = self.current_model().to_string();
         let mut items: Vec<SelectionItem> = auto_presets
             .into_iter()
             .map(|preset| {
+                let selected_effort = self
+                    .carried_reasoning_effort_for_model(&preset)
+                    .or(Some(preset.default_reasoning_effort));
                 let description =
                     (!preset.description.is_empty()).then_some(preset.description.clone());
                 let model = preset.model.clone();
-                let should_prompt_plan_mode_scope = self.should_prompt_plan_mode_reasoning_scope(
-                    model.as_str(),
-                    Some(preset.default_reasoning_effort),
-                );
+                let should_prompt_plan_mode_scope =
+                    self.should_prompt_plan_mode_reasoning_scope(model.as_str(), selected_effort);
                 let actions = Self::model_selection_actions(
+                    previous_model.clone(),
                     model.clone(),
-                    Some(preset.default_reasoning_effort),
+                    selected_effort,
                     should_prompt_plan_mode_scope,
                 );
                 SelectionItem {
                     name: model.clone(),
                     description,
+                    search_value: Some(model.clone()),
                     is_current: model.as_str() == current_model,
                     is_default: preset.is_default,
                     actions,
@@ -170,27 +188,84 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: "All models".to_string(),
                 description,
+                search_value: Some("all models".to_string()),
                 is_current,
                 actions,
                 dismiss_on_select: true,
                 ..Default::default()
             });
         }
+        items.push(Self::custom_model_selection_item());
 
         let header = self.model_menu_header(
             "Select Model",
             "Pick a quick auto mode or browse all models.",
         );
-        self.bottom_pane.show_selection_view(SelectionViewParams {
+        Ok(SelectionViewParams {
+            view_id: Some(MODEL_PICKER_VIEW_ID),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             header,
+            is_searchable: true,
+            initial_search_query,
+            search_placeholder: Some("Type to filter models".to_string()),
             ..Default::default()
-        });
+        })
     }
 
     fn is_auto_model(model: &str) -> bool {
         model.starts_with("codex-auto-")
+    }
+
+    fn carried_reasoning_effort_for_model(
+        &self,
+        preset: &ModelPreset,
+    ) -> Option<ReasoningEffortConfig> {
+        self.effective_reasoning_effort().filter(|effort| {
+            preset
+                .supported_reasoning_efforts
+                .iter()
+                .any(|option| option.effort == *effort)
+        })
+    }
+
+    fn custom_model_selection_item() -> SelectionItem {
+        SelectionItem {
+            name: "Enter model ID".to_string(),
+            display_shortcut: Some(crate::key_hint::alt(KeyCode::Char('i'))),
+            description: Some("Use a model that is not shown here".to_string()),
+            search_value: Some("enter model id custom".to_string()),
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenCustomModelPrompt);
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn open_custom_model_prompt(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let previous_model = self.current_model().to_string();
+        let view = CustomPromptView::new(
+            "Enter model ID".to_string(),
+            "Type a model ID and press Enter".to_string(),
+            String::new(),
+            /*context_label*/ None,
+            Box::new(move |model: String| {
+                let model = model.trim().to_string();
+                if model.is_empty() {
+                    return;
+                }
+                tx.send(AppEvent::UpdateModel(model.clone()));
+                tx.send(AppEvent::UpdateReasoningEffort(/*effort*/ None));
+                tx.send(AppEvent::PersistModelSelection {
+                    previous_model: previous_model.clone(),
+                    model,
+                    effort: None,
+                });
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
     }
 
     fn auto_model_order(model: &str) -> usize {
@@ -203,14 +278,30 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_all_models_popup(&mut self, presets: Vec<ModelPreset>) {
-        if presets.is_empty() {
+        let Some(params) =
+            self.all_models_popup_params(presets, /*initial_search_query*/ None)
+        else {
             self.add_info_message(
                 "No additional models are available right now.".to_string(),
                 /*hint*/ None,
             );
             return;
-        }
+        };
+        self.bottom_pane.show_selection_view(params);
+    }
 
+    fn all_models_popup_params(
+        &self,
+        presets: Vec<ModelPreset>,
+        initial_search_query: Option<String>,
+    ) -> Option<SelectionViewParams> {
+        let presets = presets
+            .into_iter()
+            .filter(|preset| preset.show_in_picker && !Self::is_auto_model(&preset.model))
+            .collect::<Vec<_>>();
+        if presets.is_empty() {
+            return None;
+        }
         let mut items: Vec<SelectionItem> = Vec::new();
         for preset in presets.into_iter() {
             let description =
@@ -227,6 +318,7 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: preset.model.clone(),
                 description,
+                search_value: Some(preset.model.clone()),
                 is_current,
                 is_default: preset.is_default,
                 actions,
@@ -235,20 +327,64 @@ impl ChatWidget {
                 ..Default::default()
             });
         }
+        items.push(Self::custom_model_selection_item());
 
         let header = self.model_menu_header(
             "Select Model and Effort",
             "Access legacy models by running codex -m <model_name> or in your config.toml",
         );
-        self.bottom_pane.show_selection_view(SelectionViewParams {
+        Some(SelectionViewParams {
+            view_id: Some(ALL_MODELS_PICKER_VIEW_ID),
             footer_hint: Some(self.bottom_pane.standard_popup_hint_line()),
             items,
             header,
+            is_searchable: true,
+            initial_search_query,
+            search_placeholder: Some("Type to filter models".to_string()),
             ..Default::default()
-        });
+        })
+    }
+
+    pub(crate) fn refresh_model_picker_if_open(&mut self, models: Vec<ModelPreset>) {
+        if let Some(search_query) = self
+            .bottom_pane
+            .search_query_for_active_view(MODEL_PICKER_VIEW_ID)
+            .map(str::to_string)
+        {
+            match self.model_popup_params(models, Some(search_query.clone())) {
+                Ok(params) => {
+                    let _ = self
+                        .bottom_pane
+                        .replace_selection_view_if_active(MODEL_PICKER_VIEW_ID, params);
+                }
+                Err(other_presets) => {
+                    if let Some(params) =
+                        self.all_models_popup_params(other_presets, Some(search_query))
+                    {
+                        let _ = self.bottom_pane.replace_active_views_with_selection_view(
+                            &[MODEL_PICKER_VIEW_ID],
+                            params,
+                        );
+                    }
+                }
+            }
+            return;
+        }
+
+        if let Some(search_query) = self
+            .bottom_pane
+            .search_query_for_active_view(ALL_MODELS_PICKER_VIEW_ID)
+            .map(str::to_string)
+            && let Some(params) = self.all_models_popup_params(models, Some(search_query))
+        {
+            let _ = self
+                .bottom_pane
+                .replace_selection_view_if_active(ALL_MODELS_PICKER_VIEW_ID, params);
+        }
     }
 
     fn model_selection_actions(
+        previous_model: String,
         model_for_action: String,
         effort_for_action: Option<ReasoningEffortConfig>,
         should_prompt_plan_mode_scope: bool,
@@ -265,6 +401,7 @@ impl ChatWidget {
             tx.send(AppEvent::UpdateModel(model_for_action.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
             tx.send(AppEvent::PersistModelSelection {
+                previous_model: previous_model.clone(),
                 model: model_for_action.clone(),
                 effort: effort_for_action,
             });
@@ -330,6 +467,7 @@ impl ChatWidget {
             "Set the global default reasoning level and the Plan mode override. This replaces the current {plan_reasoning_source}."
         );
         let subtitle = format!("Choose where to apply {reasoning_phrase}.");
+        let previous_model = self.current_model().to_string();
 
         let plan_only_actions: Vec<SelectionAction> = vec![Box::new({
             let model = model.clone();
@@ -345,6 +483,7 @@ impl ChatWidget {
             tx.send(AppEvent::UpdatePlanModeReasoningEffort(effort));
             tx.send(AppEvent::PersistPlanModeReasoningEffort(effort));
             tx.send(AppEvent::PersistModelSelection {
+                previous_model: previous_model.clone(),
                 model: model.clone(),
                 effort,
             });
@@ -379,6 +518,7 @@ impl ChatWidget {
 
     /// Open a popup to choose the reasoning effort (stage 2) for the given model.
     pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
+        let carried_effort = self.carried_reasoning_effort_for_model(&preset);
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
         let supported = preset.supported_reasoning_efforts;
         let in_plan_mode =
@@ -459,7 +599,7 @@ impl ChatWidget {
                 self.effective_reasoning_effort()
             }
         } else {
-            default_choice
+            carried_effort.or(default_choice)
         };
         let selection_choice = highlight_choice.or(default_choice);
         let initial_selected_idx = choices
@@ -500,6 +640,7 @@ impl ChatWidget {
             };
 
             let model_for_action = model_slug.clone();
+            let previous_model = self.current_model().to_string();
             let choice_effort = choice.stored;
             let should_prompt_plan_mode_scope =
                 self.should_prompt_plan_mode_reasoning_scope(model_slug.as_str(), choice_effort);
@@ -513,6 +654,7 @@ impl ChatWidget {
                     tx.send(AppEvent::UpdateModel(model_for_action.clone()));
                     tx.send(AppEvent::UpdateReasoningEffort(choice_effort));
                     tx.send(AppEvent::PersistModelSelection {
+                        previous_model: previous_model.clone(),
                         model: model_for_action.clone(),
                         effort: choice_effort,
                     });
@@ -566,8 +708,12 @@ impl ChatWidget {
     }
 
     fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
+        let previous_model = self.current_model().to_string();
         self.apply_model_and_effort_without_persist(model.clone(), effort);
-        self.app_event_tx
-            .send(AppEvent::PersistModelSelection { model, effort });
+        self.app_event_tx.send(AppEvent::PersistModelSelection {
+            previous_model,
+            model,
+            effort,
+        });
     }
 }

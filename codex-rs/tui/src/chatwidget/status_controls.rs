@@ -91,6 +91,10 @@ impl ChatWidget {
         self.bottom_pane.show_agent_navigation_strip(line, duration);
     }
 
+    pub(crate) fn show_footer_flash(&mut self, line: Line<'static>, duration: Duration) {
+        self.bottom_pane.show_footer_flash(line, duration);
+    }
+
     #[cfg(test)]
     pub(crate) fn active_agent_label(&self) -> Option<&str> {
         self.bottom_pane.active_agent_label()
@@ -118,6 +122,21 @@ impl ChatWidget {
     /// placeholders so the line remains compact and stable.
     pub(crate) fn refresh_status_line(&mut self) {
         self.refresh_status_surfaces();
+    }
+
+    pub(crate) fn set_subagent_spawn_pending(&mut self, pending: bool) {
+        if self.subagent_spawn_pending != pending {
+            self.subagent_spawn_pending = pending;
+            self.bottom_pane.set_subagent_spawn_pending(pending);
+            self.refresh_status_line();
+        }
+    }
+
+    pub(crate) fn set_agent_switch_pending(&mut self, pending: bool) {
+        if self.agent_switch_pending != pending {
+            self.agent_switch_pending = pending;
+            self.refresh_status_line();
+        }
     }
 
     /// Records that status-line setup was canceled.

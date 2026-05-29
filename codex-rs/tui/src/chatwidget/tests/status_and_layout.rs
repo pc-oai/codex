@@ -2312,6 +2312,102 @@ async fn status_line_fast_mode_footer_snapshot() {
 }
 
 #[tokio::test]
+async fn pending_subagent_spawn_composer_snapshot() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    chat.set_subagent_spawn_pending(true);
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw subagent spawn composer");
+    assert_chatwidget_snapshot!(
+        "pending_subagent_spawn_composer",
+        normalized_backend_snapshot(terminal.backend())
+    );
+}
+
+#[tokio::test]
+async fn status_line_pending_agent_switch_footer_snapshot() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    chat.set_agent_switch_pending(true);
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw agent switch footer");
+    assert_chatwidget_snapshot!(
+        "status_line_pending_agent_switch_footer",
+        normalized_backend_snapshot(terminal.backend())
+    );
+}
+
+#[tokio::test]
+async fn redraw_full_scrollback_footer_flash_snapshot() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    chat.show_footer_flash(
+        Line::from("Redrew full scrollback.".cyan().bold()),
+        Duration::from_secs(10),
+    );
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw redraw flash footer");
+    let rendered = normalized_backend_snapshot(terminal.backend()).replace(
+        &crate::version::local_build_label().expect("source build label"),
+        "vNN",
+    );
+    assert_chatwidget_snapshot!("redraw_full_scrollback_footer_flash", rendered);
+}
+
+#[tokio::test]
+async fn redraw_full_scrollback_footer_flash_while_working_snapshot() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    chat.bottom_pane.set_task_running(/*running*/ true);
+    chat.show_footer_flash(
+        Line::from("Redrew full scrollback.".cyan().bold()),
+        Duration::from_secs(10),
+    );
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw working redraw flash footer");
+    let rendered = normalized_backend_snapshot(terminal.backend()).replace(
+        &crate::version::local_build_label().expect("source build label"),
+        "vNN",
+    );
+    assert_chatwidget_snapshot!(
+        "redraw_full_scrollback_footer_flash_while_working",
+        rendered
+    );
+}
+
+#[tokio::test]
 async fn status_line_model_with_reasoning_includes_fast_for_fast_capable_models() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     set_fast_mode_test_catalog(&mut chat);
