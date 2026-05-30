@@ -17,10 +17,12 @@ use crate::ThreadMetadata;
 use crate::ThreadMetadataBuilder;
 use crate::ThreadsPage;
 use crate::apply_rollout_item;
-use crate::migrations::remap_legacy_state_migrations;
+use crate::migrations::migrate_legacy_pc_thread_metadata;
+use crate::migrations::release_legacy_pc_state_migrations;
 use crate::migrations::runtime_goals_migrator;
 use crate::migrations::runtime_logs_migrator;
 use crate::migrations::runtime_memories_migrator;
+use crate::migrations::runtime_pc_state_migrator;
 use crate::migrations::runtime_state_migrator;
 use crate::model::AgentJobRow;
 use crate::model::ThreadRow;
@@ -182,6 +184,7 @@ impl StateRuntime {
     ) -> anyhow::Result<Arc<Self>> {
         tokio::fs::create_dir_all(&codex_home).await?;
         let state_migrator = runtime_state_migrator();
+        let pc_state_migrator = runtime_pc_state_migrator();
         let logs_migrator = runtime_logs_migrator();
         let goals_migrator = runtime_goals_migrator();
         let memories_migrator = runtime_memories_migrator();
@@ -189,7 +192,14 @@ impl StateRuntime {
         let logs_path = LOGS_DB.path(codex_home.as_path());
         let goals_path = GOALS_DB.path(codex_home.as_path());
         let memories_path = MEMORIES_DB.path(codex_home.as_path());
-        let pool = match open_state_sqlite(&state_path, &state_migrator, telemetry_override).await {
+        let pool = match open_state_sqlite(
+            &state_path,
+            &state_migrator,
+            &pc_state_migrator,
+            telemetry_override,
+        )
+        .await
+        {
             Ok(db) => Arc::new(db),
             Err(err) => {
                 warn!("failed to open state db at {}: {err}", state_path.display());
@@ -316,12 +326,29 @@ fn base_sqlite_options(path: &Path) -> SqliteConnectOptions {
 async fn open_state_sqlite(
     path: &Path,
     migrator: &Migrator,
+    pc_migrator: &Migrator,
     telemetry_override: Option<&dyn DbTelemetry>,
 ) -> anyhow::Result<SqlitePool> {
     // New state DBs should use incremental auto-vacuum, but retrofitting an
     // existing DB requires a full VACUUM. Do not attempt that during process
     // startup: it is maintenance work that can contend with foreground writers.
-    open_sqlite(path, migrator, STATE_DB, telemetry_override).await
+    let pool = open_sqlite(path, migrator, STATE_DB, telemetry_override).await?;
+    let started = Instant::now();
+    let migrate_result: anyhow::Result<()> = async {
+        pc_migrator.run(&pool).await?;
+        migrate_legacy_pc_thread_metadata(&pool).await?;
+        Ok(())
+    }
+    .await;
+    crate::telemetry::record_init_result(
+        telemetry_override,
+        DbKind::State,
+        "migrate_pc_state",
+        started.elapsed(),
+        &migrate_result,
+    );
+    migrate_result?;
+    Ok(pool)
 }
 
 async fn open_logs_sqlite(
@@ -370,7 +397,7 @@ async fn open_sqlite(
     );
     let pool = pool_result?;
     if matches!(spec.kind, DbKind::State) {
-        remap_legacy_state_migrations(&pool).await?;
+        release_legacy_pc_state_migrations(&pool).await?;
     }
     let started = Instant::now();
     let migrate_result = migrator.run(&pool).await.map_err(anyhow::Error::from);
@@ -467,6 +494,7 @@ pub async fn sqlite_integrity_check(path: &Path) -> anyhow::Result<Vec<String>> 
 mod tests {
     use super::StateRuntime;
     use super::open_state_sqlite;
+    use super::runtime_pc_state_migrator;
     use super::runtime_state_migrator;
     use super::sqlite_integrity_check;
     use super::state_db_path;
@@ -612,9 +640,11 @@ mod tests {
         strict_pool.close().await;
 
         let tolerant_migrator = runtime_state_migrator();
+        let pc_migrator = runtime_pc_state_migrator();
         let tolerant_pool = open_state_sqlite(
             state_path.as_path(),
             &tolerant_migrator,
+            &pc_migrator,
             /*telemetry_override*/ None,
         )
         .await
@@ -647,6 +677,7 @@ mod tests {
         let expected = [
             "open_state",
             "migrate_state",
+            "migrate_pc_state",
             "open_logs",
             "migrate_logs",
             "open_goals",

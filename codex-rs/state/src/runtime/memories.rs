@@ -1,5 +1,6 @@
 use super::threads::ThreadFilterOptions;
 use super::threads::push_thread_filters;
+use super::threads::push_thread_from_with_pc_metadata;
 use super::*;
 use crate::SortDirection;
 use crate::model::Phase2JobClaimOutcome;
@@ -187,16 +188,16 @@ SELECT
     threads.approval_mode,
     threads.tokens_used,
     threads.first_user_message,
-    threads.user_message_count,
-    threads.user_message_count_known,
-    threads.user_state,
+    COALESCE(pc_thread_metadata.user_message_count, 0) AS user_message_count,
+    COALESCE(pc_thread_metadata.user_message_count_known, 0) AS user_message_count_known,
+    COALESCE(pc_thread_metadata.user_state, 'active') AS user_state,
     threads.archived_at,
     threads.git_sha,
     threads.git_branch,
     threads.git_origin_url
-FROM threads
             "#,
         );
+        push_thread_from_with_pc_metadata(&mut builder);
         push_thread_filters(
             &mut builder,
             ThreadFilterOptions {
@@ -561,11 +562,15 @@ SELECT
     threads.approval_mode,
     threads.tokens_used,
     threads.first_user_message,
+    COALESCE(pc_thread_metadata.user_message_count, 0) AS user_message_count,
+    COALESCE(pc_thread_metadata.user_message_count_known, 0) AS user_message_count_known,
+    COALESCE(pc_thread_metadata.user_state, 'active') AS user_state,
     threads.archived_at,
     threads.git_sha,
     threads.git_branch,
     threads.git_origin_url
 FROM threads
+LEFT JOIN pc_thread_metadata ON pc_thread_metadata.thread_id = threads.id
 WHERE threads.id = ? AND threads.memory_mode = 'enabled'
             "#,
         )

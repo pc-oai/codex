@@ -428,9 +428,14 @@ properties, treat that as a fork regression even if the merged tree compiles.
 
 - The merged state runtime must accept databases that already applied the
   fork's old thread-metadata migrations before upstream reused those migration
-  numbers. It remaps the old local applied-migration records forward so startup
-  can run the upstream `0030` through `0034` migrations instead of treating the
-  database as damaged.
+  numbers. It removes those old fork records from upstream's migration ledger,
+  lets upstream apply its own migrations, and copies the retained local data
+  into `pc_thread_metadata`.
+- New fork-owned state schema must use `pc_migrations/` with the separate
+  `_pc_sqlx_migrations` ledger. Do not add fork-only files to
+  `state/migrations/`, which is reserved for upstream migration numbers.
+- After a database has moved local fields to `pc_thread_metadata`, do not open
+  it with an older local build that still expects those fields on `threads`.
 
 ## Validation after an upstream merge
 
@@ -463,7 +468,7 @@ Then validate behavior rather than just conflict resolution:
 1. Check that the local fork surface still has code anchors for Talon session
    sockets and startup retry, thread title suggestions, reload handoff,
    terminal progress, the local build helper and archive path, user lifecycle
-   state, old-migration remapping, bundled-model startup with background model
+   state, old-migration transfer, bundled-model startup with background model
    refresh, suppressed boxed startup history header, short session selectors,
    and the transcript prototype binaries.
 2. Regenerate or inspect app-server schema output when thread API payloads move.

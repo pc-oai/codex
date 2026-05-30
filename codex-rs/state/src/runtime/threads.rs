@@ -30,14 +30,15 @@ SELECT
     threads.approval_mode,
     threads.tokens_used,
     threads.first_user_message,
-    threads.user_message_count,
-    threads.user_message_count_known,
-    threads.user_state,
+    COALESCE(pc_thread_metadata.user_message_count, 0) AS user_message_count,
+    COALESCE(pc_thread_metadata.user_message_count_known, 0) AS user_message_count_known,
+    COALESCE(pc_thread_metadata.user_state, 'active') AS user_state,
     threads.archived_at,
     threads.git_sha,
     threads.git_branch,
     threads.git_origin_url
 FROM threads
+LEFT JOIN pc_thread_metadata ON pc_thread_metadata.thread_id = threads.id
 WHERE threads.id = ?
             "#,
         )
@@ -365,7 +366,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
     ) -> anyhow::Result<Option<crate::ThreadMetadata>> {
         let mut builder = QueryBuilder::<Sqlite>::new("");
         push_thread_select_columns(&mut builder);
-        builder.push(" FROM threads");
+        push_thread_from_with_pc_metadata(&mut builder);
         push_thread_filters(
             &mut builder,
             ThreadFilterOptions {
@@ -410,7 +411,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
 
         let mut builder = QueryBuilder::<Sqlite>::new("");
         push_thread_select_columns(&mut builder);
-        builder.push(" FROM threads");
+        push_thread_from_with_pc_metadata(&mut builder);
         push_thread_filters(&mut builder, filters);
         push_thread_order_and_limit(&mut builder, sort_key, sort_direction, limit);
 
@@ -445,7 +446,8 @@ ON CONFLICT(child_thread_id) DO NOTHING
         model_providers: Option<&[String]>,
         archived_only: bool,
     ) -> anyhow::Result<Vec<ThreadId>> {
-        let mut builder = QueryBuilder::<Sqlite>::new("SELECT threads.id FROM threads");
+        let mut builder = QueryBuilder::<Sqlite>::new("SELECT threads.id");
+        push_thread_from_with_pc_metadata(&mut builder);
         push_thread_filters(
             &mut builder,
             ThreadFilterOptions {
@@ -508,16 +510,13 @@ INSERT INTO threads (
     approval_mode,
     tokens_used,
     first_user_message,
-    user_message_count,
-    user_message_count_known,
-    user_state,
     archived,
     archived_at,
     git_sha,
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
             "#,
         )
@@ -552,9 +551,6 @@ ON CONFLICT(id) DO NOTHING
         .bind(metadata.approval_mode.as_str())
         .bind(metadata.tokens_used)
         .bind(metadata.first_user_message.as_deref().unwrap_or_default())
-        .bind(metadata.user_message_count)
-        .bind(metadata.user_message_count_known)
-        .bind(metadata.user_state.as_str())
         .bind(metadata.archived_at.is_some())
         .bind(metadata.archived_at.map(datetime_to_epoch_seconds))
         .bind(metadata.git_sha.as_deref())
@@ -563,9 +559,13 @@ ON CONFLICT(id) DO NOTHING
         .bind("enabled")
         .execute(self.pool.as_ref())
         .await?;
+        let inserted = result.rows_affected() > 0;
+        if inserted {
+            self.upsert_pc_thread_metadata(metadata).await?;
+        }
         self.insert_thread_spawn_edge_from_source_if_absent(metadata.id, metadata.source.as_str())
             .await?;
-        Ok(result.rows_affected() > 0)
+        Ok(inserted)
     }
 
     pub async fn set_thread_memory_mode(
@@ -720,16 +720,13 @@ INSERT INTO threads (
     approval_mode,
     tokens_used,
     first_user_message,
-    user_message_count,
-    user_message_count_known,
-    user_state,
     archived,
     archived_at,
     git_sha,
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -752,9 +749,6 @@ ON CONFLICT(id) DO UPDATE SET
     approval_mode = excluded.approval_mode,
     tokens_used = excluded.tokens_used,
     first_user_message = excluded.first_user_message,
-    user_message_count = excluded.user_message_count,
-    user_message_count_known = excluded.user_message_count_known,
-    user_state = excluded.user_state,
     archived = excluded.archived,
     archived_at = excluded.archived_at,
     git_sha = COALESCE(threads.git_sha, excluded.git_sha),
@@ -793,9 +787,6 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.approval_mode.as_str())
         .bind(metadata.tokens_used)
         .bind(metadata.first_user_message.as_deref().unwrap_or_default())
-        .bind(metadata.user_message_count)
-        .bind(metadata.user_message_count_known)
-        .bind(metadata.user_state.as_str())
         .bind(metadata.archived_at.is_some())
         .bind(metadata.archived_at.map(datetime_to_epoch_seconds))
         .bind(metadata.git_sha.as_deref())
@@ -804,8 +795,36 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(creation_memory_mode.unwrap_or("enabled"))
         .execute(self.pool.as_ref())
         .await?;
+        self.upsert_pc_thread_metadata(metadata).await?;
         self.insert_thread_spawn_edge_from_source_if_absent(metadata.id, metadata.source.as_str())
             .await?;
+        Ok(())
+    }
+
+    async fn upsert_pc_thread_metadata(
+        &self,
+        metadata: &crate::ThreadMetadata,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"
+INSERT INTO pc_thread_metadata (
+    thread_id,
+    user_message_count,
+    user_message_count_known,
+    user_state
+) VALUES (?, ?, ?, ?)
+ON CONFLICT(thread_id) DO UPDATE SET
+    user_message_count = excluded.user_message_count,
+    user_message_count_known = excluded.user_message_count_known,
+    user_state = excluded.user_state
+            "#,
+        )
+        .bind(metadata.id.to_string())
+        .bind(metadata.user_message_count)
+        .bind(metadata.user_message_count_known)
+        .bind(metadata.user_state.as_str())
+        .execute(self.pool.as_ref())
+        .await?;
         Ok(())
     }
 
@@ -964,11 +983,17 @@ ON CONFLICT(thread_id, position) DO NOTHING
         thread_id: ThreadId,
         user_state: ThreadUserState,
     ) -> anyhow::Result<bool> {
-        let result = sqlx::query("UPDATE threads SET user_state = ? WHERE id = ?")
-            .bind(user_state.as_str())
-            .bind(thread_id.to_string())
-            .execute(self.pool.as_ref())
-            .await?;
+        let result = sqlx::query(
+            r#"
+INSERT INTO pc_thread_metadata (thread_id, user_state)
+SELECT id, ? FROM threads WHERE id = ?
+ON CONFLICT(thread_id) DO UPDATE SET user_state = excluded.user_state
+            "#,
+        )
+        .bind(user_state.as_str())
+        .bind(thread_id.to_string())
+        .execute(self.pool.as_ref())
+        .await?;
         Ok(result.rows_affected() > 0)
     }
 
@@ -979,6 +1004,10 @@ ON CONFLICT(thread_id, position) DO NOTHING
             .execute(self.pool.as_ref())
             .await?;
         let rows_affected = result.rows_affected();
+        sqlx::query("DELETE FROM pc_thread_metadata WHERE thread_id = ?")
+            .bind(thread_id.to_string())
+            .execute(self.pool.as_ref())
+            .await?;
         self.memories.delete_thread_memory(thread_id).await?;
         if rows_affected > 0 {
             self.thread_goals.delete_thread_goal(thread_id).await?;
@@ -994,10 +1023,11 @@ ON CONFLICT(thread_id, position) DO NOTHING
     ) -> anyhow::Result<Vec<PathBuf>> {
         let rows = sqlx::query(
             r#"
-SELECT rollout_path
+SELECT threads.rollout_path
 FROM threads
-WHERE user_message_count_known = 0
-ORDER BY updated_at_ms DESC, id DESC
+LEFT JOIN pc_thread_metadata ON pc_thread_metadata.thread_id = threads.id
+WHERE COALESCE(pc_thread_metadata.user_message_count_known, 0) = 0
+ORDER BY threads.updated_at_ms DESC, threads.id DESC
 LIMIT ?
             "#,
         )
@@ -1055,14 +1085,20 @@ SELECT
     threads.approval_mode,
     threads.tokens_used,
     threads.first_user_message,
-    threads.user_message_count,
-    threads.user_message_count_known,
-    threads.user_state,
+    COALESCE(pc_thread_metadata.user_message_count, 0) AS user_message_count,
+    COALESCE(pc_thread_metadata.user_message_count_known, 0) AS user_message_count_known,
+    COALESCE(pc_thread_metadata.user_state, 'active') AS user_state,
     threads.archived_at,
     threads.git_sha,
     threads.git_branch,
     threads.git_origin_url
 "#,
+    );
+}
+
+pub(super) fn push_thread_from_with_pc_metadata(builder: &mut QueryBuilder<Sqlite>) {
+    builder.push(
+        " FROM threads LEFT JOIN pc_thread_metadata ON pc_thread_metadata.thread_id = threads.id",
     );
 }
 
@@ -1150,7 +1186,7 @@ pub(super) fn push_thread_filters<'a>(
     if let Some(user_states) = user_states
         && !user_states.is_empty()
     {
-        builder.push(" AND threads.user_state IN (");
+        builder.push(" AND COALESCE(pc_thread_metadata.user_state, 'active') IN (");
         let mut separated = builder.separated(", ");
         for user_state in user_states {
             separated.push_bind(user_state.as_str());
@@ -1789,6 +1825,75 @@ mod tests {
             datetime_to_epoch_millis(persisted.updated_at),
             datetime_to_epoch_millis(existing.updated_at)
         );
+    }
+
+    #[tokio::test]
+    async fn threads_without_pc_metadata_use_defaults_and_need_count_backfill() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000792").expect("valid thread id");
+        let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+        metadata.user_message_count = 42;
+        metadata.user_message_count_known = true;
+        metadata.user_state = ThreadUserState::Parked;
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("thread insert should succeed");
+        sqlx::query("DELETE FROM pc_thread_metadata WHERE thread_id = ?")
+            .bind(thread_id.to_string())
+            .execute(runtime.pool.as_ref())
+            .await
+            .expect("simulate upstream-only thread");
+
+        let persisted = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("thread should load")
+            .expect("thread should exist");
+        assert_eq!(persisted.user_message_count, 0);
+        assert!(!persisted.user_message_count_known);
+        assert_eq!(persisted.user_state, ThreadUserState::Active);
+
+        let needing_backfill = runtime
+            .list_threads_needing_user_message_count_backfill(/*limit*/ 10)
+            .await
+            .expect("list threads needing count backfill");
+        assert_eq!(needing_backfill, vec![metadata.rollout_path]);
+    }
+
+    #[tokio::test]
+    async fn direct_thread_delete_cascades_pc_metadata() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000793").expect("valid thread id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id,
+                codex_home.clone(),
+            ))
+            .await
+            .expect("thread insert should succeed");
+
+        sqlx::query("DELETE FROM threads WHERE id = ?")
+            .bind(thread_id.to_string())
+            .execute(runtime.pool.as_ref())
+            .await
+            .expect("simulate upstream thread deletion");
+        let pc_metadata_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM pc_thread_metadata WHERE thread_id = ?")
+                .bind(thread_id.to_string())
+                .fetch_one(runtime.pool.as_ref())
+                .await
+                .expect("count pc metadata");
+        assert_eq!(pc_metadata_count, 0);
     }
 
     #[tokio::test]
