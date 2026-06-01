@@ -62,7 +62,10 @@ use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
 use color_eyre::eyre::WrapErr;
 use cwd_prompt::CwdPromptAction;
+use std::backtrace::Backtrace;
 use std::fs::OpenOptions;
+use std::io::Write;
+use std::panic::PanicHookInfo;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -78,6 +81,8 @@ use url::Url;
 use uuid::Uuid;
 
 pub(crate) use codex_app_server_client::legacy_core;
+
+const TUI_PANIC_LOG_FILE_NAME: &str = "codex-tui-panics.log";
 
 mod additional_dirs;
 mod app;
@@ -1418,9 +1423,11 @@ async fn run_ratatui_app(
     // line, but do not swallow the default/color-eyre panic handler.
     // Chain to the previous hook so users still get a rich panic report
     // (including backtraces) after we restore the terminal.
+    let codex_home_for_panic_log = initial_config.codex_home.to_path_buf();
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         tracing::error!("panic: {info}");
+        append_tui_panic_report(codex_home_for_panic_log.as_path(), info);
         prev_hook(info);
     }));
     let mut initialized_terminal = tui::init()?;
@@ -1950,6 +1957,37 @@ async fn run_ratatui_app(
     app_result
 }
 
+fn append_tui_panic_report(codex_home: &Path, panic_info: &PanicHookInfo<'_>) {
+    let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let backtrace = Backtrace::force_capture();
+    let report = format!(
+        "=== Codex TUI panic at {timestamp} pid={} ===\n{panic_info}\n\nBacktrace:\n{backtrace}\n\n",
+        std::process::id()
+    );
+    append_tui_panic_report_text(codex_home, report.as_str());
+}
+
+fn append_tui_panic_report_text(codex_home: &Path, report: &str) {
+    let log_dir = codex_home.join("log");
+    if std::fs::create_dir_all(&log_dir).is_err() {
+        return;
+    }
+
+    let mut log_file_opts = OpenOptions::new();
+    log_file_opts.create(true).append(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        log_file_opts.mode(0o600);
+    }
+
+    let Ok(mut log_file) = log_file_opts.open(log_dir.join(TUI_PANIC_LOG_FILE_NAME)) else {
+        return;
+    };
+    let _ = log_file.write_all(report.as_bytes());
+}
+
 #[expect(
     clippy::print_stderr,
     reason = "TUI should no longer be displayed, so we can write to stderr."
@@ -2140,6 +2178,26 @@ mod tests {
         remove_legacy_tui_log_file(temp_dir.path());
 
         assert!(!legacy_log.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn panic_report_text_is_appended_to_private_local_log() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+
+        append_tui_panic_report_text(temp_dir.path(), "first report\n");
+        append_tui_panic_report_text(temp_dir.path(), "second report\n");
+
+        let log_path = temp_dir.path().join("log").join(TUI_PANIC_LOG_FILE_NAME);
+        assert_eq!(
+            std::fs::read_to_string(&log_path)?,
+            "first report\nsecond report\n"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(log_path)?.permissions().mode() & 0o077, 0);
+        }
         Ok(())
     }
 
