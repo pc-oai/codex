@@ -11,7 +11,7 @@ pub const CODEX_CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// `scripts/local-build-codex` bumps this before each runnable local build so
 /// running source builds can be compared at a glance without relying on commits
 /// or timestamps.
-pub const LOCAL_BUILD_NUMBER: u32 = 114;
+pub const LOCAL_BUILD_NUMBER: u32 = 115;
 
 /// Monotonic local generation for source builds, if this is a source build.
 pub fn local_build_number() -> Option<u32> {
