@@ -8,6 +8,11 @@ In the codex-rs folder where the rust code lives:
   `just local-build`) instead of calling `cargo build -p codex-cli` directly.
   That path bumps `LOCAL_BUILD_NUMBER` in `codex-rs/tui/src/version.rs`
   automatically so the footer marker advances whenever a new local binary is built.
+- For local TUI crash investigations, check `~/.codex/log/codex-tui-panics.log`
+  first. Fresh launches through `~/bin/pc/codex` default `RUST_BACKTRACE=1`,
+  and the TUI panic hook appends a forced backtrace to that file. Older running
+  sessions may predate this behavior; use `~/.codex/logs_2.sqlite` to find
+  their persisted panic messages.
 - For heavy Rust build/test/check commands during Codex work, use
   `codex-mac -- <command>` by default whenever the AWS M4 build Mac is
   available. Avoid starting CPU-heavy local Cargo verification merely because
