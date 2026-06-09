@@ -1454,6 +1454,7 @@ async fn run_ratatui_app(
                         token_usage: crate::token_usage::TokenUsage::default(),
                         thread_id: None,
                         thread_name: None,
+                        model: None,
                         update_action: Some(action),
                         exit_reason: ExitReason::UserRequested,
                     });
