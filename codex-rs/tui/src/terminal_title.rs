@@ -15,10 +15,16 @@
 //!   text (the same family of issues discussed in Trojan Source writeups)
 //! - redundant whitespace that would make titles noisy or hard to scan
 
+#[cfg(target_os = "macos")]
+use std::ffi::CString;
 use std::fmt;
 use std::io;
 use std::io::IsTerminal;
 use std::io::stdout;
+#[cfg(target_os = "macos")]
+use std::sync::Mutex;
+#[cfg(target_os = "macos")]
+use std::sync::OnceLock;
 
 use crossterm::Command;
 use ratatui::crossterm::execute;
@@ -65,6 +71,231 @@ pub(crate) fn set_terminal_title(title: &str) -> io::Result<SetTerminalTitleResu
 
     execute!(stdout(), SetWindowTitle(title))?;
     Ok(SetTerminalTitleResult::Applied)
+}
+
+/// Updates the LaunchServices display name shown by Activity Monitor on macOS.
+///
+/// macOS does not expose a public setter for this name, so resolve the same
+/// private LaunchServices functions used by libuv from an Apple-signed system
+/// framework. Other platforms do not change their process display name.
+pub(crate) fn set_process_title(title: &str) {
+    set_process_title_impl(&sanitize_terminal_title(title));
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_process_title_impl(_title: &str) {}
+
+#[cfg(target_os = "macos")]
+fn set_process_title_impl(title: &str) {
+    if title.is_empty() {
+        return;
+    }
+
+    static PROCESS_TITLE_STATE: OnceLock<Mutex<ProcessTitleState>> = OnceLock::new();
+    let state = PROCESS_TITLE_STATE.get_or_init(|| Mutex::new(ProcessTitleState::default()));
+    let mut state = state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if state.disabled || state.last_title.as_deref() == Some(title) {
+        return;
+    }
+
+    let Some(api) = launch_services_api() else {
+        state.disabled = true;
+        return;
+    };
+    let Ok(title) = CString::new(title) else {
+        tracing::debug!("process display name contains an unexpected NUL");
+        state.disabled = true;
+        return;
+    };
+
+    // SAFETY: all function pointers came from the permanently loaded system
+    // framework, and the allocator and UTF-8 encoding match CoreFoundation.
+    let display_name =
+        unsafe { (api.create_string)(std::ptr::null(), title.as_ptr(), CF_STRING_ENCODING_UTF8) };
+    if display_name.is_null() {
+        tracing::debug!("failed to create the process display name");
+        state.disabled = true;
+        return;
+    }
+
+    // SAFETY: LaunchServices checked in during initialization. The ASN and
+    // display-name key are borrowed; only our newly created string is released.
+    let asn = unsafe { (api.current_application_asn)() };
+    if asn.is_null() {
+        unsafe { (api.release)(display_name) };
+        tracing::debug!("LaunchServices did not return a current application ASN");
+        state.disabled = true;
+        return;
+    }
+
+    let status = unsafe {
+        (api.set_application_information)(
+            -2,
+            asn,
+            api.display_name_key,
+            display_name,
+            std::ptr::null_mut(),
+        )
+    };
+    unsafe { (api.release)(display_name) };
+    if status == 0 {
+        state.last_title = Some(title.to_string_lossy().into_owned());
+    } else {
+        tracing::debug!(status, "failed to update the LaunchServices display name");
+        state.disabled = true;
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct ProcessTitleState {
+    last_title: Option<String>,
+    disabled: bool,
+}
+
+#[cfg(target_os = "macos")]
+type CfTypeRef = *const std::ffi::c_void;
+#[cfg(target_os = "macos")]
+type CfStringRef = CfTypeRef;
+#[cfg(target_os = "macos")]
+type CfBundleRef = CfTypeRef;
+#[cfg(target_os = "macos")]
+type CfDictionaryRef = CfTypeRef;
+
+#[cfg(target_os = "macos")]
+const CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+
+#[cfg(target_os = "macos")]
+type CreateCfString = unsafe extern "C" fn(CfTypeRef, *const std::ffi::c_char, u32) -> CfStringRef;
+#[cfg(target_os = "macos")]
+type ReleaseCfType = unsafe extern "C" fn(CfTypeRef);
+#[cfg(target_os = "macos")]
+type GetMainBundle = unsafe extern "C" fn() -> CfBundleRef;
+#[cfg(target_os = "macos")]
+type GetBundleInfoDictionary = unsafe extern "C" fn(CfBundleRef) -> CfDictionaryRef;
+#[cfg(target_os = "macos")]
+type ResetLaunchServicesConnection = unsafe extern "C" fn(u64, *mut std::ffi::c_void);
+#[cfg(target_os = "macos")]
+type CheckIntoLaunchServices = unsafe extern "C" fn(i32, CfDictionaryRef) -> CfDictionaryRef;
+#[cfg(target_os = "macos")]
+type GetCurrentApplicationAsn = unsafe extern "C" fn() -> CfTypeRef;
+#[cfg(target_os = "macos")]
+type SetApplicationInformation =
+    unsafe extern "C" fn(i32, CfTypeRef, CfStringRef, CfStringRef, *mut CfDictionaryRef) -> i32;
+
+#[cfg(target_os = "macos")]
+struct LaunchServicesApi {
+    create_string: CreateCfString,
+    release: ReleaseCfType,
+    current_application_asn: GetCurrentApplicationAsn,
+    set_application_information: SetApplicationInformation,
+    display_name_key: CfStringRef,
+}
+
+#[cfg(target_os = "macos")]
+// SAFETY: the only stored pointer refers to an immutable, borrowed CFString
+// exported by an Apple framework whose dlopen handle is never closed.
+unsafe impl Send for LaunchServicesApi {}
+#[cfg(target_os = "macos")]
+// SAFETY: all fields are immutable, and LaunchServices calls are serialized by
+// PROCESS_TITLE_STATE's mutex before they can use the borrowed CFString.
+unsafe impl Sync for LaunchServicesApi {}
+
+#[cfg(target_os = "macos")]
+fn launch_services_api() -> Option<&'static LaunchServicesApi> {
+    static API: OnceLock<Option<LaunchServicesApi>> = OnceLock::new();
+    API.get_or_init(|| {
+        let framework = c"/System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices";
+        // SAFETY: the framework path is NUL-terminated and points only to an
+        // Apple-signed system framework. Keep its handle open permanently so
+        // cached function pointers and the display-name key remain valid.
+        let handle = unsafe { libc::dlopen(framework.as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL) };
+        if handle.is_null() {
+            tracing::debug!("failed to load the system ApplicationServices framework");
+            return None;
+        }
+
+        let create_string = load_launch_services_symbol(handle, b"CFStringCreateWithCString\0")?;
+        let release = load_launch_services_symbol(handle, b"CFRelease\0")?;
+        let main_bundle = load_launch_services_symbol(handle, b"CFBundleGetMainBundle\0")?;
+        let info_dictionary =
+            load_launch_services_symbol(handle, b"CFBundleGetInfoDictionary\0")?;
+        let reset_connection = load_launch_services_symbol(
+            handle,
+            b"_LSSetApplicationLaunchServicesServerConnectionStatus\0",
+        )?;
+        let check_in = load_launch_services_symbol(handle, b"_LSApplicationCheckIn\0")?;
+        let current_asn = load_launch_services_symbol(handle, b"_LSGetCurrentApplicationASN\0")?;
+        let set_information =
+            load_launch_services_symbol(handle, b"_LSSetApplicationInformationItem\0")?;
+        let display_name_key =
+            load_launch_services_symbol(handle, b"_kLSDisplayNameKey\0")?;
+
+        // SAFETY: each non-null symbol has the matching CoreFoundation or
+        // private LaunchServices C signature used by libuv on macOS.
+        let create_string = unsafe { std::mem::transmute::<_, CreateCfString>(create_string) };
+        let release = unsafe { std::mem::transmute::<_, ReleaseCfType>(release) };
+        let main_bundle = unsafe { std::mem::transmute::<_, GetMainBundle>(main_bundle) };
+        let info_dictionary =
+            unsafe { std::mem::transmute::<_, GetBundleInfoDictionary>(info_dictionary) };
+        let reset_connection =
+            unsafe { std::mem::transmute::<_, ResetLaunchServicesConnection>(reset_connection) };
+        let check_in = unsafe { std::mem::transmute::<_, CheckIntoLaunchServices>(check_in) };
+        let current_application_asn =
+            unsafe { std::mem::transmute::<_, GetCurrentApplicationAsn>(current_asn) };
+        let set_application_information =
+            unsafe { std::mem::transmute::<_, SetApplicationInformation>(set_information) };
+
+        // SAFETY: _kLSDisplayNameKey is an exported pointer to an immutable
+        // CFStringRef, not a CFStringRef itself, and remains framework-owned.
+        let display_name_key = unsafe { *display_name_key.cast::<CfStringRef>() };
+        if display_name_key.is_null() {
+            tracing::debug!("LaunchServices did not expose a display-name key");
+            return None;
+        }
+
+        // SAFETY: these exact calls reset LaunchServices and check this CLI
+        // process in before its current application ASN is requested.
+        unsafe { reset_connection(0, std::ptr::null_mut()) };
+        let bundle = unsafe { main_bundle() };
+        if bundle.is_null() {
+            tracing::debug!("CoreFoundation did not expose a main application bundle");
+            return None;
+        }
+        let info = unsafe { info_dictionary(bundle) };
+        if info.is_null() {
+            tracing::debug!("CoreFoundation did not expose application bundle information");
+            return None;
+        }
+        unsafe { check_in(-2, info) };
+
+        Some(LaunchServicesApi {
+            create_string,
+            release,
+            current_application_asn,
+            set_application_information,
+            display_name_key,
+        })
+    })
+    .as_ref()
+}
+
+#[cfg(target_os = "macos")]
+fn load_launch_services_symbol(
+    handle: *mut std::ffi::c_void,
+    name: &'static [u8],
+) -> Option<*mut std::ffi::c_void> {
+    // SAFETY: all callers provide NUL-terminated symbol names, and the
+    // ApplicationServices framework handle remains loaded for this process.
+    let symbol = unsafe { libc::dlsym(handle, name.as_ptr().cast()) };
+    if symbol.is_null() {
+        tracing::debug!(symbol = ?name, "required LaunchServices symbol was unavailable");
+        None
+    } else {
+        Some(symbol)
+    }
 }
 
 /// Clears the current terminal title by writing an empty OSC title payload.

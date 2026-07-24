@@ -223,7 +223,14 @@ impl ChatWidget {
     /// the last successfully written title so redundant OSC writes are avoided.
     /// When the `activity` item is present in an animated running state, this also
     /// schedules the next frame so the title animation keeps advancing.
+    /// The operating-system process title follows the active thread name even
+    /// when terminal-title output is disabled in configuration.
     fn refresh_terminal_title_from_selections(&mut self, selections: &StatusSurfaceSelections) {
+        match self.thread_name.as_deref().map(str::trim) {
+            Some("") | None => set_process_title("Codex"),
+            Some(thread_title) => set_process_title(&format!("Codex - {thread_title}")),
+        }
+
         self.last_terminal_title_requires_action =
             self.terminal_title_shows_action_required_with_selections(selections);
         if selections.terminal_title_items.is_empty() {
